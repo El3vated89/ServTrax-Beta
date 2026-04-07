@@ -1,5 +1,3 @@
 name: temp-fix
-
-on:workflow_dispatch:
-
-jobs:noop: runs-on: ubuntu-latest steps:- run: echo hello
+on: workflow_dispatch:
+jobs: noop: runs-on: ubuntu-latest steps: - run: echo hello
