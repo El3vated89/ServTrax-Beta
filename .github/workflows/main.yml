@@ -2,7 +2,8 @@ name: Deploy Vite App to GitHub Pages
 
 on:
 push:
-branches: [ "main" ]
+branches:
+- main
 
 permissions:
 contents: read
@@ -20,7 +21,7 @@ steps:
   - name: Setup Node
     uses: actions/setup-node@v4
     with:
-      node-version: 18
+      node-version: 20
 
   - name: Install dependencies
     run: npm install
@@ -36,6 +37,10 @@ steps:
 deploy:
 needs: build
 runs-on: ubuntu-latest
+
+permissions:
+  pages: write
+  id-token: write
 
 environment:
   name: github-pages
