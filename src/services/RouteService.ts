@@ -1,0 +1,251 @@
+import { collection, addDoc, updateDoc, deleteDoc, doc, query, where, serverTimestamp, onSnapshot, orderBy, Timestamp, getDoc, getDocs, limit } from 'firebase/firestore';
+import { db, auth } from '../firebase';
+import { handleFirestoreError, OperationType } from './verificationService';
+import { Route, RouteStop } from '../modules/routes/types';
+
+export const routeService = {
+  getBusinessProfile: async () => {
+    const user = auth.currentUser;
+    if (!user) return null;
+    try {
+      const docRef = doc(db, 'business_profiles', user.uid);
+      const docSnap = await getDoc(docRef);
+      return docSnap.exists() ? docSnap.data() : null;
+    } catch (error) {
+      handleFirestoreError(error, OperationType.GET, 'business_profiles');
+      return null;
+    }
+  },
+
+  getRouteByDate: async (date: Date) => {
+    const user = auth.currentUser;
+    if (!user) return null;
+
+    // Set start and end of day
+    const start = new Date(date);
+    start.setHours(0, 0, 0, 0);
+    const end = new Date(date);
+    end.setHours(23, 59, 59, 999);
+
+    const q = query(
+      collection(db, 'routes'),
+      where('ownerId', '==', user.uid),
+      where('route_date', '>=', Timestamp.fromDate(start)),
+      where('route_date', '<=', Timestamp.fromDate(end))
+    );
+
+    try {
+      const querySnapshot = await getDocs(q);
+      if (!querySnapshot.empty) {
+        // Sort in memory to avoid needing a composite index
+        const routes = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Route));
+        routes.sort((a, b) => {
+          const timeA = a.created_at?.toMillis?.() || 0;
+          const timeB = b.created_at?.toMillis?.() || 0;
+          return timeB - timeA; // Descending order
+        });
+        return routes[0];
+      }
+      return null;
+    } catch (error) {
+      handleFirestoreError(error, OperationType.GET, 'routes_by_date');
+      return null;
+    }
+  },
+
+  subscribeToRoutes: (callback: (routes: Route[]) => void) => {
+    const user = auth.currentUser;
+    if (!user) return () => {};
+
+    const q = query(
+      collection(db, 'routes'), 
+      where('ownerId', '==', user.uid),
+      orderBy('route_date', 'desc')
+    );
+    
+    return onSnapshot(q, (snapshot) => {
+      const routes = snapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      })) as Route[];
+      callback(routes);
+    }, (error) => {
+      handleFirestoreError(error, OperationType.GET, 'routes');
+    });
+  },
+
+  subscribeToRouteStops: (routeId: string, callback: (stops: RouteStop[]) => void) => {
+    const q = query(
+      collection(db, 'route_stops'), 
+      where('route_id', '==', routeId),
+      orderBy('stop_order', 'asc')
+    );
+    
+    return onSnapshot(q, (snapshot) => {
+      const stops = snapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      })) as RouteStop[];
+      callback(stops);
+    }, (error) => {
+      handleFirestoreError(error, OperationType.GET, `route_stops/${routeId}`);
+    });
+  },
+
+  createRoute: async (routeData: Omit<Route, 'id' | 'ownerId' | 'created_by' | 'created_at' | 'updated_at'>) => {
+    const user = auth.currentUser;
+    if (!user) throw new Error('User not authenticated');
+
+    try {
+      return await addDoc(collection(db, 'routes'), {
+        ...routeData,
+        ownerId: user.uid,
+        created_by: user.uid,
+        created_at: serverTimestamp(),
+        updated_at: serverTimestamp()
+      });
+    } catch (error) {
+      handleFirestoreError(error, OperationType.WRITE, 'routes');
+    }
+  },
+
+  updateRoute: async (id: string, data: Partial<Route>) => {
+    const docRef = doc(db, 'routes', id);
+    try {
+      return await updateDoc(docRef, {
+        ...data,
+        updated_at: serverTimestamp()
+      });
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, `routes/${id}`);
+    }
+  },
+
+  addRouteStop: async (stopData: Omit<RouteStop, 'id' | 'created_at' | 'updated_at'>) => {
+    try {
+      return await addDoc(collection(db, 'route_stops'), {
+        ...stopData,
+        created_at: serverTimestamp(),
+        updated_at: serverTimestamp()
+      });
+    } catch (error) {
+      handleFirestoreError(error, OperationType.WRITE, 'route_stops');
+    }
+  },
+
+  updateRouteStop: async (id: string, data: Partial<RouteStop>) => {
+    const docRef = doc(db, 'route_stops', id);
+    try {
+      return await updateDoc(docRef, {
+        ...data,
+        updated_at: serverTimestamp()
+      });
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, `route_stops/${id}`);
+    }
+  },
+
+  deleteRouteStop: async (id: string) => {
+    const docRef = doc(db, 'route_stops', id);
+    try {
+      return await deleteDoc(docRef);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.DELETE, `route_stops/${id}`);
+    }
+  },
+
+  batchUpdateStopOrders: async (stops: { id: string, stop_order: number, manual_order: number }[]) => {
+    // In a real app we might use a writeBatch, but for MVP we can do individual updates or a simple loop
+    // Firestore writeBatch is better for atomicity
+    try {
+      const promises = stops.map(stop => 
+        updateDoc(doc(db, 'route_stops', stop.id), {
+          stop_order: stop.stop_order,
+          manual_order: stop.manual_order,
+          updated_at: serverTimestamp()
+        })
+      );
+      await Promise.all(promises);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, 'route_stops_batch');
+    }
+  },
+
+  seedSampleData: async () => {
+    const user = auth.currentUser;
+    if (!user) return;
+
+    const today = new Date();
+    const route = await routeService.getRouteByDate(today);
+    let routeId = route?.id;
+
+    if (!routeId) {
+      const newRoute = await routeService.createRoute({
+        name: `Sample Route - ${today.toLocaleDateString()}`,
+        route_date: Timestamp.fromDate(today),
+        status: 'draft',
+        base_camp_label: 'Main Office',
+        base_camp_address: '123 Business Way, San Francisco, CA',
+        base_camp_lat: 37.7749,
+        base_camp_lng: -122.4194,
+        return_to_base: true,
+        optimization_mode: 'none',
+        manual_override: false
+      });
+      routeId = newRoute?.id;
+    }
+
+    if (!routeId) return;
+
+    const sampleStops = [
+      {
+        customer_id: 'sample-customer-1',
+        job_id: 'sample-job-1',
+        customer_name_snapshot: 'Acme Corp',
+        address_snapshot: '555 Market St, San Francisco, CA',
+        city_snapshot: 'San Francisco',
+        service_type_snapshot: 'Weekly Maintenance',
+        last_service_date_snapshot: Timestamp.fromDate(new Date(Date.now() - 7 * 24 * 60 * 60 * 1000)),
+        lat_snapshot: 37.7897,
+        lng_snapshot: -122.4004,
+      },
+      {
+        customer_id: 'sample-customer-2',
+        job_id: 'sample-job-2',
+        customer_name_snapshot: 'Global Tech',
+        address_snapshot: '101 California St, San Francisco, CA',
+        city_snapshot: 'San Francisco',
+        service_type_snapshot: 'Equipment Repair',
+        last_service_date_snapshot: Timestamp.fromDate(new Date(Date.now() - 14 * 24 * 60 * 60 * 1000)),
+        lat_snapshot: 37.7937,
+        lng_snapshot: -122.3998,
+      },
+      {
+        customer_id: 'sample-customer-3',
+        job_id: 'sample-job-3',
+        customer_name_snapshot: 'City Hall',
+        address_snapshot: '1 Dr Carlton B Goodlett Pl, San Francisco, CA',
+        city_snapshot: 'San Francisco',
+        service_type_snapshot: 'Inspection',
+        last_service_date_snapshot: Timestamp.fromDate(new Date(Date.now() - 30 * 24 * 60 * 60 * 1000)),
+        lat_snapshot: 37.7792,
+        lng_snapshot: -122.4192,
+      }
+    ];
+
+    for (let i = 0; i < sampleStops.length; i++) {
+      const stop = sampleStops[i];
+      await routeService.addRouteStop({
+        route_id: routeId,
+        stop_order: i,
+        manual_order: i,
+        optimized_order: i,
+        status: 'pending',
+        due_state: 'due',
+        ...stop,
+        scheduled_date: Timestamp.now(),
+        due_date: Timestamp.now(),
+      });
+    }
+  }
+};

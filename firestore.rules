@@ -1,0 +1,281 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    function isOwner(ownerId) {
+      return isAuthenticated() && request.auth.uid == ownerId;
+    }
+    
+    function isDocOwner() {
+      return isAuthenticated() && 
+             resource != null && 
+             request.auth.uid == resource.data.ownerId;
+    }
+
+    function isAdmin() {
+      return isAuthenticated() &&
+        (
+          (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
+           get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role in ['admin', 'owner']) ||
+          (request.auth.token.email == "thomaslmiller89@gmail.com" && request.auth.token.email_verified == true)
+        );
+    }
+    
+    function ownerIdUnchanged() {
+      return !('ownerId' in request.resource.data) || request.resource.data.ownerId == request.auth.uid;
+    }
+    
+    function ownerIdNotModified() {
+      return !('ownerId' in request.resource.data) || request.resource.data.ownerId == resource.data.ownerId;
+    }
+
+    // ===============================================================
+    // Domain Validators
+    // ===============================================================
+    function isValidUser(data) {
+      return data.uid is string && 
+             data.email is string && 
+             data.role in ['owner', 'admin', 'staff'];
+    }
+
+    function isValidCustomer(data) {
+      return data.ownerId is string &&
+             data.name is string &&
+             data.status in ['active', 'inactive'];
+    }
+
+    function isValidServicePlan(data) {
+      return data.ownerId is string &&
+             data.name is string &&
+             data.price is number &&
+             data.billing_frequency in ['one_time', 'weekly', 'bi_weekly', 'monthly', 'yearly'] &&
+             (!('requires_photos' in data) || data.requires_photos is bool) &&
+             (!('seasonal_enabled' in data) || data.seasonal_enabled is bool) &&
+             (!('seasonal_rules' in data) || data.seasonal_rules is list);
+    }
+
+    function isValidJob(data) {
+      return data.ownerId is string &&
+             data.customerId is string &&
+             data.customer_name_snapshot is string &&
+             data.service_snapshot is string &&
+             data.price_snapshot is number &&
+             data.status in ['quote', 'pending', 'approved', 'completed', 'canceled', 'skipped', 'delayed'] &&
+             data.payment_status in ['unpaid', 'paid'] &&
+             data.visibility_mode in ['internal_only', 'shareable'] &&
+             data.is_billable is bool &&
+             (!('is_recurring' in data) || data.is_recurring is bool) &&
+             (!('address_snapshot' in data) || data.address_snapshot is string) &&
+             (!('phone_snapshot' in data) || data.phone_snapshot is string) &&
+             (!('internal_notes' in data) || data.internal_notes is string) &&
+             (!('customer_notes' in data) || data.customer_notes is string) &&
+             (!('share_token' in data) || data.share_token is string) &&
+             (!('share_expires_at' in data) || data.share_expires_at is string || data.share_expires_at is timestamp || data.share_expires_at == null) &&
+             (!('scheduled_date' in data) || data.scheduled_date is string || data.scheduled_date is timestamp || data.scheduled_date == null) &&
+             (!('completed_date' in data) || data.completed_date is string || data.completed_date is timestamp || data.completed_date == null) &&
+             (!('last_completed_date' in data) || data.last_completed_date is string || data.last_completed_date is timestamp || data.last_completed_date == null) &&
+             (!('next_due_date' in data) || data.next_due_date is string || data.next_due_date is timestamp || data.next_due_date == null) &&
+             (!('approved_at' in data) || data.approved_at is string || data.approved_at is timestamp || data.approved_at == null) &&
+             (!('servicePlanId' in data) || data.servicePlanId is string) &&
+             (!('recurringPlanId' in data) || data.recurringPlanId is string) &&
+             (!('service_setup_type' in data) || data.service_setup_type in ['one-time', 'recurring', 'flexible']) &&
+             (!('billing_frequency' in data) || data.billing_frequency is string) &&
+             (!('interval_days' in data) || data.interval_days is number) &&
+             (!('override_enabled' in data) || data.override_enabled is bool) &&
+             (!('seasonal_enabled' in data) || data.seasonal_enabled is bool) &&
+             (!('seasonal_rules' in data) || data.seasonal_rules is list) &&
+             (!('created_at' in data) || data.created_at is timestamp);
+    }
+
+    function isValidQuote(data) {
+      return data.ownerId is string &&
+             data.customerId is string &&
+             data.customer_name_snapshot is string &&
+             data.service_snapshot is string &&
+             data.price_snapshot is number &&
+             data.status in ['draft', 'sent', 'approved', 'rejected'] &&
+             (!('address_snapshot' in data) || data.address_snapshot is string) &&
+             (!('phone_snapshot' in data) || data.phone_snapshot is string) &&
+             (!('billing_frequency' in data) || data.billing_frequency is string) &&
+             (!('notes' in data) || data.notes is string) &&
+             (!('created_at' in data) || data.created_at is timestamp) &&
+             (!('approved_at' in data) || data.approved_at is timestamp || data.approved_at is string || data.approved_at == null);
+    }
+
+    function isValidVerificationRecord(data) {
+      return data.ownerId is string &&
+             (!('jobId' in data) || data.jobId is string) &&
+             (!('visibility' in data) || data.visibility in ['internal_only', 'shareable']) &&
+             (!('photo_url' in data) || data.photo_url is string) &&
+             (!('photo_urls' in data) || data.photo_urls is list) &&
+             (!('thumbnail_url' in data) || data.thumbnail_url is string) &&
+             (!('notes' in data) || data.notes is string) &&
+             (!('timestamp' in data) || data.timestamp is timestamp) &&
+             (!('gps_location' in data) || data.gps_location is map || data.gps_location == null) &&
+             (!('created_at' in data) || data.created_at is timestamp);
+    }
+
+    function isValidBusinessProfile(data) {
+      return data.ownerId is string &&
+             data.business_name is string &&
+             (!('business_tagline' in data) || data.business_tagline is string) &&
+             (!('logo_url' in data) || data.logo_url is string) &&
+             (!('base_camp_lat' in data) || data.base_camp_lat is number || data.base_camp_lat == null) &&
+             (!('base_camp_lng' in data) || data.base_camp_lng is number || data.base_camp_lng == null);
+    }
+
+    function isValidRoute(data) {
+      return data.ownerId is string &&
+             data.name is string &&
+             data.status in ['draft', 'active', 'in_progress', 'completed', 'archived'] &&
+             data.optimization_mode in ['none', 'close_to_far', 'far_to_close', 'optimized'] &&
+             data.manual_override is bool &&
+             (data.route_date is timestamp || data.route_date is string);
+    }
+
+    function isValidRouteStop(data) {
+      return data.route_id is string &&
+             data.stop_order is number &&
+             data.status in ['pending', 'completed', 'canceled'] &&
+             data.due_state in ['upcoming', 'due', 'overdue', 'delayed', 'completed'] &&
+             data.address_snapshot is string &&
+             data.customer_name_snapshot is string;
+    }
+
+    function isValidEquipment(data) {
+      return data.ownerId is string &&
+             data.name is string;
+    }
+
+    function isValidMessageTemplate(data) {
+      return data.ownerId is string &&
+             data.name is string &&
+             data.content is string;
+    }
+
+    function isValidBusinessSettings(data) {
+      return (!('recurrence' in data) || data.recurrence is map) &&
+             (!('winter_mode' in data) || data.winter_mode is map) &&
+             (!('grace_ranges' in data) || data.grace_ranges is map) &&
+             (!('seasonal_enabled' in data) || data.seasonal_enabled is bool) &&
+             (!('seasonal_defaults' in data) || data.seasonal_defaults is map);
+    }
+
+    function isValidRecurringPlan(data) {
+      return data.ownerId is string &&
+             data.customerId is string &&
+             data.name is string &&
+             data.price is number &&
+             data.frequency is string &&
+             data.status in ['active', 'inactive', 'paused'] &&
+             (data.start_date is timestamp || data.start_date is string) &&
+             (data.next_due_date is timestamp || data.next_due_date is string) &&
+             (!('seasonal_enabled' in data) || data.seasonal_enabled is bool) &&
+             (!('interval_days' in data) || data.interval_days is number) &&
+             (!('override_enabled' in data) || data.override_enabled is bool) &&
+             (!('seasonal_rules' in data) || data.seasonal_rules is list);
+    }
+
+    // ===============================================================
+    // Rules
+    // ===============================================================
+    
+    match /users/{userId} {
+      allow read: if isOwner(userId) || isAdmin();
+      allow create: if isOwner(userId) && request.resource.data.uid == userId && isValidUser(request.resource.data);
+      allow update: if (isOwner(userId) || isAdmin()) && request.resource.data.uid == resource.data.uid && isValidUser(request.resource.data);
+    }
+    
+    match /customers/{customerId} {
+      allow read: if resource == null || isDocOwner() || isAdmin();
+      allow create: if isAuthenticated() && request.resource.data.ownerId == request.auth.uid && isValidCustomer(request.resource.data);
+      allow update: if (isDocOwner() || isAdmin()) && ownerIdNotModified() && isValidCustomer(request.resource.data);
+      allow delete: if isDocOwner() || isAdmin();
+    }
+    
+    match /service_plans/{planId} {
+      allow read: if resource == null || isDocOwner() || isAdmin();
+      allow create: if isAuthenticated() && request.resource.data.ownerId == request.auth.uid && isValidServicePlan(request.resource.data);
+      allow update: if (isDocOwner() || isAdmin()) && ownerIdNotModified() && isValidServicePlan(request.resource.data);
+      allow delete: if isDocOwner() || isAdmin();
+    }
+    
+    match /jobs/{jobId} {
+      allow read: if resource == null || isDocOwner() || isAdmin() || (resource.data.visibility_mode == 'shareable');
+      allow create: if isAuthenticated() && request.resource.data.ownerId == request.auth.uid && isValidJob(request.resource.data);
+      allow update: if (isDocOwner() || isAdmin()) && ownerIdNotModified() && isValidJob(request.resource.data);
+      allow delete: if isDocOwner() || isAdmin();
+    }
+    
+    match /verification_records/{recordId} {
+      allow read: if resource == null || isDocOwner() || isAdmin() || (resource.data.visibility == 'shareable');
+      allow create: if isAuthenticated() && request.resource.data.ownerId == request.auth.uid && isValidVerificationRecord(request.resource.data);
+      allow update: if (isDocOwner() || isAdmin()) && ownerIdNotModified() && isValidVerificationRecord(request.resource.data);
+      allow delete: if isDocOwner() || isAdmin();
+    }
+
+    match /business_profiles/{profileId} {
+      allow read: if isOwner(profileId) || isDocOwner();
+      allow create: if isOwner(profileId) && request.resource.data.ownerId == request.auth.uid && isValidBusinessProfile(request.resource.data);
+      allow update: if isOwner(profileId) && ownerIdNotModified() && isValidBusinessProfile(request.resource.data);
+      allow delete: if isOwner(profileId);
+    }
+
+    match /routes/{routeId} {
+      allow read: if isDocOwner();
+      allow create: if isAuthenticated() && request.resource.data.ownerId == request.auth.uid && isValidRoute(request.resource.data);
+      allow update: if isDocOwner() && ownerIdNotModified() && isValidRoute(request.resource.data);
+      allow delete: if isDocOwner();
+    }
+
+    match /route_stops/{stopId} {
+      allow read: if isAuthenticated(); // Simplified for now, could be improved by checking route ownership
+      allow create: if isAuthenticated() && isValidRouteStop(request.resource.data);
+      allow update: if isAuthenticated() && isValidRouteStop(request.resource.data);
+      allow delete: if isAuthenticated();
+    }
+
+    match /equipment/{equipmentId} {
+      allow read: if isDocOwner();
+      allow create: if isAuthenticated() && request.resource.data.ownerId == request.auth.uid && isValidEquipment(request.resource.data);
+      allow update: if isDocOwner() && ownerIdNotModified() && isValidEquipment(request.resource.data);
+      allow delete: if isDocOwner();
+    }
+
+    match /message_templates/{templateId} {
+      allow read: if isDocOwner();
+      allow create: if isAuthenticated() && request.resource.data.ownerId == request.auth.uid && isValidMessageTemplate(request.resource.data);
+      allow update: if isDocOwner() && ownerIdNotModified() && isValidMessageTemplate(request.resource.data);
+      allow delete: if isDocOwner();
+    }
+
+    match /business_settings/{settingsId} {
+      allow read: if isOwner(settingsId) || isAdmin();
+      allow create: if isOwner(settingsId) && isValidBusinessSettings(request.resource.data);
+      allow update: if (isOwner(settingsId) || isAdmin()) && isValidBusinessSettings(request.resource.data);
+      allow delete: if isOwner(settingsId) || isAdmin();
+    }
+
+    match /recurring_plans/{planId} {
+      allow read: if resource == null || isDocOwner() || isAdmin();
+      allow create: if isAuthenticated() && request.resource.data.ownerId == request.auth.uid && isValidRecurringPlan(request.resource.data);
+      allow update: if (isDocOwner() || isAdmin()) && ownerIdNotModified() && isValidRecurringPlan(request.resource.data);
+      allow delete: if isDocOwner() || isAdmin();
+    }
+
+    match /quotes/{quoteId} {
+      allow read: if resource == null || isDocOwner() || isAdmin();
+      allow create: if isAuthenticated() && request.resource.data.ownerId == request.auth.uid && isValidQuote(request.resource.data);
+      allow update: if (isDocOwner() || isAdmin()) && ownerIdNotModified() && isValidQuote(request.resource.data);
+      allow delete: if isDocOwner() || isAdmin();
+    }
+  }
+}

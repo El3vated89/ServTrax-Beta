@@ -1,0 +1,75 @@
+import { collection, addDoc, updateDoc, deleteDoc, doc, getDocs, query, where, serverTimestamp, onSnapshot } from 'firebase/firestore';
+import { db, auth } from '../firebase';
+import { handleFirestoreError, OperationType } from './verificationService';
+
+export interface Customer {
+  id?: string;
+  ownerId: string;
+  name: string;
+  phone: string;
+  email: string;
+  street: string;
+  line2?: string;
+  city: string;
+  state: string;
+  zip: string;
+  notes: string;
+  access_notes?: string;
+  status: 'active' | 'inactive';
+  last_service_date?: any;
+  created_at?: any;
+  off_season_enabled?: boolean;
+  off_season_rules?: any[]; // Using any[] to avoid circular dependency or complex imports if SeasonalRule is only in settings
+}
+
+export const customerService = {
+  subscribeToCustomers: (callback: (customers: Customer[]) => void) => {
+    const user = auth.currentUser;
+    if (!user) return () => {};
+
+    const q = query(collection(db, 'customers'), where('ownerId', '==', user.uid));
+    
+    return onSnapshot(q, (snapshot) => {
+      const customers = snapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      })) as Customer[];
+      callback(customers);
+    }, (error) => {
+      handleFirestoreError(error, OperationType.GET, 'customers');
+    });
+  },
+
+  addCustomer: async (customerData: Omit<Customer, 'ownerId' | 'created_at'>) => {
+    const user = auth.currentUser;
+    if (!user) throw new Error('User not authenticated');
+
+    try {
+      return await addDoc(collection(db, 'customers'), {
+        ...customerData,
+        ownerId: user.uid,
+        created_at: serverTimestamp()
+      });
+    } catch (error) {
+      handleFirestoreError(error, OperationType.WRITE, 'customers');
+    }
+  },
+
+  updateCustomer: async (id: string, data: Partial<Customer>) => {
+    const docRef = doc(db, 'customers', id);
+    try {
+      return await updateDoc(docRef, data);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, `customers/${id}`);
+    }
+  },
+
+  deleteCustomer: async (id: string) => {
+    const docRef = doc(db, 'customers', id);
+    try {
+      return await deleteDoc(docRef);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.DELETE, `customers/${id}`);
+    }
+  }
+};

@@ -1,0 +1,184 @@
+import { collection, addDoc, updateDoc, deleteDoc, doc, getDoc, query, where, serverTimestamp, onSnapshot, Timestamp } from 'firebase/firestore';
+import { db, auth } from '../firebase';
+import { handleFirestoreError, OperationType } from './verificationService';
+
+import { settingsService, BusinessSettings, DEFAULT_SETTINGS, SeasonalRule } from './settingsService';
+
+export type BillingFrequency = 'one-time' | 'weekly' | 'bi-weekly' | 'monthly' | 'flexible';
+
+export interface RecurringPlan {
+  id?: string;
+  ownerId: string;
+  customerId: string;
+  servicePlanId?: string;
+  name: string;
+  price: number;
+  frequency: BillingFrequency;
+  status: 'active' | 'inactive' | 'paused';
+  start_date: any;
+  next_due_date: any;
+  last_completed_date?: any;
+  notes: string;
+  created_at?: any;
+  winter_mode_override?: 'pause' | 'stop' | 'reduce_frequency' | 'no_change';
+  reduced_frequency_override?: 'weekly' | 'bi-weekly' | 'monthly';
+  
+  // New fields for flexible/seasonal logic
+  interval_days?: number;
+  override_enabled?: boolean;
+  seasonal_enabled?: boolean;
+  seasonal_rules?: SeasonalRule[];
+}
+
+const COLLECTION_NAME = 'recurring_plans';
+
+export const recurringService = {
+  subscribeToPlans: (callback: (plans: RecurringPlan[]) => void) => {
+    const user = auth.currentUser;
+    if (!user) return () => {};
+
+    const q = query(collection(db, COLLECTION_NAME), where('ownerId', '==', user.uid));
+    
+    return onSnapshot(q, (snapshot) => {
+      const plans = snapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      })) as RecurringPlan[];
+      callback(plans);
+    }, (error) => {
+      handleFirestoreError(error, OperationType.GET, COLLECTION_NAME);
+    });
+  },
+
+  addPlan: async (planData: Omit<RecurringPlan, 'ownerId' | 'created_at'>) => {
+    const user = auth.currentUser;
+    if (!user) throw new Error('User not authenticated');
+
+    try {
+      return await addDoc(collection(db, COLLECTION_NAME), {
+        ...planData,
+        ownerId: user.uid,
+        created_at: serverTimestamp()
+      });
+    } catch (error) {
+      handleFirestoreError(error, OperationType.WRITE, COLLECTION_NAME);
+    }
+  },
+
+  updatePlan: async (id: string, data: Partial<RecurringPlan>) => {
+    const docRef = doc(db, COLLECTION_NAME, id);
+    try {
+      return await updateDoc(docRef, data);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, `${COLLECTION_NAME}/${id}`);
+    }
+  },
+
+  deletePlan: async (id: string) => {
+    const docRef = doc(db, COLLECTION_NAME, id);
+    try {
+      return await deleteDoc(docRef);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.DELETE, `${COLLECTION_NAME}/${id}`);
+    }
+  },
+
+  calculateNextDueDate: async (currentDate: Date | Timestamp, frequency: BillingFrequency, plan?: RecurringPlan): Promise<Date> => {
+    const date = currentDate instanceof Timestamp ? currentDate.toDate() : new Date(currentDate);
+    const nextDate = new Date(date);
+    const settings = await settingsService.getSettings();
+
+    // Fetch service plan to get seasonal rules
+    let seasonalEnabled = false;
+    let seasonalRules: any[] = [];
+    
+    if (plan?.servicePlanId) {
+      const planDoc = await getDoc(doc(db, 'service_plans', plan.servicePlanId));
+      if (planDoc.exists()) {
+        const planData = planDoc.data();
+        seasonalEnabled = planData.seasonal_enabled || false;
+        seasonalRules = planData.seasonal_rules || [];
+      }
+    }
+
+    if (seasonalEnabled) {
+      let interval = 7; // Default interval
+
+      // Check seasonal rules
+      const currentMonthDay = `${(date.getMonth() + 1).toString().padStart(2, '0')}-${date.getDate().toString().padStart(2, '0')}`;
+      
+      for (const rule of seasonalRules) {
+        if (!rule.start_date || !rule.end_date) {
+          interval = rule.interval_days;
+          continue; 
+        }
+
+        if (rule.start_date <= rule.end_date) {
+          if (currentMonthDay >= rule.start_date && currentMonthDay <= rule.end_date) {
+            interval = rule.interval_days;
+            break;
+          }
+        } else {
+          if (currentMonthDay >= rule.start_date || currentMonthDay <= rule.end_date) {
+            interval = rule.interval_days;
+            break;
+          }
+        }
+      }
+
+      nextDate.setDate(date.getDate() + interval);
+      return nextDate;
+    }
+
+    // Check Winter Mode (legacy but keeping for compatibility if needed)
+    if (settings.winter_mode.enabled) {
+      const currentMonth = date.getMonth();
+      const currentDay = date.getDate();
+      
+      const isWinter = (month: number, day: number) => {
+        const start = settings.winter_mode.start_month * 100 + settings.winter_mode.start_day;
+        const end = settings.winter_mode.end_month * 100 + settings.winter_mode.end_day;
+        const current = month * 100 + day;
+        
+        if (start <= end) {
+          return current >= start && current <= end;
+        } else {
+          return current >= start || current <= end;
+        }
+      };
+
+      if (isWinter(currentMonth, currentDay)) {
+        const behavior = plan?.winter_mode_override || settings.winter_mode.default_behavior;
+        if (behavior === 'pause' || behavior === 'stop') {
+          return nextDate; 
+        }
+        if (behavior === 'reduce_frequency') {
+          frequency = plan?.reduced_frequency_override || settings.winter_mode.reduced_frequency || frequency;
+        }
+      }
+    }
+
+    switch (frequency) {
+      case 'weekly':
+        nextDate.setDate(date.getDate() + (settings.recurrence.weekly.days_between || 7));
+        break;
+      case 'bi-weekly':
+        if (settings.recurrence.bi_weekly.mode === 'twice_per_month') {
+          nextDate.setDate(date.getDate() + 15);
+        } else {
+          nextDate.setDate(date.getDate() + (settings.recurrence.bi_weekly.days_between || 14));
+        }
+        break;
+      case 'monthly':
+        if (settings.recurrence.monthly.mode === 'last_day') {
+          nextDate.setMonth(date.getMonth() + 2, 0);
+        } else {
+          nextDate.setMonth(date.getMonth() + 1);
+        }
+        break;
+      default:
+        break;
+    }
+    return nextDate;
+  }
+};

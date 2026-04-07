@@ -1,0 +1,316 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "A user of the ServTrax platform (business owner/operator).",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "email": { "type": "string", "format": "email" },
+        "name": { "type": "string" },
+        "role": { "type": "string", "enum": ["owner", "admin", "staff"] },
+        "created_at": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "email", "role", "created_at"]
+    },
+    "Customer": {
+      "title": "Customer",
+      "description": "A client of the service business.",
+      "type": "object",
+      "properties": {
+        "ownerId": { "type": "string" },
+        "name": { "type": "string" },
+        "phone": { "type": "string" },
+        "email": { "type": "string", "format": "email" },
+        "street": { "type": "string" },
+        "line2": { "type": "string" },
+        "city": { "type": "string" },
+        "state": { "type": "string" },
+        "zip": { "type": "string" },
+        "notes": { "type": "string" },
+        "access_notes": { "type": "string" },
+        "status": { "type": "string", "enum": ["active", "inactive"] },
+        "created_at": { "type": "string", "format": "date-time" }
+      },
+      "required": ["ownerId", "name", "status", "created_at"]
+    },
+    "SeasonalRule": {
+      "title": "SeasonalRule",
+      "description": "A rule for seasonal scheduling adjustments.",
+      "type": "object",
+      "properties": {
+        "start_date": { "type": "string", "description": "MM-DD format (optional)" },
+        "end_date": { "type": "string", "description": "MM-DD format (optional)" },
+        "interval_days": { "type": "number" },
+        "label": { "type": "string" }
+      },
+      "required": ["interval_days"]
+    },
+    "ServicePlan": {
+      "title": "ServicePlan",
+      "description": "A recurring or one-time service agreement catalog item.",
+      "type": "object",
+      "properties": {
+        "ownerId": { "type": "string" },
+        "name": { "type": "string" },
+        "description": { "type": "string" },
+        "price": { "type": "number" },
+        "billing_frequency": { "type": "string", "enum": ["one_time", "weekly", "bi_weekly", "monthly", "yearly"] },
+        "created_at": { "type": "string", "format": "date-time" }
+      },
+      "required": ["ownerId", "name", "price", "billing_frequency", "created_at"]
+    },
+    "Job": {
+      "title": "Job",
+      "description": "An actual visit/job performed.",
+      "type": "object",
+      "properties": {
+        "ownerId": { "type": "string" },
+        "customerId": { "type": "string" },
+        "servicePlanId": { "type": "string" },
+        "recurringPlanId": { "type": "string" },
+        "customer_name_snapshot": { "type": "string" },
+        "address_snapshot": { "type": "string" },
+        "phone_snapshot": { "type": "string" },
+        "service_snapshot": { "type": "string" },
+        "price_snapshot": { "type": "number" },
+        "scheduled_date": { "type": "string", "format": "date-time" },
+        "completed_date": { "type": "string", "format": "date-time" },
+        "last_completed_date": { "type": "string", "format": "date-time" },
+        "next_due_date": { "type": "string", "format": "date-time" },
+        "approved_at": { "type": "string", "format": "date-time" },
+        "status": { "type": "string", "enum": ["quote", "pending", "approved", "completed", "canceled", "skipped", "delayed"] },
+        "payment_status": { "type": "string", "enum": ["unpaid", "paid"] },
+        "visibility_mode": { "type": "string", "enum": ["internal_only", "shareable"] },
+        "service_setup_type": { "type": "string", "enum": ["one-time", "recurring", "flexible"] },
+        "billing_frequency": { "type": "string" },
+        "interval_days": { "type": "number" },
+        "override_enabled": { "type": "boolean" },
+        "seasonal_enabled": { "type": "boolean" },
+        "seasonal_rules": { "type": "array", "items": { "$ref": "SeasonalRule" } },
+        "share_token": { "type": "string" },
+        "share_expires_at": { "type": "string", "format": "date-time" },
+        "is_billable": { "type": "boolean" },
+        "is_recurring": { "type": "boolean" },
+        "internal_notes": { "type": "string" },
+        "customer_notes": { "type": "string" },
+        "created_at": { "type": "string", "format": "date-time" }
+      },
+      "required": ["ownerId", "customerId", "customer_name_snapshot", "service_snapshot", "price_snapshot", "status", "payment_status", "visibility_mode", "is_billable", "created_at"]
+    },
+    "Quote": {
+      "title": "Quote",
+      "description": "A service quote for a customer.",
+      "type": "object",
+      "properties": {
+        "ownerId": { "type": "string" },
+        "customerId": { "type": "string" },
+        "customer_name_snapshot": { "type": "string" },
+        "address_snapshot": { "type": "string" },
+        "phone_snapshot": { "type": "string" },
+        "service_snapshot": { "type": "string" },
+        "price_snapshot": { "type": "number" },
+        "billing_frequency": { "type": "string" },
+        "status": { "type": "string", "enum": ["draft", "sent", "approved", "rejected"] },
+        "notes": { "type": "string" },
+        "created_at": { "type": "string", "format": "date-time" },
+        "approved_at": { "type": "string", "format": "date-time" }
+      },
+      "required": ["ownerId", "customerId", "customer_name_snapshot", "service_snapshot", "price_snapshot", "status", "created_at"]
+    },
+    "VerificationRecord": {
+      "title": "VerificationRecord",
+      "description": "Proof that the work was completed.",
+      "type": "object",
+      "properties": {
+        "ownerId": { "type": "string" },
+        "jobId": { "type": "string" },
+        "photo_url": { "type": "string" },
+        "notes": { "type": "string" },
+        "visibility": { "type": "string", "enum": ["internal_only", "shareable"] },
+        "created_at": { "type": "string", "format": "date-time" }
+      },
+      "required": ["ownerId", "jobId", "visibility", "created_at"]
+    },
+    "BusinessProfile": {
+      "title": "BusinessProfile",
+      "description": "System preferences and business profile settings.",
+      "type": "object",
+      "properties": {
+        "ownerId": { "type": "string" },
+        "business_name": { "type": "string" },
+        "business_phone": { "type": "string" },
+        "business_email": { "type": "string", "format": "email" },
+        "business_tagline": { "type": "string" },
+        "logo_url": { "type": "string" },
+        "base_camp_label": { "type": "string" },
+        "base_camp_address": { "type": "string" },
+        "base_camp_lat": { "type": "number" },
+        "base_camp_lng": { "type": "number" },
+        "updated_at": { "type": "string", "format": "date-time" }
+      },
+      "required": ["ownerId", "business_name", "updated_at"]
+    },
+    "Route": {
+      "title": "Route",
+      "description": "A daily route for a technician.",
+      "type": "object",
+      "properties": {
+        "ownerId": { "type": "string" },
+        "name": { "type": "string" },
+        "route_date": { "type": "string", "format": "date-time" },
+        "status": { "type": "string", "enum": ["draft", "active", "in_progress", "completed", "archived"] },
+        "base_camp_label": { "type": "string" },
+        "base_camp_address": { "type": "string" },
+        "base_camp_lat": { "type": "number" },
+        "base_camp_lng": { "type": "number" },
+        "return_to_base": { "type": "boolean" },
+        "optimization_mode": { "type": "string", "enum": ["none", "close_to_far", "far_to_close", "optimized"] },
+        "manual_override": { "type": "boolean" },
+        "created_by": { "type": "string" },
+        "created_at": { "type": "string", "format": "date-time" },
+        "updated_at": { "type": "string", "format": "date-time" }
+      },
+      "required": ["ownerId", "name", "route_date", "status", "created_at", "updated_at"]
+    },
+    "RouteStop": {
+      "title": "RouteStop",
+      "description": "A single stop within a route.",
+      "type": "object",
+      "properties": {
+        "route_id": { "type": "string" },
+        "customer_id": { "type": "string" },
+        "job_id": { "type": "string" },
+        "stop_order": { "type": "number" },
+        "manual_order": { "type": "number" },
+        "optimized_order": { "type": "number" },
+        "status": { "type": "string", "enum": ["pending", "completed", "canceled"] },
+        "due_state": { "type": "string", "enum": ["upcoming", "due", "overdue", "delayed", "completed"] },
+        "city_snapshot": { "type": "string" },
+        "address_snapshot": { "type": "string" },
+        "lat_snapshot": { "type": "number" },
+        "lng_snapshot": { "type": "number" },
+        "service_type_snapshot": { "type": "string" },
+        "customer_name_snapshot": { "type": "string" },
+        "scheduled_date": { "type": "string", "format": "date-time" },
+        "due_date": { "type": "string", "format": "date-time" },
+        "delayed_reason": { "type": "string" },
+        "created_at": { "type": "string", "format": "date-time" },
+        "updated_at": { "type": "string", "format": "date-time" }
+      },
+      "required": ["route_id", "stop_order", "status", "due_state", "address_snapshot", "customer_name_snapshot", "created_at", "updated_at"]
+    },
+    "MessageTemplate": {
+      "title": "MessageTemplate",
+      "description": "Customizable templates for sharing service proof.",
+      "type": "object",
+      "properties": {
+        "ownerId": { "type": "string" },
+        "name": { "type": "string" },
+        "content": { "type": "string" },
+        "created_at": { "type": "string", "format": "date-time" }
+      },
+      "required": ["ownerId", "name", "content", "created_at"]
+    }
+  },
+    "BusinessSettings": {
+      "title": "BusinessSettings",
+      "description": "Global system preferences for recurrence and grace periods.",
+      "type": "object",
+      "properties": {
+        "recurrence": { "type": "object" },
+        "winter_mode": { "type": "object" },
+        "grace_ranges": {
+          "type": "object",
+          "properties": {
+            "due_grace_days": { "type": "number" },
+            "overdue_grace_days": { "type": "number" },
+            "critical_overdue_days": { "type": "number" }
+          }
+        },
+        "seasonal_enabled": { "type": "boolean" },
+        "seasonal_defaults": {
+          "type": "object",
+          "properties": {
+            "default_interval_days": { "type": "number" },
+            "seasonal_rules": { "type": "array", "items": { "$ref": "SeasonalRule" } }
+          }
+        }
+      }
+    },
+    "RecurringPlan": {
+      "title": "RecurringPlan",
+      "description": "A recurring service plan for a specific customer.",
+      "type": "object",
+      "properties": {
+        "ownerId": { "type": "string" },
+        "customerId": { "type": "string" },
+        "servicePlanId": { "type": "string" },
+        "name": { "type": "string" },
+        "price": { "type": "number" },
+        "frequency": { "type": "string" },
+        "status": { "type": "string", "enum": ["active", "inactive", "paused"] },
+        "start_date": { "type": "string", "format": "date-time" },
+        "next_due_date": { "type": "string", "format": "date-time" },
+        "last_completed_date": { "type": "string", "format": "date-time" },
+        "interval_days": { "type": "number" },
+        "override_enabled": { "type": "boolean" },
+        "seasonal_enabled": { "type": "boolean" },
+        "seasonal_rules": { "type": "array", "items": { "$ref": "SeasonalRule" } },
+        "notes": { "type": "string" },
+        "created_at": { "type": "string", "format": "date-time" }
+      },
+      "required": ["ownerId", "customerId", "name", "price", "frequency", "status", "start_date", "next_due_date", "created_at"]
+    }
+  },
+  "firestore": {
+    "users/{userId}": {
+      "schema": "User",
+      "description": "User profiles"
+    },
+    "customers/{customerId}": {
+      "schema": "Customer",
+      "description": "Customer records"
+    },
+    "service_plans/{planId}": {
+      "schema": "ServicePlan",
+      "description": "Service plans"
+    },
+    "jobs/{jobId}": {
+      "schema": "Job",
+      "description": "Job occurrences"
+    },
+    "recurring_plans/{planId}": {
+      "schema": "RecurringPlan",
+      "description": "Recurring service plans"
+    },
+    "verification_records/{recordId}": {
+      "schema": "VerificationRecord",
+      "description": "Verification records for jobs"
+    },
+    "business_profiles/{profileId}": {
+      "schema": "BusinessProfile",
+      "description": "Business profile settings"
+    },
+    "business_settings/{settingsId}": {
+      "schema": "BusinessSettings",
+      "description": "Global system preferences"
+    },
+    "quotes/{quoteId}": {
+      "schema": "Quote",
+      "description": "Service quotes"
+    },
+    "routes/{routeId}": {
+      "schema": "Route",
+      "description": "Daily routes"
+    },
+    "route_stops/{stopId}": {
+      "schema": "RouteStop",
+      "description": "Stops within a route"
+    },
+    "message_templates/{templateId}": {
+      "schema": "MessageTemplate",
+      "description": "Message templates for sharing proof"
+    }
+  }
+}

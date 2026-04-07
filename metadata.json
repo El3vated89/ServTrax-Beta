@@ -1,0 +1,5 @@
+{
+  "name": "ServTrax",
+  "description": "Track. Verify. Get Paid. Modular service-based architecture with Firebase.",
+  "requestFramePermissions": ["camera", "geolocation"]
+}
