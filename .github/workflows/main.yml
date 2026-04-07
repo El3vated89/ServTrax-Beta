@@ -1,6 +1,6 @@
 name: temp-fix
 
-on:
+"on":
   workflow_dispatch:
 
 jobs:
