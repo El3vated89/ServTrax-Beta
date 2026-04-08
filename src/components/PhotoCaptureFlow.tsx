@@ -18,6 +18,7 @@ export default function PhotoCaptureFlow({ onClose }: PhotoCaptureFlowProps) {
   const [selectedId, setSelectedId] = useState<string>('');
   const [notes, setNotes] = useState('');
   const [isSaving, setIsSaving] = useState(false);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -47,6 +48,7 @@ export default function PhotoCaptureFlow({ onClose }: PhotoCaptureFlowProps) {
       return;
     }
 
+    setErrorMessage(null);
     setIsCompressing(true);
     try {
       const compressed = await compressImage(file);
@@ -63,6 +65,7 @@ export default function PhotoCaptureFlow({ onClose }: PhotoCaptureFlowProps) {
   const handleSave = async () => {
     if (!photoUrl || !assignmentType || !selectedId) return;
 
+    setErrorMessage(null);
     setIsSaving(true);
     try {
       await verificationService.addVerification({
@@ -74,7 +77,7 @@ export default function PhotoCaptureFlow({ onClose }: PhotoCaptureFlowProps) {
       onClose();
     } catch (error) {
       console.error('Error saving photo:', error);
-      alert('Failed to save photo.');
+      setErrorMessage('Failed to save photo.');
       setIsSaving(false);
     }
   };
@@ -115,6 +118,12 @@ export default function PhotoCaptureFlow({ onClose }: PhotoCaptureFlowProps) {
         <h3 className="text-xl font-black text-gray-900 mb-6">Assign Photo</h3>
 
         <div className="flex-1 overflow-y-auto pr-2 space-y-6">
+          {errorMessage && (
+            <div className="rounded-2xl border border-red-100 bg-red-50 px-4 py-3">
+              <p className="text-sm font-bold text-red-700">{errorMessage}</p>
+            </div>
+          )}
+
           {/* Photo Preview */}
           <div className="aspect-video bg-gray-100 rounded-2xl overflow-hidden relative">
             <img src={photoUrl} alt="Preview" className="w-full h-full object-cover" />

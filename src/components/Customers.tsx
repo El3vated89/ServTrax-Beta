@@ -24,6 +24,8 @@ export default function Customers() {
   const [notes, setNotes] = useState('');
   const [customerJobs, setCustomerJobs] = useState<Job[]>([]);
   const [allJobs, setAllJobs] = useState<Job[]>([]);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
   const openEditModal = (customer: Customer) => {
     setEditingCustomer(customer);
@@ -76,8 +78,16 @@ export default function Customers() {
     }
   }, [editingCustomer, allJobs]);
 
+  useEffect(() => {
+    if (!successMessage) return undefined;
+    const timeout = window.setTimeout(() => setSuccessMessage(null), 3000);
+    return () => window.clearTimeout(timeout);
+  }, [successMessage]);
+
   const handleAddCustomer = async (e: React.FormEvent) => {
     e.preventDefault();
+    setErrorMessage(null);
+    setSuccessMessage(null);
     try {
       if (editingCustomer && editingCustomer.id) {
         await customerService.updateCustomer(editingCustomer.id, {
@@ -91,6 +101,7 @@ export default function Customers() {
           notes,
         });
         setEditingCustomer(null);
+        setSuccessMessage('Client updated successfully.');
       } else {
         await customerService.addCustomer({
           name,
@@ -104,6 +115,7 @@ export default function Customers() {
           status: 'active',
         });
         setIsAdding(false);
+        setSuccessMessage('Client added successfully.');
       }
       setName('');
       setPhone('');
@@ -115,6 +127,7 @@ export default function Customers() {
       setNotes('');
     } catch (error) {
       console.error('Error saving customer:', error);
+      setErrorMessage('Failed to save client.');
     }
   };
 
@@ -159,6 +172,18 @@ export default function Customers() {
           <p className="text-sm font-bold text-gray-400 uppercase tracking-widest">Manage your customer base</p>
         </div>
       </header>
+
+      {errorMessage && (
+        <div className="mx-2 rounded-2xl border border-red-100 bg-red-50 px-4 py-3">
+          <p className="text-sm font-bold text-red-700">{errorMessage}</p>
+        </div>
+      )}
+
+      {successMessage && (
+        <div className="mx-2 rounded-2xl border border-green-100 bg-green-50 px-4 py-3">
+          <p className="text-sm font-bold text-green-700">{successMessage}</p>
+        </div>
+      )}
 
       {/* Search Bar */}
       <div className="relative group">
