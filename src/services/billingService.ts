@@ -14,6 +14,7 @@ import {
 import { auth, db } from '../firebase';
 import { Job, jobService } from './jobService';
 import { handleFirestoreError, OperationType } from './verificationService';
+import { localFallbackStore } from './localFallbackStore';
 
 export type BillingStatus = 'draft' | 'scheduled' | 'due' | 'partial' | 'paid' | 'overdue' | 'canceled';
 export type BillingType = 'one_time' | 'auto_bill';
@@ -43,7 +44,7 @@ export interface BillingRecord {
   notes?: string;
   created_at?: any;
   updated_at?: any;
-  storage_source?: 'primary' | 'fallback_user_doc';
+  storage_source?: 'primary' | 'fallback_user_doc' | 'local_storage';
   source_billing_record_id?: string;
 }
 
@@ -58,7 +59,7 @@ export interface PaymentEntry {
   note?: string;
   received_at: any;
   created_at?: any;
-  storage_source?: 'primary' | 'fallback_user_doc';
+  storage_source?: 'primary' | 'fallback_user_doc' | 'local_storage';
   source_billing_record_id?: string;
 }
 
@@ -76,6 +77,8 @@ const BILLING_COLLECTION = 'billing_records';
 const PAYMENT_COLLECTION = 'payment_entries';
 const FALLBACK_BILLING_FIELD = 'billing_record_fallbacks';
 const FALLBACK_PAYMENT_FIELD = 'payment_entry_fallbacks';
+const LOCAL_BILLING_NAMESPACE = 'billing_records';
+const LOCAL_PAYMENT_NAMESPACE = 'payment_entries';
 
 const toDate = (value: any) => {
   if (!value) return null;
@@ -136,6 +139,47 @@ const normalizeFallbackPaymentEntry = (ownerId: string, raw: any): PaymentEntry 
   received_at: raw.received_at || raw.created_at || null,
   created_at: raw.created_at,
   storage_source: 'fallback_user_doc',
+  source_billing_record_id: raw.source_billing_record_id || '',
+});
+const normalizeLocalBillingRecord = (ownerId: string, raw: any): BillingRecord => ({
+  id: raw.id,
+  ownerId,
+  customerId: raw.customerId || '',
+  customer_name_snapshot: raw.customer_name_snapshot || '',
+  label: raw.label || '',
+  billing_type: raw.billing_type || 'one_time',
+  billing_frequency: raw.billing_frequency || '',
+  status: raw.status || 'due',
+  source: raw.source || 'manual',
+  total_amount: Number(raw.total_amount || 0),
+  amount_paid: Number(raw.amount_paid || 0),
+  balance_due: Number(raw.balance_due || 0),
+  covered_job_ids: Array.isArray(raw.covered_job_ids) ? raw.covered_job_ids : [],
+  covered_service_count: Number(raw.covered_service_count || 0),
+  auto_bill_enabled: !!raw.auto_bill_enabled,
+  billing_period_key: raw.billing_period_key || '',
+  billing_period_start: raw.billing_period_start || null,
+  billing_period_end: raw.billing_period_end || null,
+  due_date: raw.due_date || null,
+  paid_at: raw.paid_at || null,
+  notes: raw.notes || '',
+  created_at: raw.created_at,
+  updated_at: raw.updated_at,
+  storage_source: 'local_storage',
+  source_billing_record_id: raw.source_billing_record_id || '',
+});
+const normalizeLocalPaymentEntry = (ownerId: string, raw: any): PaymentEntry => ({
+  id: raw.id,
+  ownerId,
+  billing_record_id: raw.billing_record_id || raw.source_billing_record_id || '',
+  customerId: raw.customerId || '',
+  customer_name_snapshot: raw.customer_name_snapshot || '',
+  amount: Number(raw.amount || 0),
+  method: raw.method || 'other',
+  note: raw.note || '',
+  received_at: raw.received_at || raw.created_at || null,
+  created_at: raw.created_at,
+  storage_source: 'local_storage',
   source_billing_record_id: raw.source_billing_record_id || '',
 });
 const extractFallbackBillingRecords = (ownerId: string, data: any): BillingRecord[] =>
@@ -208,16 +252,20 @@ export const billingService = {
   subscribeToBillingRecords: (callback: (records: BillingRecord[]) => void) => {
     let unsubscribeRecords = () => {};
     let unsubscribeFallbacks = () => {};
+    let unsubscribeLocal = () => {};
     let primaryRecords: BillingRecord[] = [];
     let fallbackRecords: BillingRecord[] = [];
+    let localRecords: BillingRecord[] = [];
 
-    const emit = () => callback(dedupeBillingRecords([...fallbackRecords, ...primaryRecords]));
+    const emit = () => callback(dedupeBillingRecords([...localRecords, ...fallbackRecords, ...primaryRecords]));
 
     const unsubscribeAuth = auth.onAuthStateChanged((user) => {
       unsubscribeRecords();
       unsubscribeFallbacks();
+      unsubscribeLocal();
       primaryRecords = [];
       fallbackRecords = [];
+      localRecords = [];
 
       if (!user) {
         callback([]);
@@ -247,11 +295,17 @@ export const billingService = {
           console.error('Fallback billing subscription failed:', error);
         }
       );
+
+      unsubscribeLocal = localFallbackStore.subscribeToRecords<any>(LOCAL_BILLING_NAMESPACE, user.uid, (records) => {
+        localRecords = records.map((entry) => normalizeLocalBillingRecord(user.uid, entry));
+        emit();
+      });
     });
 
     return () => {
       unsubscribeRecords();
       unsubscribeFallbacks();
+      unsubscribeLocal();
       unsubscribeAuth();
     };
   },
@@ -259,16 +313,20 @@ export const billingService = {
   subscribeToPaymentEntries: (callback: (entries: PaymentEntry[]) => void) => {
     let unsubscribeEntries = () => {};
     let unsubscribeFallbacks = () => {};
+    let unsubscribeLocal = () => {};
     let primaryEntries: PaymentEntry[] = [];
     let fallbackEntries: PaymentEntry[] = [];
+    let localEntries: PaymentEntry[] = [];
 
-    const emit = () => callback(dedupePaymentEntries([...fallbackEntries, ...primaryEntries]));
+    const emit = () => callback(dedupePaymentEntries([...localEntries, ...fallbackEntries, ...primaryEntries]));
 
     const unsubscribeAuth = auth.onAuthStateChanged((user) => {
       unsubscribeEntries();
       unsubscribeFallbacks();
+      unsubscribeLocal();
       primaryEntries = [];
       fallbackEntries = [];
+      localEntries = [];
 
       if (!user) {
         callback([]);
@@ -298,11 +356,17 @@ export const billingService = {
           console.error('Fallback payment subscription failed:', error);
         }
       );
+
+      unsubscribeLocal = localFallbackStore.subscribeToRecords<any>(LOCAL_PAYMENT_NAMESPACE, user.uid, (records) => {
+        localEntries = records.map((entry) => normalizeLocalPaymentEntry(user.uid, entry));
+        emit();
+      });
     });
 
     return () => {
       unsubscribeEntries();
       unsubscribeFallbacks();
+      unsubscribeLocal();
       unsubscribeAuth();
     };
   },
@@ -328,47 +392,81 @@ export const billingService = {
         updated_at: serverTimestamp(),
       });
 
-      await syncCoveredJobs({
-        ...record,
-        id: ref.id,
-        ownerId: user.uid,
-        amount_paid: 0,
-        balance_due: totalAmount,
-        status,
-      });
+      try {
+        await syncCoveredJobs({
+          ...record,
+          id: ref.id,
+          ownerId: user.uid,
+          amount_paid: 0,
+          balance_due: totalAmount,
+          status,
+        });
+      } catch (syncError) {
+        console.error('Covered job sync failed after billing save:', syncError);
+      }
 
       return ref;
     } catch (error) {
       console.error('Primary billing save failed, using fallback storage:', error);
       const fallbackId = createFallbackId('billing');
       const timestamp = createClientTimestamp();
-      await updateDoc(doc(db, 'users', user.uid), {
-        [FALLBACK_BILLING_FIELD]: arrayUnion({
-          fallback_id: fallbackId,
-          ...record,
-          due_date: serializeDateValue(dueDate),
-          billing_period_start: serializeDateValue(record.billing_period_start),
-          billing_period_end: serializeDateValue(record.billing_period_end),
-          ownerId: user.uid,
-          amount_paid: 0,
-          balance_due: totalAmount,
-          status,
-          created_at: timestamp,
-          updated_at: timestamp,
-        }),
-        updated_at: serverTimestamp(),
-      });
-
-      await syncCoveredJobs({
+      const fallbackRecord = {
+        fallback_id: fallbackId,
         ...record,
-        id: `fallback:${user.uid}:${fallbackId}`,
+        due_date: serializeDateValue(dueDate),
+        billing_period_start: serializeDateValue(record.billing_period_start),
+        billing_period_end: serializeDateValue(record.billing_period_end),
         ownerId: user.uid,
         amount_paid: 0,
         balance_due: totalAmount,
         status,
-      });
+        created_at: timestamp,
+        updated_at: timestamp,
+      };
 
-      return { id: `fallback:${user.uid}:${fallbackId}` };
+      try {
+        await updateDoc(doc(db, 'users', user.uid), {
+          [FALLBACK_BILLING_FIELD]: arrayUnion(fallbackRecord),
+          updated_at: serverTimestamp(),
+        });
+
+        try {
+          await syncCoveredJobs({
+            ...record,
+            id: `fallback:${user.uid}:${fallbackId}`,
+            ownerId: user.uid,
+            amount_paid: 0,
+            balance_due: totalAmount,
+            status,
+          });
+        } catch (syncError) {
+          console.error('Covered job sync failed after user-doc fallback billing save:', syncError);
+        }
+
+        return { id: `fallback:${user.uid}:${fallbackId}` };
+      } catch (fallbackError) {
+        console.error('User-doc billing fallback failed, saving locally instead:', fallbackError);
+        const localId = localFallbackStore.upsertRecord(LOCAL_BILLING_NAMESPACE, user.uid, {
+          id: localFallbackStore.createLocalId(LOCAL_BILLING_NAMESPACE),
+          ...fallbackRecord,
+          storage_source: 'local_storage',
+        });
+
+        try {
+          await syncCoveredJobs({
+            ...record,
+            id: localId,
+            ownerId: user.uid,
+            amount_paid: 0,
+            balance_due: totalAmount,
+            status,
+          });
+        } catch (syncError) {
+          console.error('Covered job sync failed after local billing fallback save:', syncError);
+        }
+
+        return { id: localId };
+      }
     }
   },
 
@@ -377,6 +475,18 @@ export const billingService = {
     if (!user) throw new Error('User not authenticated');
 
     try {
+      if (localFallbackStore.isLocalId(id, LOCAL_BILLING_NAMESPACE)) {
+        localFallbackStore.updateRecord(LOCAL_BILLING_NAMESPACE, user.uid, id, {
+          ...updates,
+          due_date: serializeDateValue((updates as any).due_date),
+          billing_period_start: serializeDateValue((updates as any).billing_period_start),
+          billing_period_end: serializeDateValue((updates as any).billing_period_end),
+          paid_at: serializeDateValue((updates as any).paid_at),
+          updated_at: createClientTimestamp(),
+        });
+        return;
+      }
+
       if (id.startsWith('fallback:')) {
         const [, ownerId, fallbackId] = id.split(':');
         const userDocRef = doc(db, 'users', ownerId);
@@ -407,7 +517,15 @@ export const billingService = {
         updated_at: serverTimestamp(),
       });
     } catch (error) {
-      handleFirestoreError(error, OperationType.UPDATE, `${BILLING_COLLECTION}/${id}`);
+      console.error('Billing update failed, updating local fallback instead:', error);
+      localFallbackStore.updateRecord(LOCAL_BILLING_NAMESPACE, user.uid, id, {
+        ...updates,
+        due_date: serializeDateValue((updates as any).due_date),
+        billing_period_start: serializeDateValue((updates as any).billing_period_start),
+        billing_period_end: serializeDateValue((updates as any).billing_period_end),
+        paid_at: serializeDateValue((updates as any).paid_at),
+        updated_at: createClientTimestamp(),
+      });
     }
   },
 
@@ -426,7 +544,49 @@ export const billingService = {
       ? 'partial'
       : getBillingStatus(Number(billingRecord.total_amount || 0), billingRecord.due_date);
 
+    const updates: Partial<BillingRecord> = {
+      amount_paid: nextAmountPaid,
+      balance_due: nextBalanceDue,
+      status: nextStatus,
+    };
+
+    if (nextStatus === 'paid') {
+      updates.paid_at = record.received_at;
+    }
+
     try {
+      if (billingRecord.id && localFallbackStore.isLocalId(billingRecord.id, LOCAL_BILLING_NAMESPACE)) {
+        const paymentLocalId = localFallbackStore.upsertRecord(LOCAL_PAYMENT_NAMESPACE, user.uid, {
+          id: localFallbackStore.createLocalId(LOCAL_PAYMENT_NAMESPACE),
+          ownerId: user.uid,
+          billing_record_id: billingRecord.id,
+          customerId: record.customerId,
+          customer_name_snapshot: record.customer_name_snapshot,
+          amount: Number(record.amount || 0),
+          method: record.method,
+          note: record.note?.trim() || '',
+          received_at: serializeDateValue(record.received_at),
+          created_at: createClientTimestamp(),
+          source_billing_record_id: billingRecord.source_billing_record_id || billingRecord.id,
+        });
+
+        localFallbackStore.updateRecord(LOCAL_BILLING_NAMESPACE, user.uid, billingRecord.id, {
+          ...updates,
+          updated_at: createClientTimestamp(),
+        });
+
+        try {
+          await syncCoveredJobs({
+            ...billingRecord,
+            ...updates,
+          } as BillingRecord);
+        } catch (syncError) {
+          console.error('Covered job sync failed after local payment save:', syncError);
+        }
+
+        return { id: paymentLocalId };
+      }
+
       if (billingRecord.id?.startsWith('fallback:')) {
         const [_, ownerId, fallbackId] = billingRecord.id.split(':');
         const fallbackTimestamp = createClientTimestamp();
@@ -464,65 +624,121 @@ export const billingService = {
           updated_at: serverTimestamp(),
         });
 
-        await syncCoveredJobs({
-          ...billingRecord,
-          amount_paid: nextAmountPaid,
-          balance_due: nextBalanceDue,
-          status: nextStatus,
-        } as BillingRecord);
-        return;
+        try {
+          await syncCoveredJobs({
+            ...billingRecord,
+            amount_paid: nextAmountPaid,
+            balance_due: nextBalanceDue,
+            status: nextStatus,
+          } as BillingRecord);
+        } catch (syncError) {
+          console.error('Covered job sync failed after fallback payment save:', syncError);
+        }
+        return { id: `fallback:${ownerId}:${paymentFallbackId}` };
       }
 
-      let primaryPaymentSaved = false;
-      await addDoc(collection(db, PAYMENT_COLLECTION), {
+      const paymentRef = await addDoc(collection(db, PAYMENT_COLLECTION), {
         ...record,
         ownerId: user.uid,
         created_at: serverTimestamp(),
       });
-      primaryPaymentSaved = true;
-
-      const updates: Partial<BillingRecord> = {
-        amount_paid: nextAmountPaid,
-        balance_due: nextBalanceDue,
-        status: nextStatus,
-      };
-
-      if (nextStatus === 'paid') {
-        updates.paid_at = record.received_at;
-      }
 
       await billingService.updateBillingRecord(billingRecord.id!, updates);
-      await syncCoveredJobs({
-        ...billingRecord,
-        ...updates,
-      } as BillingRecord);
+      try {
+        await syncCoveredJobs({
+          ...billingRecord,
+          ...updates,
+        } as BillingRecord);
+      } catch (syncError) {
+        console.error('Covered job sync failed after primary payment save:', syncError);
+      }
+      return paymentRef;
     } catch (error) {
       console.error('Primary payment save failed, using fallback storage:', error);
       const fallbackTimestamp = createClientTimestamp();
       const paymentFallbackId = createFallbackId('payment');
       const mirroredBillingId = billingRecord.id || createFallbackId('billing');
-      const userDocRef = doc(db, 'users', user.uid);
-      const userDoc = await getDoc(userDocRef);
-      const existingBilling = Array.isArray(userDoc.data()?.[FALLBACK_BILLING_FIELD]) ? userDoc.data()?.[FALLBACK_BILLING_FIELD] : [];
-      const existingPayments = Array.isArray(userDoc.data()?.[FALLBACK_PAYMENT_FIELD]) ? userDoc.data()?.[FALLBACK_PAYMENT_FIELD] : [];
-      const hasMirroredBilling = existingBilling.some((entry: any) => entry.source_billing_record_id === mirroredBillingId || entry.fallback_id === mirroredBillingId);
-      const nextBillingArray = hasMirroredBilling
-        ? existingBilling.map((entry: any) =>
-            entry.source_billing_record_id === mirroredBillingId || entry.fallback_id === mirroredBillingId
-              ? {
-                  ...entry,
-                  amount_paid: nextAmountPaid,
-                  balance_due: nextBalanceDue,
-                  status: nextStatus,
-                  paid_at: nextStatus === 'paid' ? serializeDateValue(record.received_at) : entry.paid_at || null,
-                  updated_at: fallbackTimestamp,
-                }
-              : entry
-          )
-        : [
-            ...existingBilling,
-            {
-              fallback_id: createFallbackId('billing'),
+      const fallbackPaymentRecord = {
+        fallback_id: paymentFallbackId,
+        source_billing_record_id: mirroredBillingId,
+        ownerId: user.uid,
+        billing_record_id: mirroredBillingId,
+        customerId: record.customerId,
+        customer_name_snapshot: record.customer_name_snapshot,
+        amount: Number(record.amount || 0),
+        method: record.method,
+        note: record.note?.trim() || '',
+        received_at: serializeDateValue(record.received_at),
+        created_at: fallbackTimestamp,
+      };
+
+      try {
+        const userDocRef = doc(db, 'users', user.uid);
+        const userDoc = await getDoc(userDocRef);
+        const existingBilling = Array.isArray(userDoc.data()?.[FALLBACK_BILLING_FIELD]) ? userDoc.data()?.[FALLBACK_BILLING_FIELD] : [];
+        const existingPayments = Array.isArray(userDoc.data()?.[FALLBACK_PAYMENT_FIELD]) ? userDoc.data()?.[FALLBACK_PAYMENT_FIELD] : [];
+        const hasMirroredBilling = existingBilling.some((entry: any) => entry.source_billing_record_id === mirroredBillingId || entry.fallback_id === mirroredBillingId);
+        const nextBillingArray = hasMirroredBilling
+          ? existingBilling.map((entry: any) =>
+              entry.source_billing_record_id === mirroredBillingId || entry.fallback_id === mirroredBillingId
+                ? {
+                    ...entry,
+                    amount_paid: nextAmountPaid,
+                    balance_due: nextBalanceDue,
+                    status: nextStatus,
+                    paid_at: nextStatus === 'paid' ? serializeDateValue(record.received_at) : entry.paid_at || null,
+                    updated_at: fallbackTimestamp,
+                  }
+                : entry
+            )
+          : [
+              ...existingBilling,
+              {
+                fallback_id: createFallbackId('billing'),
+                source_billing_record_id: mirroredBillingId,
+                ownerId: user.uid,
+                customerId: billingRecord.customerId,
+                customer_name_snapshot: billingRecord.customer_name_snapshot,
+                label: billingRecord.label,
+                billing_type: billingRecord.billing_type,
+                billing_frequency: billingRecord.billing_frequency,
+                status: nextStatus,
+                source: billingRecord.source,
+                total_amount: Number(billingRecord.total_amount || 0),
+                amount_paid: nextAmountPaid,
+                balance_due: nextBalanceDue,
+                covered_job_ids: billingRecord.covered_job_ids || [],
+                covered_service_count: Number(billingRecord.covered_service_count || 0),
+                auto_bill_enabled: !!billingRecord.auto_bill_enabled,
+                billing_period_key: billingRecord.billing_period_key || '',
+                billing_period_start: serializeDateValue(billingRecord.billing_period_start),
+                billing_period_end: serializeDateValue(billingRecord.billing_period_end),
+                due_date: serializeDateValue(billingRecord.due_date),
+                paid_at: nextStatus === 'paid' ? serializeDateValue(record.received_at) : serializeDateValue(billingRecord.paid_at),
+                notes: billingRecord.notes || '',
+                created_at: serializeDateValue(billingRecord.created_at) || fallbackTimestamp,
+                updated_at: fallbackTimestamp,
+              },
+            ];
+        const shouldCreateFallbackPayment = !existingPayments.some((entry: any) =>
+          (entry.source_billing_record_id === mirroredBillingId || entry.billing_record_id === mirroredBillingId) &&
+          Number(entry.amount || 0) === Number(record.amount || 0) &&
+          serializeDateValue(entry.received_at) === serializeDateValue(record.received_at)
+        );
+
+        await updateDoc(userDocRef, {
+          [FALLBACK_BILLING_FIELD]: nextBillingArray,
+          ...(shouldCreateFallbackPayment ? {
+            [FALLBACK_PAYMENT_FIELD]: arrayUnion(fallbackPaymentRecord),
+          } : {}),
+          updated_at: serverTimestamp(),
+        });
+      } catch (fallbackError) {
+        console.error('User-doc payment fallback failed, saving locally instead:', fallbackError);
+        const localBillingId = billingRecord.id && localFallbackStore.isLocalId(billingRecord.id)
+          ? billingRecord.id
+          : localFallbackStore.upsertRecord(LOCAL_BILLING_NAMESPACE, user.uid, {
+              id: localFallbackStore.createLocalId(LOCAL_BILLING_NAMESPACE),
               source_billing_record_id: mirroredBillingId,
               ownerId: user.uid,
               customerId: billingRecord.customerId,
@@ -546,40 +762,32 @@ export const billingService = {
               notes: billingRecord.notes || '',
               created_at: serializeDateValue(billingRecord.created_at) || fallbackTimestamp,
               updated_at: fallbackTimestamp,
-            },
-          ];
-      const shouldCreateFallbackPayment = !existingPayments.some((entry: any) =>
-        (entry.source_billing_record_id === mirroredBillingId || entry.billing_record_id === mirroredBillingId) &&
-        Number(entry.amount || 0) === Number(record.amount || 0) &&
-        serializeDateValue(entry.received_at) === serializeDateValue(record.received_at)
-      );
+              storage_source: 'local_storage',
+            });
 
-      await updateDoc(userDocRef, {
-        [FALLBACK_BILLING_FIELD]: nextBillingArray,
-        ...(shouldCreateFallbackPayment ? {
-          [FALLBACK_PAYMENT_FIELD]: arrayUnion({
-            fallback_id: paymentFallbackId,
-            source_billing_record_id: mirroredBillingId,
-            ownerId: user.uid,
-            billing_record_id: mirroredBillingId,
-            customerId: record.customerId,
-            customer_name_snapshot: record.customer_name_snapshot,
-            amount: Number(record.amount || 0),
-            method: record.method,
-            note: record.note?.trim() || '',
-            received_at: serializeDateValue(record.received_at),
-            created_at: fallbackTimestamp,
-          }),
-        } : {}),
-        updated_at: serverTimestamp(),
-      });
+        localFallbackStore.updateRecord(LOCAL_BILLING_NAMESPACE, user.uid, localBillingId, {
+          ...updates,
+          updated_at: fallbackTimestamp,
+        });
 
-      await syncCoveredJobs({
-        ...billingRecord,
-        amount_paid: nextAmountPaid,
-        balance_due: nextBalanceDue,
-        status: nextStatus,
-      } as BillingRecord);
+        localFallbackStore.upsertRecord(LOCAL_PAYMENT_NAMESPACE, user.uid, {
+          id: localFallbackStore.createLocalId(LOCAL_PAYMENT_NAMESPACE),
+          ...fallbackPaymentRecord,
+          billing_record_id: localBillingId,
+          storage_source: 'local_storage',
+        });
+      }
+
+      try {
+        await syncCoveredJobs({
+          ...billingRecord,
+          amount_paid: nextAmountPaid,
+          balance_due: nextBalanceDue,
+          status: nextStatus,
+        } as BillingRecord);
+      } catch (syncError) {
+        console.error('Covered job sync failed after fallback payment save:', syncError);
+      }
     }
   },
 
@@ -633,22 +841,33 @@ export const billingService = {
         });
       } catch (paymentError) {
         console.error('Primary manual payment entry save failed, using fallback payment storage:', paymentError);
-        await updateDoc(doc(db, 'users', user.uid), {
-          [FALLBACK_PAYMENT_FIELD]: arrayUnion({
-            fallback_id: createFallbackId('payment'),
-            source_billing_record_id: billingRef.id,
-            ownerId: user.uid,
-            billing_record_id: billingRef.id,
-            customerId: payment.customerId,
-            customer_name_snapshot: payment.customer_name_snapshot,
-            amount,
-            method: payment.method,
-            note: payment.note?.trim() || '',
-            received_at: serializeDateValue(receivedAt),
-            created_at: createClientTimestamp(),
-          }),
-          updated_at: serverTimestamp(),
-        });
+        const paymentFallbackRecord = {
+          fallback_id: createFallbackId('payment'),
+          source_billing_record_id: billingRef.id,
+          ownerId: user.uid,
+          billing_record_id: billingRef.id,
+          customerId: payment.customerId,
+          customer_name_snapshot: payment.customer_name_snapshot,
+          amount,
+          method: payment.method,
+          note: payment.note?.trim() || '',
+          received_at: serializeDateValue(receivedAt),
+          created_at: createClientTimestamp(),
+        };
+
+        try {
+          await updateDoc(doc(db, 'users', user.uid), {
+            [FALLBACK_PAYMENT_FIELD]: arrayUnion(paymentFallbackRecord),
+            updated_at: serverTimestamp(),
+          });
+        } catch (fallbackError) {
+          console.error('User-doc manual payment fallback failed, saving locally instead:', fallbackError);
+          localFallbackStore.upsertRecord(LOCAL_PAYMENT_NAMESPACE, user.uid, {
+            id: localFallbackStore.createLocalId(LOCAL_PAYMENT_NAMESPACE),
+            ...paymentFallbackRecord,
+            storage_source: 'local_storage',
+          });
+        }
       }
 
       return billingRef;
@@ -657,46 +876,65 @@ export const billingService = {
       const fallbackTimestamp = createClientTimestamp();
       const billingFallbackId = createFallbackId('billing');
       const paymentFallbackId = createFallbackId('payment');
+      const fallbackBillingRecord = {
+        fallback_id: billingFallbackId,
+        ownerId: user.uid,
+        customerId: payment.customerId,
+        customer_name_snapshot: payment.customer_name_snapshot,
+        label: payment.label?.trim() || `Manual Payment - ${payment.customer_name_snapshot}`,
+        billing_type: 'one_time',
+        billing_frequency: 'manual_payment',
+        status: 'paid',
+        source: 'manual',
+        total_amount: amount,
+        amount_paid: amount,
+        balance_due: 0,
+        covered_job_ids: [],
+        covered_service_count: 0,
+        auto_bill_enabled: false,
+        due_date: serializeDateValue(receivedAt),
+        paid_at: serializeDateValue(receivedAt),
+        notes: payment.note?.trim() || 'Manual payment recorded before an open billing record existed.',
+        created_at: fallbackTimestamp,
+        updated_at: fallbackTimestamp,
+      };
+      const fallbackPaymentRecord = {
+        fallback_id: paymentFallbackId,
+        ownerId: user.uid,
+        billing_record_id: `fallback:${user.uid}:${billingFallbackId}`,
+        customerId: payment.customerId,
+        customer_name_snapshot: payment.customer_name_snapshot,
+        amount,
+        method: payment.method,
+        note: payment.note?.trim() || '',
+        received_at: serializeDateValue(receivedAt),
+        created_at: fallbackTimestamp,
+      };
 
-      await updateDoc(doc(db, 'users', user.uid), {
-        [FALLBACK_BILLING_FIELD]: arrayUnion({
-          fallback_id: billingFallbackId,
-          ownerId: user.uid,
-          customerId: payment.customerId,
-          customer_name_snapshot: payment.customer_name_snapshot,
-          label: payment.label?.trim() || `Manual Payment - ${payment.customer_name_snapshot}`,
-          billing_type: 'one_time',
-          billing_frequency: 'manual_payment',
-          status: 'paid',
-          source: 'manual',
-          total_amount: amount,
-          amount_paid: amount,
-          balance_due: 0,
-          covered_job_ids: [],
-          covered_service_count: 0,
-          auto_bill_enabled: false,
-          due_date: serializeDateValue(receivedAt),
-          paid_at: serializeDateValue(receivedAt),
-          notes: payment.note?.trim() || 'Manual payment recorded before an open billing record existed.',
-          created_at: fallbackTimestamp,
-          updated_at: fallbackTimestamp,
-        }),
-        [FALLBACK_PAYMENT_FIELD]: arrayUnion({
-          fallback_id: paymentFallbackId,
-          ownerId: user.uid,
-          billing_record_id: `fallback:${user.uid}:${billingFallbackId}`,
-          customerId: payment.customerId,
-          customer_name_snapshot: payment.customer_name_snapshot,
-          amount,
-          method: payment.method,
-          note: payment.note?.trim() || '',
-          received_at: serializeDateValue(receivedAt),
-          created_at: fallbackTimestamp,
-        }),
-        updated_at: serverTimestamp(),
-      });
+      try {
+        await updateDoc(doc(db, 'users', user.uid), {
+          [FALLBACK_BILLING_FIELD]: arrayUnion(fallbackBillingRecord),
+          [FALLBACK_PAYMENT_FIELD]: arrayUnion(fallbackPaymentRecord),
+          updated_at: serverTimestamp(),
+        });
 
-      return { id: `fallback:${user.uid}:${billingFallbackId}` };
+        return { id: `fallback:${user.uid}:${billingFallbackId}` };
+      } catch (fallbackError) {
+        console.error('User-doc manual payment save failed, saving locally instead:', fallbackError);
+        const localBillingId = localFallbackStore.upsertRecord(LOCAL_BILLING_NAMESPACE, user.uid, {
+          id: localFallbackStore.createLocalId(LOCAL_BILLING_NAMESPACE),
+          ...fallbackBillingRecord,
+          storage_source: 'local_storage',
+        });
+        localFallbackStore.upsertRecord(LOCAL_PAYMENT_NAMESPACE, user.uid, {
+          id: localFallbackStore.createLocalId(LOCAL_PAYMENT_NAMESPACE),
+          ...fallbackPaymentRecord,
+          billing_record_id: localBillingId,
+          storage_source: 'local_storage',
+        });
+
+        return { id: localBillingId };
+      }
     }
   },
 

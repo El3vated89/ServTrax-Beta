@@ -3,6 +3,7 @@ import { collection, addDoc, onSnapshot, query, where, serverTimestamp, updateDo
 import { waitForCurrentUser } from './authSessionService';
 import { storagePolicyService } from './storagePolicyService';
 import { mediaUploadService } from './mediaUploadService';
+import { localFallbackStore } from './localFallbackStore';
 
 export enum OperationType {
   CREATE = 'create',
@@ -71,6 +72,7 @@ export interface VerificationRecord {
 
 const COLLECTION_NAME = 'verification_records';
 const INLINE_VERIFICATION_FALLBACK_LIMIT_BYTES = 450 * 1024;
+const LOCAL_FALLBACK_NAMESPACE = 'verification_records';
 
 const resolveVerificationFolder = (record: Partial<VerificationRecord>) => {
   if (record.jobId) return `verification_records/jobs/${record.jobId}`;
@@ -111,12 +113,43 @@ const normalizeVerificationPhotos = async (userId: string, record: Partial<Verif
   return nextRecord;
 };
 
+const normalizeLocalVerification = (ownerId: string, record: any): VerificationRecord => ({
+  id: record.id,
+  ownerId,
+  jobId: record.jobId,
+  customerId: record.customerId,
+  photo_url: record.photo_url,
+  photo_urls: record.photo_urls || [],
+  file_size_bytes: Number(record.file_size_bytes || 0),
+  notes: record.notes || '',
+  visibility: record.visibility || 'shareable',
+  expires_at: record.expires_at || null,
+  created_at: record.created_at || new Date().toISOString(),
+});
+
 export const verificationService = {
   subscribeToJobVerifications: (jobId: string, callback: (records: VerificationRecord[]) => void) => {
     let unsubscribeRecords = () => {};
+    let unsubscribeLocal = () => {};
+    let primaryRecords: VerificationRecord[] = [];
+    let localRecords: VerificationRecord[] = [];
+
+    const emit = () => {
+      const next = [...localRecords, ...primaryRecords]
+        .filter((entry) => entry.jobId === jobId)
+        .sort((left, right) => {
+          const leftTime = new Date(left.created_at?.toDate?.() || left.created_at || 0).getTime();
+          const rightTime = new Date(right.created_at?.toDate?.() || right.created_at || 0).getTime();
+          return rightTime - leftTime;
+        });
+      callback(next);
+    };
 
     const unsubscribeAuth = auth.onAuthStateChanged((user) => {
       unsubscribeRecords();
+      unsubscribeLocal();
+      primaryRecords = [];
+      localRecords = [];
 
       if (!user) {
         callback([]);
@@ -130,18 +163,26 @@ export const verificationService = {
       );
 
       unsubscribeRecords = onSnapshot(q, (snapshot) => {
-        const records = snapshot.docs.map(doc => ({
+        primaryRecords = snapshot.docs.map(doc => ({
           id: doc.id,
           ...doc.data()
         })) as VerificationRecord[];
-        callback(records);
+        emit();
       }, (error) => {
-        handleFirestoreError(error, OperationType.GET, COLLECTION_NAME);
+        console.error('Primary job verification subscription failed, using local fallback only:', error);
+        primaryRecords = [];
+        emit();
+      });
+
+      unsubscribeLocal = localFallbackStore.subscribeToRecords<any>(LOCAL_FALLBACK_NAMESPACE, user.uid, (records) => {
+        localRecords = records.map((entry) => normalizeLocalVerification(user.uid, entry));
+        emit();
       });
     });
 
     return () => {
       unsubscribeRecords();
+      unsubscribeLocal();
       unsubscribeAuth();
     };
   },
@@ -171,7 +212,15 @@ export const verificationService = {
     try {
       return await addDoc(collection(db, COLLECTION_NAME), newRecord);
     } catch (error) {
-      handleFirestoreError(error, OperationType.WRITE, COLLECTION_NAME);
+      console.error('Primary verification save failed, saving locally instead:', error);
+      const localId = localFallbackStore.upsertRecord<VerificationRecord>(LOCAL_FALLBACK_NAMESPACE, user.uid, {
+        id: localFallbackStore.createLocalId(LOCAL_FALLBACK_NAMESPACE),
+        ...newRecord,
+        notes: newRecord.notes || '',
+        expires_at: expiresAt ? expiresAt.toDate().toISOString() : null,
+        created_at: new Date().toISOString(),
+      });
+      return { id: localId };
     }
   },
   
@@ -180,17 +229,43 @@ export const verificationService = {
     if (!user) throw new Error('Must be logged in to update verification');
     try {
       const normalizedData = await normalizeVerificationPhotos(user.uid, data);
+      if (localFallbackStore.isLocalId(id, LOCAL_FALLBACK_NAMESPACE)) {
+        localFallbackStore.updateRecord<VerificationRecord>(LOCAL_FALLBACK_NAMESPACE, user.uid, id, {
+          ...normalizedData,
+          updated_at: new Date().toISOString(),
+        } as Partial<VerificationRecord>);
+        return;
+      }
       await updateDoc(doc(db, COLLECTION_NAME, id), normalizedData);
     } catch (error) {
-      handleFirestoreError(error, OperationType.WRITE, COLLECTION_NAME);
+      console.error('Primary verification update failed, updating local fallback instead:', error);
+      localFallbackStore.updateRecord<VerificationRecord>(LOCAL_FALLBACK_NAMESPACE, user.uid, id, {
+        ...data,
+        updated_at: new Date().toISOString(),
+      } as Partial<VerificationRecord>);
     }
   },
 
   subscribeToAllVerifications: (callback: (records: VerificationRecord[]) => void) => {
     let unsubscribeRecords = () => {};
+    let unsubscribeLocal = () => {};
+    let primaryRecords: VerificationRecord[] = [];
+    let localRecords: VerificationRecord[] = [];
+
+    const emit = () => {
+      const next = [...localRecords, ...primaryRecords].sort((left, right) => {
+        const leftTime = new Date(left.created_at?.toDate?.() || left.created_at || 0).getTime();
+        const rightTime = new Date(right.created_at?.toDate?.() || right.created_at || 0).getTime();
+        return rightTime - leftTime;
+      });
+      callback(next);
+    };
 
     const unsubscribeAuth = auth.onAuthStateChanged((user) => {
       unsubscribeRecords();
+      unsubscribeLocal();
+      primaryRecords = [];
+      localRecords = [];
 
       if (!user) {
         callback([]);
@@ -203,18 +278,26 @@ export const verificationService = {
       );
 
       unsubscribeRecords = onSnapshot(q, (snapshot) => {
-        const records = snapshot.docs.map(doc => ({
+        primaryRecords = snapshot.docs.map(doc => ({
           id: doc.id,
           ...doc.data()
         })) as VerificationRecord[];
-        callback(records);
+        emit();
       }, (error) => {
-        handleFirestoreError(error, OperationType.GET, COLLECTION_NAME);
+        console.error('Primary verification subscription failed, using local fallback only:', error);
+        primaryRecords = [];
+        emit();
+      });
+
+      unsubscribeLocal = localFallbackStore.subscribeToRecords<any>(LOCAL_FALLBACK_NAMESPACE, user.uid, (records) => {
+        localRecords = records.map((entry) => normalizeLocalVerification(user.uid, entry));
+        emit();
       });
     });
 
     return () => {
       unsubscribeRecords();
+      unsubscribeLocal();
       unsubscribeAuth();
     };
   },
@@ -232,9 +315,19 @@ export const verificationService = {
       )
     );
 
-    return snapshot.docs.some((entry) => {
+    const snapshotHasPhotos = snapshot.docs.some((entry) => {
       const data = entry.data() as VerificationRecord;
       return !!data.photo_url || !!data.photo_urls?.length;
     });
+
+    if (snapshotHasPhotos) return true;
+
+    const localRecords = localFallbackStore
+      .readRecords<any>(LOCAL_FALLBACK_NAMESPACE, user.uid)
+      .map((entry) => normalizeLocalVerification(user.uid, entry));
+
+    return localRecords.some((entry) =>
+      entry.jobId === jobId && (!!entry.photo_url || !!entry.photo_urls?.length)
+    );
   }
 };

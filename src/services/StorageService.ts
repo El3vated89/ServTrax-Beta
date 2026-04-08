@@ -2,6 +2,7 @@ import { db, auth } from '../firebase';
 import { collection, query, getDocs, deleteDoc, doc, Timestamp, orderBy, where, getDoc, updateDoc } from 'firebase/firestore';
 import { storagePolicyService } from './storagePolicyService';
 import { handleFirestoreError, OperationType } from './verificationService';
+import { localFallbackStore } from './localFallbackStore';
 
 export interface StorageAsset {
   id: string;
@@ -15,7 +16,10 @@ export interface StorageAsset {
   notes?: string;
   photo_urls?: string[];
   ownerId: string;
+  source?: 'primary' | 'local_storage';
 }
+
+const LOCAL_FALLBACK_NAMESPACE = 'verification_records';
 
 const getBusinessProfile = async (userId: string) => {
   const profileSnap = await getDoc(doc(db, 'business_profiles', userId));
@@ -57,11 +61,17 @@ export const storageService = {
       const size = data.file_size_bytes || (urls.reduce((sum: number, url: string) => sum + (url.length || 0), 0) * 0.75);
       totalBytes += size;
     });
+    const localRecords = localFallbackStore.readRecords<any>(LOCAL_FALLBACK_NAMESPACE, user.uid);
+    localRecords.forEach((entry) => {
+      const urls = entry.photo_urls || (entry.photo_url ? [entry.photo_url] : []);
+      const size = entry.file_size_bytes || (urls.reduce((sum: number, url: string) => sum + (url.length || 0), 0) * 0.75);
+      totalBytes += size;
+    });
 
     return {
       used_bytes: totalBytes,
       limit_bytes: policy.limitBytes,
-      asset_count: assetsSnapshot.size,
+      asset_count: assetsSnapshot.size + localRecords.length,
       plan_name: policy.planName,
       storage_cap: policy.limitBytes,
       retention_days: policy.retentionDays,
@@ -77,7 +87,7 @@ export const storageService = {
     );
     const snapshot = await getDocs(q);
     
-    const assets = await Promise.all(snapshot.docs.map(async (docSnap) => {
+    const primaryAssets = await Promise.all(snapshot.docs.map(async (docSnap) => {
       const data = docSnap.data();
       let customer_name = 'Unknown';
       let jobId = data.jobId || 'N/A';
@@ -115,18 +125,68 @@ export const storageService = {
         jobId,
         customerId,
         ownerId: data.ownerId,
-        uploaded_at: data.created_at || Timestamp.now()
+        uploaded_at: data.created_at || Timestamp.now(),
+        source: 'primary',
       } as StorageAsset;
     }));
+
+    const localRecords = await Promise.all(
+      localFallbackStore.readRecords<any>(LOCAL_FALLBACK_NAMESPACE, user.uid).map(async (data) => {
+        let customer_name = 'Unknown';
+        let jobId = data.jobId || 'N/A';
+        let customerId = data.customerId || undefined;
+
+        if (data.jobId) {
+          try {
+            const jobSnap = await getDoc(doc(db, 'jobs', data.jobId));
+            if (jobSnap.exists()) {
+              const jobData = jobSnap.data();
+              customer_name = jobData.customer_name_snapshot || 'Unknown';
+              jobId = data.jobId;
+            }
+          } catch (error) {
+            console.error('Error fetching local verification job details, skipping:', error);
+          }
+        } else if (data.customerId) {
+          try {
+            const customerSnap = await getDoc(doc(db, 'customers', data.customerId));
+            if (customerSnap.exists()) {
+              customer_name = customerSnap.data().name || 'Unknown';
+            }
+          } catch (error) {
+            console.error('Error fetching local verification customer details, skipping:', error);
+          }
+        }
+
+        return {
+          id: data.id,
+          ...data,
+          file_size_bytes: data.file_size_bytes || 0,
+          customer_name,
+          jobId,
+          customerId,
+          ownerId: data.ownerId,
+          uploaded_at: data.created_at ? Timestamp.fromDate(new Date(data.created_at)) : Timestamp.now(),
+          source: 'local_storage',
+        } as StorageAsset;
+      })
+    );
     
     // Sort client-side to avoid index errors
-    return assets.sort((a, b) => b.uploaded_at.seconds - a.uploaded_at.seconds);
+    return [...localRecords, ...primaryAssets].sort((a, b) => b.uploaded_at.seconds - a.uploaded_at.seconds);
   },
   updateAsset: async (id: string, data: Partial<StorageAsset>) => {
     const user = await waitForCurrentUser();
     if (!user) throw new Error('User not authenticated');
 
     try {
+      if (localFallbackStore.isLocalId(id, LOCAL_FALLBACK_NAMESPACE)) {
+        localFallbackStore.updateRecord(LOCAL_FALLBACK_NAMESPACE, user.uid, id, {
+          ...data,
+          updated_at: new Date().toISOString(),
+        });
+        return;
+      }
       await updateDoc(doc(db, 'verification_records', id), data);
     } catch (error) {
       handleFirestoreError(error, OperationType.UPDATE, `verification_records/${id}`);
@@ -137,6 +197,10 @@ export const storageService = {
     if (!user) throw new Error('User not authenticated');
 
     try {
+      if (localFallbackStore.isLocalId(id, LOCAL_FALLBACK_NAMESPACE)) {
+        localFallbackStore.removeRecord(LOCAL_FALLBACK_NAMESPACE, user.uid, id);
+        return;
+      }
       await deleteDoc(doc(db, 'verification_records', id));
     } catch (error) {
       handleFirestoreError(error, OperationType.DELETE, `verification_records/${id}`);
@@ -147,7 +211,13 @@ export const storageService = {
     if (!user) throw new Error('User not authenticated');
 
     try {
-      await Promise.all(ids.map(id => deleteDoc(doc(db, 'verification_records', id))));
+      await Promise.all(ids.map(id => {
+        if (localFallbackStore.isLocalId(id, LOCAL_FALLBACK_NAMESPACE)) {
+          localFallbackStore.removeRecord(LOCAL_FALLBACK_NAMESPACE, user.uid, id);
+          return Promise.resolve();
+        }
+        return deleteDoc(doc(db, 'verification_records', id));
+      }));
     } catch (error) {
       handleFirestoreError(error, OperationType.DELETE, 'verification_records_bulk');
     }

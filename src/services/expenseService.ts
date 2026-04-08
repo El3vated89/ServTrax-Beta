@@ -10,6 +10,8 @@ import {
 } from 'firebase/firestore';
 import { auth, db } from '../firebase';
 import { handleFirestoreError, OperationType } from './verificationService';
+import { waitForCurrentUser } from './authSessionService';
+import { localFallbackStore } from './localFallbackStore';
 
 export type ExpenseCategory =
   | 'fuel'
@@ -41,24 +43,29 @@ export interface ExpenseRecord {
 }
 
 const COLLECTION_NAME = 'expenses';
-
-const waitForCurrentUser = async () => {
-  if (auth.currentUser) return auth.currentUser;
-
-  return new Promise<typeof auth.currentUser>((resolve) => {
-    const unsubscribe = auth.onAuthStateChanged((user) => {
-      unsubscribe();
-      resolve(user);
-    });
-  });
-};
+const LOCAL_FALLBACK_NAMESPACE = 'expenses';
 
 export const expenseService = {
   subscribeToExpenses: (callback: (expenses: ExpenseRecord[]) => void) => {
     let unsubscribeExpenses = () => {};
+    let unsubscribeLocal = () => {};
+    let primaryExpenses: ExpenseRecord[] = [];
+    let localExpenses: ExpenseRecord[] = [];
+
+    const emit = () => {
+      const deduped = new Map<string, ExpenseRecord>();
+      [...localExpenses, ...primaryExpenses].forEach((entry) => {
+        const key = entry.id || `${entry.title}:${entry.expense_date || entry.created_at || ''}`;
+        deduped.set(key, entry);
+      });
+      callback(Array.from(deduped.values()));
+    };
 
     const unsubscribeAuth = auth.onAuthStateChanged((user) => {
       unsubscribeExpenses();
+      unsubscribeLocal();
+      primaryExpenses = [];
+      localExpenses = [];
 
       if (!user) {
         callback([]);
@@ -68,14 +75,25 @@ export const expenseService = {
       unsubscribeExpenses = onSnapshot(
         query(collection(db, COLLECTION_NAME), where('ownerId', '==', user.uid)),
         (snapshot) => {
-          callback(snapshot.docs.map((entry) => ({ id: entry.id, ...entry.data() } as ExpenseRecord)));
+          primaryExpenses = snapshot.docs.map((entry) => ({ id: entry.id, ...entry.data() } as ExpenseRecord));
+          emit();
         },
-        (error) => handleFirestoreError(error, OperationType.GET, COLLECTION_NAME)
+        (error) => {
+          console.error('Primary expense subscription failed, using local fallback only:', error);
+          primaryExpenses = [];
+          emit();
+        }
       );
+
+      unsubscribeLocal = localFallbackStore.subscribeToRecords<ExpenseRecord>(LOCAL_FALLBACK_NAMESPACE, user.uid, (records) => {
+        localExpenses = records;
+        emit();
+      });
     });
 
     return () => {
       unsubscribeExpenses();
+      unsubscribeLocal();
       unsubscribeAuth();
     };
   },
@@ -92,7 +110,15 @@ export const expenseService = {
         updated_at: serverTimestamp(),
       });
     } catch (error) {
-      handleFirestoreError(error, OperationType.WRITE, COLLECTION_NAME);
+      console.error('Primary expense save failed, saving locally instead:', error);
+      const localId = localFallbackStore.upsertRecord<ExpenseRecord>(LOCAL_FALLBACK_NAMESPACE, user.uid, {
+        id: localFallbackStore.createLocalId(LOCAL_FALLBACK_NAMESPACE),
+        ...expense,
+        ownerId: user.uid,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      });
+      return { id: localId };
     }
   },
 
@@ -101,12 +127,24 @@ export const expenseService = {
     if (!user) throw new Error('User not authenticated');
 
     try {
+      if (localFallbackStore.isLocalId(id, LOCAL_FALLBACK_NAMESPACE)) {
+        localFallbackStore.updateRecord<ExpenseRecord>(LOCAL_FALLBACK_NAMESPACE, user.uid, id, {
+          ...updates,
+          updated_at: new Date().toISOString(),
+        });
+        return;
+      }
+
       await updateDoc(doc(db, COLLECTION_NAME, id), {
         ...updates,
         updated_at: serverTimestamp(),
       });
     } catch (error) {
-      handleFirestoreError(error, OperationType.UPDATE, `${COLLECTION_NAME}/${id}`);
+      console.error('Primary expense update failed, updating local fallback instead:', error);
+      localFallbackStore.updateRecord<ExpenseRecord>(LOCAL_FALLBACK_NAMESPACE, user.uid, id, {
+        ...updates,
+        updated_at: new Date().toISOString(),
+      });
     }
   },
 };

@@ -15,6 +15,7 @@ import { auth, db } from '../firebase';
 import { waitForCurrentUser } from './authSessionService';
 import { handleFirestoreError, OperationType } from './verificationService';
 import { mediaUploadService } from './mediaUploadService';
+import { localFallbackStore } from './localFallbackStore';
 
 export type BugReportCategory =
   | 'ui_layout'
@@ -44,7 +45,7 @@ export interface BugReport {
   browser_info?: string;
   created_at?: any;
   updated_at?: any;
-  source?: 'primary' | 'fallback_user_doc';
+  source?: 'primary' | 'fallback_user_doc' | 'local_storage';
 }
 
 export interface CreateBugReportInput {
@@ -59,6 +60,7 @@ export interface CreateBugReportInput {
 
 const COLLECTION_NAME = 'bug_reports';
 const FALLBACK_USER_FIELD = 'bug_report_fallbacks';
+const LOCAL_FALLBACK_NAMESPACE = 'bug_reports';
 
 const MAX_SCREENSHOT_WIDTH = 1280;
 const SCREENSHOT_QUALITY = 0.72;
@@ -119,6 +121,25 @@ const extractFallbackReports = (ownerId: string, data: any): BugReport[] => {
   const rawReports = Array.isArray(data?.[FALLBACK_USER_FIELD]) ? data[FALLBACK_USER_FIELD] : [];
   return rawReports.map((rawReport: any) => mapFallbackReport(ownerId, rawReport));
 };
+
+const mapLocalReport = (ownerId: string, rawReport: any): BugReport => ({
+  id: rawReport.id,
+  ownerId,
+  reporter_uid: rawReport.reporter_uid || ownerId,
+  reporter_email: rawReport.reporter_email || '',
+  reporter_name: rawReport.reporter_name || rawReport.reporter_email || 'Unknown User',
+  category: rawReport.category || 'other',
+  details: rawReport.details || '',
+  status: rawReport.status || 'open',
+  page_path: rawReport.page_path || '',
+  current_url: rawReport.current_url || '',
+  screenshot_data_url: rawReport.screenshot_data_url || '',
+  screenshot_content_type: rawReport.screenshot_content_type || '',
+  browser_info: rawReport.browser_info || '',
+  created_at: rawReport.created_at,
+  updated_at: rawReport.updated_at,
+  source: 'local_storage',
+});
 
 export const bugReportService = {
   categories: [
@@ -204,19 +225,33 @@ export const bugReportService = {
         console.error('Primary bug report save failed, falling back to user profile storage:', primaryError);
         const fallbackId = createFallbackId();
         const timestamp = createClientTimestamp();
-        await updateDoc(doc(db, 'users', user.uid), {
-          [FALLBACK_USER_FIELD]: arrayUnion({
-            fallback_id: fallbackId,
+        try {
+          await updateDoc(doc(db, 'users', user.uid), {
+            [FALLBACK_USER_FIELD]: arrayUnion({
+              fallback_id: fallbackId,
+              ...reportPayload,
+              created_at: timestamp,
+              updated_at: timestamp,
+            }),
+            updated_at: serverTimestamp(),
+          });
+
+          return {
+            id: `fallback:${user.uid}:${fallbackId}`,
+          };
+        } catch (fallbackError) {
+          console.error('User-doc bug report fallback failed, saving locally instead:', fallbackError);
+          const localId = localFallbackStore.upsertRecord(LOCAL_FALLBACK_NAMESPACE, user.uid, {
+            id: localFallbackStore.createLocalId(LOCAL_FALLBACK_NAMESPACE),
             ...reportPayload,
             created_at: timestamp,
             updated_at: timestamp,
-          }),
-          updated_at: serverTimestamp(),
-        });
+          });
 
-        return {
-          id: `fallback:${user.uid}:${fallbackId}`,
-        };
+          return {
+            id: localId,
+          };
+        }
       }
     } catch (error) {
       handleFirestoreError(error, OperationType.WRITE, COLLECTION_NAME);
@@ -226,16 +261,20 @@ export const bugReportService = {
   subscribeToOwnBugReports: (callback: (reports: BugReport[]) => void) => {
     let unsubscribeReports = () => {};
     let unsubscribeFallbacks = () => {};
+    let unsubscribeLocal = () => {};
     let primaryReports: BugReport[] = [];
     let fallbackReports: BugReport[] = [];
+    let localReports: BugReport[] = [];
 
-    const emit = () => callback(sortReports([...fallbackReports, ...primaryReports]));
+    const emit = () => callback(sortReports([...localReports, ...fallbackReports, ...primaryReports]));
 
     const unsubscribeAuth = auth.onAuthStateChanged((user) => {
       unsubscribeReports();
       unsubscribeFallbacks();
+      unsubscribeLocal();
       primaryReports = [];
       fallbackReports = [];
+      localReports = [];
 
       if (!user) {
         callback([]);
@@ -265,11 +304,17 @@ export const bugReportService = {
           console.error('Fallback own bug report subscription failed:', error);
         }
       );
+
+      unsubscribeLocal = localFallbackStore.subscribeToRecords<any>(LOCAL_FALLBACK_NAMESPACE, user.uid, (records) => {
+        localReports = records.map((record) => mapLocalReport(user.uid, record));
+        emit();
+      });
     });
 
     return () => {
       unsubscribeReports();
       unsubscribeFallbacks();
+      unsubscribeLocal();
       unsubscribeAuth();
     };
   },
@@ -277,8 +322,10 @@ export const bugReportService = {
   subscribeToAllBugReports: (callback: (reports: BugReport[]) => void) => {
     let primaryReports: BugReport[] = [];
     let fallbackReports: BugReport[] = [];
+    let localReports: BugReport[] = [];
+    let unsubscribeLocal = () => {};
 
-    const emit = () => callback(sortReports([...fallbackReports, ...primaryReports]));
+    const emit = () => callback(sortReports([...localReports, ...fallbackReports, ...primaryReports]));
 
     const unsubscribePrimary = onSnapshot(
       query(collection(db, COLLECTION_NAME), orderBy('created_at', 'desc')),
@@ -304,9 +351,24 @@ export const bugReportService = {
       }
     );
 
+    const unsubscribeAuth = auth.onAuthStateChanged((user) => {
+      unsubscribeLocal();
+      localReports = [];
+      emit();
+
+      if (!user) return;
+
+      unsubscribeLocal = localFallbackStore.subscribeToRecords<any>(LOCAL_FALLBACK_NAMESPACE, user.uid, (records) => {
+        localReports = records.map((record) => mapLocalReport(user.uid, record));
+        emit();
+      });
+    });
+
     return () => {
       unsubscribePrimary();
       unsubscribeFallbacks();
+      unsubscribeLocal();
+      unsubscribeAuth();
     };
   },
 
@@ -315,6 +377,14 @@ export const bugReportService = {
     if (!user) throw new Error('User not authenticated');
 
     try {
+      if (localFallbackStore.isLocalId(reportId, LOCAL_FALLBACK_NAMESPACE)) {
+        localFallbackStore.updateRecord<any>(LOCAL_FALLBACK_NAMESPACE, user.uid, reportId, {
+          status,
+          updated_at: createClientTimestamp(),
+        });
+        return;
+      }
+
       if (reportId.startsWith('fallback:')) {
         const [, ownerId, fallbackId] = reportId.split(':');
         const userDocRef = doc(db, 'users', ownerId);
