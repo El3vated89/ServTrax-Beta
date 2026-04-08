@@ -28,12 +28,13 @@ import {
 } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
 import { auth } from '../../firebase';
+import { routeActivityService } from '../../services/routeActivityService';
 import { routeService } from '../../services/RouteService';
 import { routeOptimizationService } from '../../services/RouteOptimizationService';
 import { featureFlagService, FeatureFlags } from '../../services/featureFlagService';
 import { jobService, Job } from '../../services/jobService';
 import { customerService, Customer } from '../../services/customerService';
-import { Route, RouteStop, RouteStatus, StopDueState, OptimizationMode, BaseCamp } from './types';
+import { Route, RouteActivityLog, RouteStop, RouteStatus, StopDueState, OptimizationMode, BaseCamp } from './types';
 import { BASE_CAMP } from './constants';
 import RouteMap from './components/RouteMap';
 import RouteStopCard from './components/RouteStopCard';
@@ -44,6 +45,17 @@ import { getPublicOrigin } from '../../utils';
 
 import { verificationService } from '../../services/verificationService';
 import { renderProofMessage, templateService, MessageTemplate } from '../../services/templateService';
+
+const formatRouteDateTime = (value: any) => {
+  if (!value) return '';
+  const date = value instanceof Timestamp ? value.toDate() : value?.toDate ? value.toDate() : new Date(value);
+  return date.toLocaleString('en-US', {
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit'
+  });
+};
 
 export default function ActiveRoutePage() {
   const location = useLocation();
@@ -64,6 +76,7 @@ export default function ActiveRoutePage() {
   const [verificationPhotoUrls, setVerificationPhotoUrls] = useState<string[]>([]);
   const [templates, setTemplates] = useState<MessageTemplate[]>([]);
   const [currentTemplateIndex, setCurrentTemplateIndex] = useState(0);
+  const [activityLogs, setActivityLogs] = useState<RouteActivityLog[]>([]);
 
   const handlePhotoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -235,6 +248,15 @@ export default function ActiveRoutePage() {
   }, [activeRoute?.id]);
 
   useEffect(() => {
+    if (!activeRoute?.id) {
+      setActivityLogs([]);
+      return;
+    }
+
+    return routeActivityService.subscribeToRouteActivity(activeRoute.id, setActivityLogs);
+  }, [activeRoute?.id]);
+
+  useEffect(() => {
     setStopFilter('open');
   }, [activeRoute?.id, selectedDate]);
 
@@ -301,12 +323,18 @@ export default function ActiveRoutePage() {
   };
 
   const handleDelayStop = async (stop: RouteStop) => {
-    if (!stop.id) return;
+    if (!stop.id || !activeRoute) return;
     setErrorMessage(null);
     try {
       await routeService.updateRouteStop(stop.id, {
         due_state: 'delayed',
         delayed_reason: 'Rescheduled by field tech'
+      });
+      await routeActivityService.addActivity({
+        route: activeRoute,
+        stop,
+        eventType: 'stop_delayed',
+        summary: `Marked ${stop.customer_name_snapshot} as delayed for follow-up.`,
       });
     } catch (error: any) {
       console.error('Error delaying stop:', error);
@@ -348,6 +376,11 @@ export default function ActiveRoutePage() {
         last_service_date_snapshot: job.completed_date || '',
         scheduled_date: job.scheduled_date || Timestamp.now(),
         due_date: job.scheduled_date || Timestamp.now()
+      });
+      await routeActivityService.addActivity({
+        route: activeRoute,
+        eventType: 'stop_added',
+        summary: `Added ${job.customer_name_snapshot || 'a stop'} to this run.`,
       });
       setIsAddingStop(false);
     } catch (error: any) {
@@ -410,6 +443,11 @@ export default function ActiveRoutePage() {
         scheduled_date: Timestamp.now(),
         due_date: Timestamp.now()
       });
+      await routeActivityService.addActivity({
+        route: activeRoute,
+        eventType: 'stop_added',
+        summary: `Added ${customer.name || 'a customer'} to this run.`,
+      });
       setIsAddingStop(false);
     } catch (error: any) {
       console.error('Error adding customer to route:', error);
@@ -438,7 +476,7 @@ export default function ActiveRoutePage() {
   };
 
   const handleVerifyStop = async (stop: RouteStop, notes: string, photoUrls: string[]) => {
-    if (!stop.id) return;
+    if (!stop.id || !activeRoute) return;
     setErrorMessage(null);
 
     try {
@@ -508,6 +546,16 @@ export default function ActiveRoutePage() {
         completed_by_name: actor.name,
         notes_internal: notes,
         verification_id: verificationId || undefined
+      });
+      await routeActivityService.addActivity({
+        route: activeRoute,
+        stop: {
+          ...stop,
+          completed_by_name: actor.name,
+          completed_by_user_id: actor.userId,
+        },
+        eventType: 'stop_completed',
+        summary: `Completed ${stop.customer_name_snapshot}.`,
       });
 
       setStopToVerify(null);
@@ -594,6 +642,17 @@ export default function ActiveRoutePage() {
         started_by_user_id: actor.userId,
         started_by_name: actor.name
       });
+      await routeActivityService.addActivity({
+        route: {
+          ...activeRoute,
+          status: 'in_progress',
+          started_at: startedAt,
+          started_by_user_id: actor.userId,
+          started_by_name: actor.name
+        },
+        eventType: 'run_started',
+        summary: `Started ${activeRoute.assigned_team_name_snapshot || activeRoute.route_run_label || 'this route run'}.`,
+      });
       setActiveRoute(prev => prev ? ({
         ...prev,
         status: 'in_progress',
@@ -618,6 +677,17 @@ export default function ActiveRoutePage() {
         completed_at: completedAt,
         completed_by_user_id: actor.userId,
         completed_by_name: actor.name
+      });
+      await routeActivityService.addActivity({
+        route: {
+          ...activeRoute,
+          status: 'completed',
+          completed_at: completedAt,
+          completed_by_user_id: actor.userId,
+          completed_by_name: actor.name
+        },
+        eventType: 'run_completed',
+        summary: `Completed ${activeRoute.assigned_team_name_snapshot || activeRoute.route_run_label || 'this route run'}.`,
       });
       setActiveRoute(prev => prev ? ({
         ...prev,
@@ -712,6 +782,11 @@ export default function ActiveRoutePage() {
               {activeRoute?.route_run_label && (
                 <span className="px-3 py-1 bg-gray-100 text-gray-500 text-[10px] font-black uppercase tracking-widest rounded-full">
                   {activeRoute.route_run_label}
+                </span>
+              )}
+              {activeRoute?.assigned_team_name_snapshot && (
+                <span className="px-3 py-1 bg-green-50 text-green-700 text-[10px] font-black uppercase tracking-widest rounded-full">
+                  {activeRoute.assigned_team_name_snapshot}
                 </span>
               )}
             </div>
@@ -836,6 +911,80 @@ export default function ActiveRoutePage() {
           </button>
         </div>
       </header>
+
+      {activeRoute && (
+        <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1.15fr)_minmax(320px,0.85fr)] gap-4">
+          <div className="bg-white rounded-3xl border border-gray-100 shadow-sm p-5">
+            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+              <div>
+                <p className="text-sm font-black text-gray-900">Run Accountability</p>
+                <p className="text-[10px] font-black uppercase tracking-widest text-gray-400 mt-2">
+                  Keep this run ready for future team assignment and history
+                </p>
+              </div>
+
+              <div className="flex flex-wrap gap-2">
+                <span className="px-3 py-2 rounded-2xl bg-gray-50 text-gray-700 text-[10px] font-black uppercase tracking-widest">
+                  {activeRoute.assigned_team_name_snapshot || 'Unassigned Crew Slot'}
+                </span>
+                <span className="px-3 py-2 rounded-2xl bg-blue-50 text-blue-700 text-[10px] font-black uppercase tracking-widest">
+                  {activeRoute.route_run_label || 'Run 1'}
+                </span>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mt-5">
+              <div className="rounded-2xl bg-gray-50 border border-gray-100 p-4">
+                <p className="text-[10px] font-black uppercase tracking-widest text-gray-400">Started By</p>
+                <p className="text-sm font-black text-gray-900 mt-2">{activeRoute.started_by_name || 'Not started yet'}</p>
+              </div>
+              <div className="rounded-2xl bg-gray-50 border border-gray-100 p-4">
+                <p className="text-[10px] font-black uppercase tracking-widest text-gray-400">Completed By</p>
+                <p className="text-sm font-black text-gray-900 mt-2">{activeRoute.completed_by_name || 'Still open'}</p>
+              </div>
+              <div className="rounded-2xl bg-gray-50 border border-gray-100 p-4">
+                <p className="text-[10px] font-black uppercase tracking-widest text-gray-400">Run Status</p>
+                <p className="text-sm font-black text-gray-900 mt-2">{activeRoute.status.replace('_', ' ')}</p>
+              </div>
+            </div>
+          </div>
+
+          <div className="bg-white rounded-3xl border border-gray-100 shadow-sm p-5">
+            <div className="flex items-center justify-between gap-4 mb-4">
+              <div>
+                <p className="text-sm font-black text-gray-900">Recent Route Activity</p>
+                <p className="text-[10px] font-black uppercase tracking-widest text-gray-400 mt-2">
+                  Latest actions taken on this run
+                </p>
+              </div>
+            </div>
+
+            {activityLogs.length === 0 ? (
+              <div className="rounded-2xl border-2 border-dashed border-gray-200 p-6 text-center">
+                <p className="text-sm font-black text-gray-500">No route activity yet</p>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {activityLogs.slice(0, 5).map((log) => (
+                  <div key={log.id} className="rounded-2xl bg-gray-50 border border-gray-100 p-4">
+                    <div className="flex items-start justify-between gap-4">
+                      <div>
+                        <p className="text-sm font-black text-gray-900">{log.summary}</p>
+                        <p className="text-[10px] font-black uppercase tracking-widest text-gray-400 mt-2">
+                          {log.actor_name}
+                        </p>
+                      </div>
+                      <p className="text-[10px] font-black uppercase tracking-widest text-gray-400 whitespace-nowrap">
+                        {formatRouteDateTime(log.occurred_at)}
+                      </p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Controls Bar */}
       <div className="flex flex-col gap-4 bg-white p-6 rounded-3xl border border-gray-100 shadow-sm">

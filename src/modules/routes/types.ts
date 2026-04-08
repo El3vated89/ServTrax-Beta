@@ -5,6 +5,16 @@ export type StopDueState = 'upcoming' | 'due' | 'overdue' | 'delayed' | 'complet
 export type OptimizationMode = 'none' | 'close_to_far' | 'far_to_close' | 'optimized';
 export type RouteTemplateCadence = 'weekly' | 'bi_weekly' | 'monthly' | 'manual';
 export type RouteTemplateMode = 'day' | 'area' | 'hybrid' | 'custom';
+export type RouteActivityType =
+  | 'run_generated'
+  | 'run_details_updated'
+  | 'run_started'
+  | 'run_completed'
+  | 'stop_added'
+  | 'stop_removed'
+  | 'stop_delayed'
+  | 'stop_completed'
+  | 'order_saved';
 
 export interface BaseCamp {
   label: string;
@@ -106,4 +116,22 @@ export interface RouteFeatureFlags {
   routes_city_grouping: boolean;
   routes_advanced_sorting: boolean;
   routes_live_tracking_future: boolean;
+}
+
+export interface RouteActivityLog {
+  id?: string;
+  ownerId: string;
+  route_id: string;
+  route_stop_id?: string;
+  template_id?: string;
+  route_name_snapshot: string;
+  route_run_label_snapshot?: string;
+  assigned_team_name_snapshot?: string;
+  stop_customer_name_snapshot?: string;
+  event_type: RouteActivityType;
+  actor_user_id: string;
+  actor_name: string;
+  summary: string;
+  occurred_at: Timestamp | string;
+  created_at?: Timestamp;
 }

@@ -169,6 +169,23 @@ service cloud.firestore {
              data.customer_name_snapshot is string;
     }
 
+    function isValidRouteActivity(data) {
+      return data.ownerId is string &&
+             data.route_id is string &&
+             data.route_name_snapshot is string &&
+             data.event_type in ['run_generated', 'run_details_updated', 'run_started', 'run_completed', 'stop_added', 'stop_removed', 'stop_delayed', 'stop_completed', 'order_saved'] &&
+             data.actor_user_id is string &&
+             data.actor_name is string &&
+             data.summary is string &&
+             (!('route_stop_id' in data) || data.route_stop_id is string) &&
+             (!('template_id' in data) || data.template_id is string) &&
+             (!('route_run_label_snapshot' in data) || data.route_run_label_snapshot is string) &&
+             (!('assigned_team_name_snapshot' in data) || data.assigned_team_name_snapshot is string) &&
+             (!('stop_customer_name_snapshot' in data) || data.stop_customer_name_snapshot is string) &&
+             (!('occurred_at' in data) || data.occurred_at is timestamp || data.occurred_at is string) &&
+             (!('created_at' in data) || data.created_at is timestamp);
+    }
+
     function isValidEquipment(data) {
       return data.ownerId is string &&
              data.name is string;
@@ -267,6 +284,13 @@ service cloud.firestore {
       allow create: if isAuthenticated() && isValidRouteStop(request.resource.data);
       allow update: if isAuthenticated() && isValidRouteStop(request.resource.data);
       allow delete: if isAuthenticated();
+    }
+
+    match /route_activity_logs/{logId} {
+      allow read: if isDocOwner();
+      allow create: if isAuthenticated() && request.resource.data.ownerId == request.auth.uid && isValidRouteActivity(request.resource.data);
+      allow update: if false;
+      allow delete: if isDocOwner();
     }
 
     match /equipment/{equipmentId} {

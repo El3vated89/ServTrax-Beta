@@ -18,12 +18,13 @@ import {
 } from 'lucide-react';
 import { Timestamp } from 'firebase/firestore';
 import { jobService, Job } from '../../services/jobService';
+import { routeActivityService } from '../../services/routeActivityService';
 import { routePlanningService } from '../../services/routePlanningService';
 import { routeTemplateService } from '../../services/routeTemplateService';
 import { routeService } from '../../services/RouteService';
 import { BASE_CAMP } from './constants';
 import RouteStopCard from './components/RouteStopCard';
-import { BaseCamp, Route, RouteStop, RouteTemplate, RouteTemplateCadence, RouteTemplateMode } from './types';
+import { BaseCamp, Route, RouteActivityLog, RouteStop, RouteTemplate, RouteTemplateCadence, RouteTemplateMode } from './types';
 
 const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 
@@ -62,6 +63,14 @@ const formatRouteDate = (value: any) =>
     weekday: 'short',
     month: 'short',
     day: 'numeric',
+  });
+
+const formatRouteDateTime = (value: any) =>
+  toDate(value).toLocaleString('en-US', {
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
   });
 
 const cadenceLabels: Record<RouteTemplateCadence, string> = {
@@ -112,6 +121,12 @@ export default function RoutesManagementPage() {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [draggedStopId, setDraggedStopId] = useState<string | null>(null);
   const [hasUnsavedOrder, setHasUnsavedOrder] = useState(false);
+  const [isSavingRunDetails, setIsSavingRunDetails] = useState(false);
+  const [runDetailsForm, setRunDetailsForm] = useState({
+    route_run_label: '',
+    assigned_team_name_snapshot: '',
+  });
+  const [activityLogs, setActivityLogs] = useState<RouteActivityLog[]>([]);
 
   useEffect(() => {
     const routeState = location.state as { selectedDate?: string; selectedTemplateId?: string } | null;
@@ -237,6 +252,22 @@ export default function RoutesManagementPage() {
     setDraftStops(activeStops);
     setHasUnsavedOrder(false);
   }, [activeStops]);
+
+  useEffect(() => {
+    if (!activeRun?.id) {
+      setActivityLogs([]);
+      return;
+    }
+
+    return routeActivityService.subscribeToRouteActivity(activeRun.id, setActivityLogs);
+  }, [activeRun?.id]);
+
+  useEffect(() => {
+    setRunDetailsForm({
+      route_run_label: activeRun?.route_run_label || '',
+      assigned_team_name_snapshot: activeRun?.assigned_team_name_snapshot || '',
+    });
+  }, [activeRun?.assigned_team_name_snapshot, activeRun?.route_run_label, activeRun?.id]);
 
   const eligibleJobs = useMemo(() => {
     if (!selectedTemplate) return [];
@@ -376,6 +407,17 @@ export default function RoutesManagementPage() {
       if (runs?.[0]?.id) {
         setActiveRunId(runs[0].id);
       }
+      await Promise.all(
+        (runs || []).map((run) =>
+          routeActivityService.addActivity({
+            route: run,
+            eventType: 'run_generated',
+            summary: currentRuns?.length
+              ? 'Planner refreshed this run from the current due work.'
+              : 'Planner generated this run from the current due work.',
+          })
+        )
+      );
       setSaveMessage(currentRuns?.length ? 'Route runs refreshed' : 'Route runs generated');
     } catch (error) {
       console.error('Error syncing route run:', error);
@@ -415,6 +457,11 @@ export default function RoutesManagementPage() {
           }))
       );
       await routeService.updateRoute(activeRun.id, { manual_override: true });
+      await routeActivityService.addActivity({
+        route: activeRun,
+        eventType: 'order_saved',
+        summary: `Saved the stop order for ${activeRun.assigned_team_name_snapshot || activeRun.route_run_label || 'this run'}.`,
+      });
       setHasUnsavedOrder(false);
       setSaveMessage('Route order saved');
     } catch (error) {
@@ -425,13 +472,52 @@ export default function RoutesManagementPage() {
     }
   };
 
+  const handleSaveRunDetails = async () => {
+    if (!activeRun?.id) return;
+    setIsSavingRunDetails(true);
+    setErrorMessage(null);
+
+    const nextRunLabel = runDetailsForm.route_run_label.trim() || activeRun.route_run_label || 'Run 1';
+    const nextTeamName = runDetailsForm.assigned_team_name_snapshot.trim();
+
+    try {
+      await routeService.updateRoute(activeRun.id, {
+        route_run_label: nextRunLabel,
+        assigned_team_name_snapshot: nextTeamName,
+      });
+      await routeActivityService.addActivity({
+        route: {
+          ...activeRun,
+          route_run_label: nextRunLabel,
+          assigned_team_name_snapshot: nextTeamName,
+        },
+        eventType: 'run_details_updated',
+        summary: nextTeamName
+          ? `Updated this run for ${nextTeamName}.`
+          : 'Updated this run label and details.',
+      });
+      setSaveMessage('Run details saved');
+    } catch (error) {
+      console.error('Error saving run details:', error);
+      setErrorMessage('Failed to save run details.');
+    } finally {
+      setIsSavingRunDetails(false);
+    }
+  };
+
   const handleRemoveStop = async (stop: RouteStop) => {
-    if (!stop.id) return;
+    if (!stop.id || !activeRun) return;
     const confirmed = window.confirm(`Remove ${stop.customer_name_snapshot} from this run?`);
     if (!confirmed) return;
 
     try {
       await routeService.deleteRouteStop(stop.id);
+      await routeActivityService.addActivity({
+        route: activeRun,
+        stop,
+        eventType: 'stop_removed',
+        summary: `Removed ${stop.customer_name_snapshot} from this run.`,
+      });
       setSaveMessage('Stop removed from route run');
     } catch (error) {
       console.error('Error removing route stop:', error);
@@ -865,7 +951,7 @@ export default function RoutesManagementPage() {
                             <div>
                               <p className="text-sm font-black text-gray-900">{formatRouteDate(route.route_date)}</p>
                               <p className="text-[10px] font-black uppercase tracking-widest text-gray-400 mt-2">
-                                {(route.route_run_label || 'Run 1')} • {route.status.replace('_', ' ')}
+                                {(route.assigned_team_name_snapshot || route.route_run_label || 'Run 1')} • {route.status.replace('_', ' ')}
                               </p>
                             </div>
                             <ChevronRight className="h-4 w-4 text-gray-300" />
@@ -914,6 +1000,58 @@ export default function RoutesManagementPage() {
                           </p>
                         </button>
                       ))}
+                    </div>
+                  )}
+
+                  {activeRun && (
+                    <div className="rounded-3xl border border-gray-100 bg-gray-50 p-4 space-y-4">
+                      <div className="flex items-center justify-between gap-4">
+                        <div>
+                          <p className="text-sm font-black text-gray-900">Run Details</p>
+                          <p className="text-[10px] font-black uppercase tracking-widest text-gray-400 mt-1">
+                            Keep same-day runs clear for future crew assignments
+                          </p>
+                        </div>
+                        <button
+                          onClick={handleSaveRunDetails}
+                          disabled={isSavingRunDetails}
+                          className={`px-4 py-3 rounded-2xl text-xs font-black uppercase tracking-widest transition-all ${
+                            isSavingRunDetails
+                              ? 'bg-gray-200 text-gray-400'
+                              : 'bg-white border border-gray-200 text-gray-900 hover:border-blue-300 hover:bg-blue-50'
+                          }`}
+                        >
+                          {isSavingRunDetails ? 'Saving...' : 'Save Run Details'}
+                        </button>
+                      </div>
+
+                      <div className="grid grid-cols-1 gap-4">
+                        <div>
+                          <label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest mb-2">
+                            Run Label
+                          </label>
+                          <input
+                            type="text"
+                            value={runDetailsForm.route_run_label}
+                            onChange={(event) => setRunDetailsForm((prev) => ({ ...prev, route_run_label: event.target.value }))}
+                            placeholder="Run 1, North Loop, Monday A..."
+                            className="w-full px-4 py-3 bg-white rounded-2xl border border-gray-200 text-sm font-bold text-gray-900 placeholder:text-gray-300 focus:ring-2 focus:ring-blue-500 outline-none"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest mb-2">
+                            Crew / Team Placeholder
+                          </label>
+                          <input
+                            type="text"
+                            value={runDetailsForm.assigned_team_name_snapshot}
+                            onChange={(event) => setRunDetailsForm((prev) => ({ ...prev, assigned_team_name_snapshot: event.target.value }))}
+                            placeholder="Crew 1, Thomas + Jake, Truck B..."
+                            className="w-full px-4 py-3 bg-white rounded-2xl border border-gray-200 text-sm font-bold text-gray-900 placeholder:text-gray-300 focus:ring-2 focus:ring-blue-500 outline-none"
+                          />
+                        </div>
+                      </div>
                     </div>
                   )}
 
@@ -974,6 +1112,43 @@ export default function RoutesManagementPage() {
                           </div>
                         ))}
                       </div>
+                    </div>
+                  )}
+
+                  {activeRun && (
+                    <div className="rounded-3xl border border-gray-100 bg-white p-5 space-y-4">
+                      <div className="flex items-center justify-between gap-4">
+                        <div>
+                          <p className="text-sm font-black text-gray-900">Recent Route Activity</p>
+                          <p className="text-[10px] font-black uppercase tracking-widest text-gray-400 mt-1">
+                            Started, completed, delayed, removed, and saved actions on this run
+                          </p>
+                        </div>
+                      </div>
+
+                      {activityLogs.length === 0 ? (
+                        <div className="rounded-2xl border-2 border-dashed border-gray-200 p-6 text-center">
+                          <p className="text-sm font-black text-gray-500">No route activity yet</p>
+                        </div>
+                      ) : (
+                        <div className="space-y-3">
+                          {activityLogs.slice(0, 6).map((log) => (
+                            <div key={log.id} className="rounded-2xl bg-gray-50 border border-gray-100 p-4">
+                              <div className="flex items-start justify-between gap-4">
+                                <div>
+                                  <p className="text-sm font-black text-gray-900">{log.summary}</p>
+                                  <p className="text-[10px] font-black uppercase tracking-widest text-gray-400 mt-2">
+                                    {log.actor_name}
+                                  </p>
+                                </div>
+                                <p className="text-[10px] font-black uppercase tracking-widest text-gray-400 whitespace-nowrap">
+                                  {formatRouteDateTime(log.occurred_at)}
+                                </p>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>
