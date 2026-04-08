@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { Outlet, Link, useLocation, useNavigate } from 'react-router-dom';
-import { Home, Users, ClipboardList, Wrench, Menu, Bell, LogOut, Settings as SettingsIcon, X, Search, Map, Plus, Camera, MessageSquare, HardDrive, Route as RouteIcon, User as UserIcon, Shield, CreditCard, Receipt, Package } from 'lucide-react';
+import { Home, Users, ClipboardList, Wrench, Menu, Bell, LogOut, Settings as SettingsIcon, X, Search, Map, Plus, Camera, MessageSquare, HardDrive, Route as RouteIcon, User as UserIcon, Shield, CreditCard, Receipt, Package, Flag, CheckCircle, AlertCircle } from 'lucide-react';
 import { auth } from '../firebase';
 import { signOut } from 'firebase/auth';
 import PhotoCaptureFlow from './PhotoCaptureFlow';
@@ -11,6 +11,7 @@ import { storageService } from '../services/StorageService';
 import { alertService } from '../services/alertService';
 import { userProfileService } from '../services/userProfileService';
 import { quoteService, Quote } from '../services/quoteService';
+import { bugReportService, BugReportCategory } from '../services/bugReportService';
 
 export default function Layout() {
   const location = useLocation();
@@ -18,9 +19,17 @@ export default function Layout() {
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [isAddMenuOpen, setIsAddMenuOpen] = useState(false);
   const [isPhotoCaptureOpen, setIsPhotoCaptureOpen] = useState(false);
+  const [isReportModalOpen, setIsReportModalOpen] = useState(false);
   const [alertCount, setAlertCount] = useState(0);
   const [isPlatformAdmin, setIsPlatformAdmin] = useState(false);
   const [profile, setProfile] = useState<any>(null);
+  const [reportCategory, setReportCategory] = useState<BugReportCategory>('ui_layout');
+  const [reportDetails, setReportDetails] = useState('');
+  const [reportScreenshotDataUrl, setReportScreenshotDataUrl] = useState('');
+  const [reportScreenshotContentType, setReportScreenshotContentType] = useState('');
+  const [isSubmittingReport, setIsSubmittingReport] = useState(false);
+  const [reportErrorMessage, setReportErrorMessage] = useState<string | null>(null);
+  const [reportSuccessMessage, setReportSuccessMessage] = useState<string | null>(null);
   
   const defaultBottomNavItems = [
     { path: '/', icon: Home, label: 'Home' },
@@ -94,6 +103,12 @@ export default function Layout() {
     };
   }, []);
 
+  useEffect(() => {
+    if (!reportSuccessMessage) return undefined;
+    const timeout = window.setTimeout(() => setReportSuccessMessage(null), 3000);
+    return () => window.clearTimeout(timeout);
+  }, [reportSuccessMessage]);
+
   const isStaff = profile?.role === 'staff';
   const canAccessRoutes = userProfileService.hasPermission(profile, 'route_access');
   const canAccessCustomers = userProfileService.hasPermission(profile, 'customer_access');
@@ -143,6 +158,63 @@ export default function Layout() {
 
   const handleSignOut = () => {
     signOut(auth);
+  };
+
+  const resetReportForm = () => {
+    setIsReportModalOpen(false);
+    setReportCategory('ui_layout');
+    setReportDetails('');
+    setReportScreenshotDataUrl('');
+    setReportScreenshotContentType('');
+    setReportErrorMessage(null);
+    setIsSubmittingReport(false);
+  };
+
+  const handleReportScreenshotChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    try {
+      const preparedScreenshot = await bugReportService.prepareScreenshot(file);
+      setReportScreenshotDataUrl(preparedScreenshot);
+      setReportScreenshotContentType(file.type || 'image/jpeg');
+      setReportErrorMessage(null);
+    } catch (error) {
+      console.error('Error preparing screenshot:', error);
+      setReportErrorMessage('Failed to prepare screenshot.');
+    } finally {
+      event.target.value = '';
+    }
+  };
+
+  const handleSubmitReport = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!reportDetails.trim()) {
+      setReportErrorMessage('Add the problem details before sending the report.');
+      return;
+    }
+
+    setIsSubmittingReport(true);
+    setReportErrorMessage(null);
+
+    try {
+      await bugReportService.createBugReport({
+        reporter_name: profile?.name || auth.currentUser?.displayName || '',
+        category: reportCategory,
+        details: reportDetails,
+        page_path: `${location.pathname}${location.search || ''}`,
+        current_url: window.location.href,
+        screenshot_data_url: reportScreenshotDataUrl || undefined,
+        screenshot_content_type: reportScreenshotContentType || undefined,
+      });
+
+      resetReportForm();
+      setReportSuccessMessage('Report saved to controller');
+    } catch (error) {
+      console.error('Error submitting report:', error);
+      setReportErrorMessage('Failed to save report.');
+      setIsSubmittingReport(false);
+    }
   };
 
   const closeMenu = () => {
@@ -222,6 +294,16 @@ export default function Layout() {
               </div>
               
               <div className="flex items-center gap-2">
+                <button
+                  onClick={() => {
+                    setReportErrorMessage(null);
+                    setIsReportModalOpen(true);
+                  }}
+                  className="inline-flex items-center gap-2 px-3 py-2 text-gray-500 hover:text-blue-600 hover:bg-blue-50 rounded-2xl transition-all"
+                >
+                  <Flag className="h-5 w-5" />
+                  <span className="hidden sm:inline text-xs font-black uppercase tracking-widest">Report</span>
+                </button>
                 <Link to="/alerts" className="p-3 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-2xl transition-all relative">
                   <Bell className="h-6 w-6" />
                   {alertCount > 0 && (
@@ -297,6 +379,117 @@ export default function Layout() {
 
         {isPhotoCaptureOpen && (
           <PhotoCaptureFlow onClose={() => setIsPhotoCaptureOpen(false)} />
+        )}
+
+        {isReportModalOpen && (
+          <div className="fixed inset-0 z-[80] flex items-center justify-center bg-gray-900/50 p-4">
+            <div className="bg-white rounded-[32px] w-full max-w-xl max-h-[90vh] overflow-y-auto shadow-2xl">
+              <div className="flex items-center justify-between px-8 py-6 border-b border-gray-100 sticky top-0 bg-white z-10">
+                <div>
+                  <h3 className="text-xl font-black text-gray-900">Send Report</h3>
+                  <p className="text-xs font-bold text-gray-400 uppercase tracking-widest mt-2">
+                    Temporary top-bar report flow
+                  </p>
+                </div>
+                <button onClick={resetReportForm} className="p-2 hover:bg-gray-100 rounded-xl transition-colors">
+                  <X className="h-5 w-5 text-gray-500" />
+                </button>
+              </div>
+
+              <form onSubmit={handleSubmitReport} className="p-8 space-y-6">
+                {reportErrorMessage && (
+                  <div className="rounded-2xl border border-red-100 bg-red-50 px-5 py-4 flex items-center gap-3">
+                    <AlertCircle className="h-5 w-5 text-red-600 shrink-0" />
+                    <p className="text-sm font-bold text-red-700">{reportErrorMessage}</p>
+                  </div>
+                )}
+
+                <div className="rounded-3xl bg-gray-50 border border-gray-100 px-5 py-4">
+                  <p className="text-[10px] font-black uppercase tracking-widest text-gray-400">Current Page</p>
+                  <p className="text-sm font-black text-gray-900 mt-2 break-all">{location.pathname || '/'}</p>
+                </div>
+
+                <div className="grid grid-cols-1 gap-4">
+                  <label className="block">
+                    <span className="block text-[10px] font-black uppercase tracking-widest text-gray-400 mb-2">Category</span>
+                    <select
+                      value={reportCategory}
+                      onChange={(event) => setReportCategory(event.target.value as BugReportCategory)}
+                      className="w-full px-5 py-4 bg-gray-50 rounded-2xl border-none text-sm font-bold text-gray-900 focus:ring-2 focus:ring-blue-500 outline-none"
+                    >
+                      {bugReportService.categories.map((category) => (
+                        <option key={category.value} value={category.value}>{category.label}</option>
+                      ))}
+                    </select>
+                  </label>
+
+                  <label className="block">
+                    <span className="block text-[10px] font-black uppercase tracking-widest text-gray-400 mb-2">What&apos;s wrong?</span>
+                    <textarea
+                      value={reportDetails}
+                      onChange={(event) => setReportDetails(event.target.value)}
+                      className="w-full px-5 py-4 bg-gray-50 rounded-2xl border-none text-sm font-bold text-gray-900 focus:ring-2 focus:ring-blue-500 outline-none min-h-[140px]"
+                      placeholder="Describe the problem, what you expected, and what happened instead."
+                    />
+                  </label>
+
+                  <label className="block">
+                    <span className="block text-[10px] font-black uppercase tracking-widest text-gray-400 mb-2">Screenshot</span>
+                    <input
+                      type="file"
+                      accept="image/*"
+                      onChange={handleReportScreenshotChange}
+                      className="w-full px-5 py-4 bg-gray-50 rounded-2xl border-none text-sm font-bold text-gray-900 focus:ring-2 focus:ring-blue-500 outline-none"
+                    />
+                    <p className="text-[10px] font-black uppercase tracking-widest text-gray-400 mt-3">
+                      Optional. This gets attached to the controller report.
+                    </p>
+                  </label>
+
+                  {reportScreenshotDataUrl && (
+                    <div className="rounded-3xl border border-gray-100 bg-gray-50 p-4 space-y-3">
+                      <p className="text-[10px] font-black uppercase tracking-widest text-gray-400">Screenshot Preview</p>
+                      <img
+                        src={reportScreenshotDataUrl}
+                        alt="Report screenshot preview"
+                        className="w-full rounded-2xl border border-gray-100 bg-white object-contain max-h-72"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setReportScreenshotDataUrl('');
+                          setReportScreenshotContentType('');
+                        }}
+                        className="px-4 py-2 rounded-2xl bg-white border border-gray-200 text-xs font-black uppercase tracking-widest text-gray-600 hover:bg-gray-100 transition-all"
+                      >
+                        Remove Screenshot
+                      </button>
+                    </div>
+                  )}
+                </div>
+
+                <div className="flex justify-end gap-3">
+                  <button
+                    type="button"
+                    onClick={resetReportForm}
+                    className="px-5 py-3 rounded-2xl bg-gray-100 text-gray-600 text-xs font-black uppercase tracking-widest hover:bg-gray-200 transition-all"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={isSubmittingReport}
+                    className={`px-5 py-3 rounded-2xl text-xs font-black uppercase tracking-widest transition-all flex items-center gap-2 ${
+                      isSubmittingReport ? 'bg-gray-200 text-gray-400' : 'bg-blue-600 text-white hover:bg-blue-700'
+                    }`}
+                  >
+                    <Flag className="h-4 w-4" />
+                    {isSubmittingReport ? 'Sending...' : 'Send Report'}
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
         )}
 
         {/* Mobile Bottom Navigation */}
@@ -411,6 +604,15 @@ export default function Layout() {
             })}
           </div>
         </nav>
+
+        {reportSuccessMessage && (
+          <div className="fixed bottom-24 left-1/2 -translate-x-1/2 z-[120] w-full max-w-md px-4">
+            <div className="rounded-2xl shadow-2xl px-5 py-4 bg-green-600 text-white flex items-center gap-3">
+              <CheckCircle className="h-5 w-5 shrink-0" />
+              <p className="text-sm font-bold">{reportSuccessMessage}</p>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

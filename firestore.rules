@@ -342,6 +342,21 @@ service cloud.firestore {
              data.method in ['cash', 'check', 'card', 'bank_transfer', 'other'];
     }
 
+    function isValidBugReport(data) {
+      return data.ownerId is string &&
+             data.reporter_uid is string &&
+             data.reporter_email is string &&
+             data.reporter_name is string &&
+             data.category in ['ui_layout', 'save_error', 'portal', 'billing', 'routes', 'settings', 'messaging', 'other'] &&
+             data.details is string &&
+             data.status in ['open', 'reviewed', 'resolved'] &&
+             data.page_path is string &&
+             data.current_url is string &&
+             (!('screenshot_data_url' in data) || data.screenshot_data_url is string) &&
+             (!('screenshot_content_type' in data) || data.screenshot_content_type is string) &&
+             (!('browser_info' in data) || data.browser_info is string);
+    }
+
     function isValidExpense(data) {
       return data.ownerId is string &&
              data.title is string &&
@@ -564,6 +579,13 @@ service cloud.firestore {
       allow create: if isAuthenticated() && request.resource.data.ownerId == request.auth.uid && isValidPaymentEntry(request.resource.data);
       allow update: if (isDocOwner() || isAdmin()) && ownerIdNotModified() && isValidPaymentEntry(request.resource.data);
       allow delete: if isDocOwner() || isAdmin();
+    }
+
+    match /bug_reports/{reportId} {
+      allow read: if isDocOwner() || isAdmin();
+      allow create: if isAuthenticated() && request.resource.data.ownerId == request.auth.uid && isValidBugReport(request.resource.data);
+      allow update: if (isDocOwner() || isAdmin()) && ownerIdNotModified() && isValidBugReport(request.resource.data);
+      allow delete: if isAdmin();
     }
 
     match /expenses/{expenseId} {

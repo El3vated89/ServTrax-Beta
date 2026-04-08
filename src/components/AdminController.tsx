@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useState } from 'react';
-import { BarChart3, DollarSign, HardDrive, Shield, Users, Activity, AlertTriangle, Route as RouteIcon, ClipboardList, Save, Mail, Smartphone, BellRing } from 'lucide-react';
+import { BarChart3, DollarSign, HardDrive, Shield, Users, Activity, AlertTriangle, Route as RouteIcon, ClipboardList, Save, Mail, Smartphone, BellRing, Flag } from 'lucide-react';
 import { adminService, AdminMetrics } from '../services/adminService';
 import { userProfileService } from '../services/userProfileService';
 import { platformMessagingService, PlatformMessagingConfig } from '../services/platformMessagingService';
 import { BillingFramework, BillingPlanDefinition, planConfigService } from '../services/planConfigService';
+import { bugReportService, BugReport } from '../services/bugReportService';
 
 const formatBytes = (bytes: number) => {
   if (!bytes) return '0 KB';
@@ -17,6 +18,7 @@ const formatCurrency = (amount: number) =>
 
 export default function AdminController() {
   const [metrics, setMetrics] = useState<AdminMetrics | null>(null);
+  const [bugReports, setBugReports] = useState<BugReport[]>([]);
   const [isAdmin, setIsAdmin] = useState(false);
   const [providerConfig, setProviderConfig] = useState<PlatformMessagingConfig>(platformMessagingService.getDefaultConfig());
   const [billingFramework, setBillingFramework] = useState<BillingFramework>(planConfigService.getDefaultFramework());
@@ -37,6 +39,7 @@ export default function AdminController() {
   useEffect(() => {
     if (!isAdmin) {
       setMetrics(null);
+      setBugReports([]);
       return;
     }
 
@@ -46,6 +49,11 @@ export default function AdminController() {
     };
 
     loadMetrics();
+  }, [isAdmin]);
+
+  useEffect(() => {
+    if (!isAdmin) return undefined;
+    return bugReportService.subscribeToAllBugReports(setBugReports);
   }, [isAdmin]);
 
   useEffect(() => {
@@ -212,7 +220,95 @@ export default function AdminController() {
           <p className="text-sm font-black text-gray-900 leading-tight">{metrics?.placeholders.platformRevenue || 'Placeholder'}</p>
           <p className="text-[10px] font-bold uppercase tracking-widest text-gray-400 mt-4">Platform Revenue</p>
         </div>
+        <div className="bg-white rounded-3xl p-6 border border-gray-100 shadow-sm">
+          <Flag className="h-6 w-6 mb-4 text-red-500" />
+          <p className="text-3xl font-black text-gray-900">{bugReports.filter((report) => report.status === 'open').length}</p>
+          <p className="text-[10px] font-bold uppercase tracking-widest text-gray-400">Open Reports</p>
+        </div>
       </div>
+
+      <section className="bg-white rounded-[40px] border border-gray-100 shadow-sm p-6">
+        <div className="flex items-center gap-3 mb-6">
+          <Flag className="h-5 w-5 text-red-500" />
+          <div>
+            <h3 className="text-lg font-black text-gray-900">Bug Reports</h3>
+            <p className="text-[10px] font-black uppercase tracking-widest text-gray-400 mt-2">
+              Temporary top-bar reports land here until the report flow moves into settings
+            </p>
+          </div>
+        </div>
+
+        <div className="space-y-4">
+          {bugReports.length === 0 ? (
+            <p className="text-sm font-bold text-gray-400">No bug reports submitted yet.</p>
+          ) : bugReports.map((report) => (
+            <div key={report.id} className="rounded-3xl border border-gray-100 bg-gray-50 p-5">
+              <div className="flex flex-col xl:flex-row gap-5">
+                {report.screenshot_data_url && (
+                  <a href={report.screenshot_data_url} target="_blank" rel="noreferrer" className="xl:w-56 shrink-0">
+                    <img
+                      src={report.screenshot_data_url}
+                      alt="Bug report screenshot"
+                      className="w-full rounded-2xl border border-gray-100 bg-white object-cover max-h-56"
+                    />
+                  </a>
+                )}
+
+                <div className="flex-1 space-y-3">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className={`text-[10px] font-black px-2 py-1 rounded-full uppercase tracking-widest ${
+                      report.status === 'resolved'
+                        ? 'bg-green-100 text-green-700'
+                        : report.status === 'reviewed'
+                        ? 'bg-blue-100 text-blue-700'
+                        : 'bg-red-100 text-red-700'
+                    }`}>
+                      {report.status}
+                    </span>
+                    <span className="text-[10px] font-black px-2 py-1 rounded-full uppercase tracking-widest bg-white text-gray-600 border border-gray-200">
+                      {report.category.replace('_', ' ')}
+                    </span>
+                    <span className="text-[10px] font-black uppercase tracking-widest text-gray-400">
+                      {report.created_at?.toDate ? report.created_at.toDate().toLocaleString() : ''}
+                    </span>
+                  </div>
+
+                  <div>
+                    <p className="text-sm font-black text-gray-900">{report.reporter_name || report.reporter_email}</p>
+                    <p className="text-[10px] font-black uppercase tracking-widest text-gray-400 mt-2">{report.reporter_email}</p>
+                  </div>
+
+                  <div className="rounded-2xl bg-white border border-gray-100 px-4 py-3">
+                    <p className="text-[10px] font-black uppercase tracking-widest text-gray-400">Page</p>
+                    <p className="text-sm font-black text-gray-900 mt-2 break-all">{report.page_path}</p>
+                  </div>
+
+                  <div className="rounded-2xl bg-white border border-gray-100 px-4 py-3">
+                    <p className="text-[10px] font-black uppercase tracking-widest text-gray-400">Details</p>
+                    <p className="text-sm font-bold text-gray-700 mt-2 whitespace-pre-wrap">{report.details}</p>
+                  </div>
+
+                  <div className="flex flex-wrap gap-2">
+                    {(['open', 'reviewed', 'resolved'] as const).map((status) => (
+                      <button
+                        key={status}
+                        onClick={() => report.id && bugReportService.updateBugReportStatus(report.id, status)}
+                        className={`px-4 py-2 rounded-2xl text-[10px] font-black uppercase tracking-widest transition-all ${
+                          report.status === status
+                            ? 'bg-blue-600 text-white'
+                            : 'bg-white border border-gray-200 text-gray-600 hover:bg-gray-100'
+                        }`}
+                      >
+                        Mark {status}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      </section>
 
       <section className="bg-white rounded-[40px] border border-gray-100 shadow-sm p-6">
         <div className="flex items-center justify-between gap-4 mb-6">
