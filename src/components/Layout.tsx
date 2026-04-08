@@ -15,11 +15,11 @@ export default function Layout() {
     { path: '/', icon: Home, label: 'Home' },
     { path: '/jobs', icon: ClipboardList, label: 'Jobs' },
     { path: '/customers', icon: Users, label: 'Clients' },
-    { path: '/map', icon: Map, label: 'Routes' },
+    { path: '/routes', icon: RouteIcon, label: 'Routes' },
   ];
 
   const menuItems = [
-    { path: '/routes', icon: RouteIcon, label: 'Route Builder' },
+    { path: '/map', icon: Map, label: 'Daily Route' },
     { path: '/equip', icon: Wrench, label: 'Equipment' },
     { path: '/messaging', icon: MessageSquare, label: 'Messaging' },
     { path: '/storage', icon: HardDrive, label: 'Storage' },
