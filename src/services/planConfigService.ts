@@ -73,6 +73,15 @@ const GB = 1024 * MB;
 const ADMIN_EMAIL = 'thomaslmiller89@gmail.com';
 const COLLECTION_NAME = 'platform_catalog';
 const DOC_ID = 'billing_framework';
+const TEMP_ENABLE_ALL_FEATURES = true;
+const ALL_FEATURE_FLAGS: Record<PlanFeatureKey, boolean> = {
+  customer_portal: true,
+  persistent_portal: true,
+  team_mode: true,
+  storage_add_on: true,
+  sms_delivery: true,
+  email_delivery: true,
+};
 
 const DEFAULT_FRAMEWORK: BillingFramework = {
   plans: [
@@ -238,8 +247,12 @@ const normalizeFramework = (framework?: Partial<BillingFramework> | null): Billi
           key: defaultPlan.key,
           label: incomingPlan.label || defaultPlan.label,
           feature_flags: {
-            ...defaultPlan.feature_flags,
-            ...(incomingPlan.feature_flags || {}),
+            ...(TEMP_ENABLE_ALL_FEATURES
+              ? ALL_FEATURE_FLAGS
+              : {
+                  ...defaultPlan.feature_flags,
+                  ...(incomingPlan.feature_flags || {}),
+                }),
           },
           limits: {
             ...defaultPlan.limits,
@@ -394,7 +407,7 @@ export const planConfigService = {
       subscriptionStatus: profile?.subscription_status || 'active',
       plan,
       featureFlags: {
-        ...plan.feature_flags,
+        ...(TEMP_ENABLE_ALL_FEATURES ? ALL_FEATURE_FLAGS : plan.feature_flags),
         storage_add_on: plan.feature_flags.storage_add_on && activeFramework.storage_add_on.enabled,
       },
       limits: {

@@ -5,6 +5,7 @@ import { customerService, Customer } from '../services/customerService';
 import { jobService, Job } from '../services/jobService';
 import { quoteService, Quote } from '../services/quoteService';
 import { customerPortalService } from '../services/customerPortalService';
+import { BillingFramework, BusinessPlanProfile, planConfigService } from '../services/planConfigService';
 import { Timestamp, doc, onSnapshot } from 'firebase/firestore';
 import { auth, db } from '../firebase';
 
@@ -30,14 +31,15 @@ export default function Customers() {
   const [quotes, setQuotes] = useState<Quote[]>([]);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
-  const [businessPlanName, setBusinessPlanName] = useState('Free');
+  const [businessProfile, setBusinessProfile] = useState<BusinessPlanProfile | null>(null);
+  const [billingFramework, setBillingFramework] = useState<BillingFramework | null>(null);
   const [portalEnabled, setPortalEnabled] = useState(false);
   const [portalShowHistory, setPortalShowHistory] = useState(true);
   const [portalShowPaymentStatus, setPortalShowPaymentStatus] = useState(false);
   const [portalShowQuotes, setPortalShowQuotes] = useState(true);
   const [portalToken, setPortalToken] = useState('');
   const [portalCopied, setPortalCopied] = useState(false);
-  const portalCapabilities = customerPortalService.getCapabilities(businessPlanName);
+  const portalCapabilities = customerPortalService.getCapabilities(businessProfile, billingFramework);
   const portalLink = editingCustomer?.id && portalToken
     ? customerPortalService.buildPortalLink(editingCustomer.id, portalToken)
     : '';
@@ -64,25 +66,26 @@ export default function Customers() {
     const unsubscribe = customerService.subscribeToCustomers(setCustomers);
     const unsubscribeJobs = jobService.subscribeToJobs(setAllJobs);
     const unsubscribeQuotes = quoteService.subscribeToQuotes(setQuotes);
+    const unsubscribeFramework = planConfigService.subscribeToFramework(setBillingFramework);
     let unsubscribeProfile = () => {};
 
     const unsubscribeAuth = auth.onAuthStateChanged((user) => {
       unsubscribeProfile();
 
       if (!user) {
-        setBusinessPlanName('Free');
+        setBusinessProfile(null);
         return;
       }
 
       unsubscribeProfile = onSnapshot(doc(db, 'business_profiles', user.uid), (profileSnap) => {
         if (!profileSnap.exists()) {
-          setBusinessPlanName('Free');
+          setBusinessProfile(null);
           return;
         }
 
-        setBusinessPlanName((profileSnap.data().plan_name as string) || 'Free');
+        setBusinessProfile(profileSnap.data() as BusinessPlanProfile);
       }, () => {
-        setBusinessPlanName('Free');
+        setBusinessProfile(null);
       });
     });
 
@@ -90,6 +93,7 @@ export default function Customers() {
       unsubscribe();
       unsubscribeJobs();
       unsubscribeQuotes();
+      unsubscribeFramework();
       unsubscribeProfile();
       unsubscribeAuth();
     };

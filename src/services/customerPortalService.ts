@@ -16,7 +16,7 @@ import { Customer } from './customerService';
 import { Job } from './jobService';
 import { Quote } from './quoteService';
 import { waitForCurrentUser } from './authSessionService';
-import { planConfigService } from './planConfigService';
+import { BillingFramework, BusinessPlanProfile, planConfigService } from './planConfigService';
 
 export interface PortalCapabilities {
   allowsPortal: boolean;
@@ -150,8 +150,14 @@ const deletePublicPortalSnapshots = async (portalToken?: string) => {
 };
 
 export const customerPortalService = {
-  getCapabilities: (planName?: string): PortalCapabilities => {
-    const resolvedPlan = planConfigService.resolveBusinessPlan({ plan_name: planName });
+  getCapabilities: (
+    profileOrPlan?: BusinessPlanProfile | string | null,
+    framework?: BillingFramework | null
+  ): PortalCapabilities => {
+    const profile = typeof profileOrPlan === 'string'
+      ? { plan_name: profileOrPlan }
+      : profileOrPlan || undefined;
+    const resolvedPlan = planConfigService.resolveBusinessPlan(profile, framework);
 
     return {
       allowsPortal: resolvedPlan.featureFlags.customer_portal,
