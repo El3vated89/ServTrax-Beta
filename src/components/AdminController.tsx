@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { BarChart3, DollarSign, HardDrive, Shield, Users, Activity, AlertTriangle } from 'lucide-react';
+import { BarChart3, DollarSign, HardDrive, Shield, Users, Activity, AlertTriangle, Route as RouteIcon, ClipboardList } from 'lucide-react';
 import { adminService, AdminMetrics } from '../services/adminService';
 import { userProfileService } from '../services/userProfileService';
 
@@ -53,7 +53,7 @@ export default function AdminController() {
         </div>
       </header>
 
-      <div className="grid grid-cols-2 xl:grid-cols-5 gap-4">
+      <div className="grid grid-cols-2 xl:grid-cols-4 gap-4">
         <div className="bg-white rounded-3xl p-6 border border-gray-100 shadow-sm">
           <Users className="h-6 w-6 mb-4 text-blue-600" />
           <p className="text-3xl font-black text-gray-900">{metrics?.totalUsers || 0}</p>
@@ -75,13 +75,33 @@ export default function AdminController() {
           <p className="text-[10px] font-bold uppercase tracking-widest text-gray-400">Jobs Last 7 Days</p>
         </div>
         <div className="bg-white rounded-3xl p-6 border border-gray-100 shadow-sm">
+          <ClipboardList className="h-6 w-6 mb-4 text-blue-600" />
+          <p className="text-3xl font-black text-gray-900">{metrics?.totalRouteTemplates || 0}</p>
+          <p className="text-[10px] font-bold uppercase tracking-widest text-gray-400">Route Templates</p>
+        </div>
+        <div className="bg-white rounded-3xl p-6 border border-gray-100 shadow-sm">
+          <RouteIcon className="h-6 w-6 mb-4 text-blue-600" />
+          <p className="text-3xl font-black text-gray-900">{metrics?.totalRouteRuns || 0}</p>
+          <p className="text-[10px] font-bold uppercase tracking-widest text-gray-400">Route Runs</p>
+        </div>
+        <div className="bg-white rounded-3xl p-6 border border-gray-100 shadow-sm">
+          <RouteIcon className="h-6 w-6 mb-4 text-green-600" />
+          <p className="text-3xl font-black text-gray-900">{metrics?.activeRouteRunsToday || 0}</p>
+          <p className="text-[10px] font-bold uppercase tracking-widest text-gray-400">Active Runs Today</p>
+        </div>
+        <div className="bg-white rounded-3xl p-6 border border-gray-100 shadow-sm">
+          <AlertTriangle className="h-6 w-6 mb-4 text-amber-600" />
+          <p className="text-3xl font-black text-gray-900">{metrics?.routeRunsMissingCrewLabelToday || 0}</p>
+          <p className="text-[10px] font-bold uppercase tracking-widest text-gray-400">Runs Missing Crew Label</p>
+        </div>
+        <div className="bg-white rounded-3xl p-6 border border-gray-100 shadow-sm">
           <DollarSign className="h-6 w-6 mb-4 text-blue-600" />
           <p className="text-sm font-black text-gray-900 leading-tight">{metrics?.placeholders.platformRevenue || 'Placeholder'}</p>
           <p className="text-[10px] font-bold uppercase tracking-widest text-gray-400 mt-4">Platform Revenue</p>
         </div>
       </div>
 
-      <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
+      <div className="grid grid-cols-1 xl:grid-cols-4 gap-6">
         <section className="bg-white rounded-[40px] border border-gray-100 shadow-sm p-6">
           <h3 className="text-lg font-black text-gray-900 mb-6">Plan Distribution</h3>
           <div className="space-y-3">
@@ -117,6 +137,25 @@ export default function AdminController() {
                 <p className="text-[10px] font-black uppercase tracking-widest text-gray-400 mt-2">{entry.activityCount} job events in the last week</p>
               </div>
             )) : <p className="text-sm font-bold text-gray-400">No recent activity yet</p>}
+          </div>
+        </section>
+
+        <section className="bg-white rounded-[40px] border border-gray-100 shadow-sm p-6">
+          <h3 className="text-lg font-black text-gray-900 mb-2">Route System Load</h3>
+          <p className="text-[10px] font-black uppercase tracking-widest text-gray-400 mb-6">
+            Activity and run health across businesses
+          </p>
+          <div className="space-y-3">
+            <div className="rounded-2xl bg-gray-50 px-4 py-3">
+              <p className="text-sm font-black text-gray-900">Route activity last 7 days</p>
+              <p className="text-[10px] font-black uppercase tracking-widest text-gray-400 mt-2">{metrics?.routeActivityLast7Days || 0} logged actions</p>
+            </div>
+            {metrics?.routeActivityByBusiness.length ? metrics.routeActivityByBusiness.map((entry) => (
+              <div key={entry.ownerId} className="rounded-2xl bg-gray-50 px-4 py-3">
+                <p className="text-sm font-black text-gray-900">{entry.businessName}</p>
+                <p className="text-[10px] font-black uppercase tracking-widest text-gray-400 mt-2">{entry.activityCount} route events in the last week</p>
+              </div>
+            )) : <p className="text-sm font-bold text-gray-400">No route activity logged yet</p>}
           </div>
         </section>
       </div>

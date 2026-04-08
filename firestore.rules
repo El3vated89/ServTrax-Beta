@@ -266,14 +266,14 @@ service cloud.firestore {
     }
 
     match /routes/{routeId} {
-      allow read: if isDocOwner();
+      allow read: if isDocOwner() || isAdmin();
       allow create: if isAuthenticated() && request.resource.data.ownerId == request.auth.uid && isValidRoute(request.resource.data);
       allow update: if isDocOwner() && ownerIdNotModified() && isValidRoute(request.resource.data);
       allow delete: if isDocOwner();
     }
 
     match /route_templates/{templateId} {
-      allow read: if isDocOwner();
+      allow read: if isDocOwner() || isAdmin();
       allow create: if isAuthenticated() && request.resource.data.ownerId == request.auth.uid && isValidRouteTemplate(request.resource.data);
       allow update: if isDocOwner() && ownerIdNotModified() && isValidRouteTemplate(request.resource.data);
       allow delete: if isDocOwner();
@@ -287,7 +287,7 @@ service cloud.firestore {
     }
 
     match /route_activity_logs/{logId} {
-      allow read: if isDocOwner();
+      allow read: if isDocOwner() || isAdmin();
       allow create: if isAuthenticated() && request.resource.data.ownerId == request.auth.uid && isValidRouteActivity(request.resource.data);
       allow update: if false;
       allow delete: if isDocOwner();

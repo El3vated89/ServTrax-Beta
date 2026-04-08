@@ -79,7 +79,7 @@ export default function Alerts() {
                 }`}>
                   {alert.id.includes('storage')
                     ? <HardDrive className="h-6 w-6" />
-                    : alert.id.includes('route')
+                    : alert.id.includes('route') || alert.id.includes('placement')
                       ? <RouteIcon className="h-6 w-6" />
                       : alert.id.includes('carryover') || alert.id.includes('overdue')
                         ? <AlertTriangle className="h-6 w-6" />
