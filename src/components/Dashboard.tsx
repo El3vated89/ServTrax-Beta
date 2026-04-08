@@ -21,6 +21,7 @@ import { quoteService, Quote } from '../services/quoteService';
 import { billingService, BillingRecord, PaymentEntry } from '../services/billingService';
 import { expenseService, ExpenseRecord } from '../services/expenseService';
 import { planConfigService, BillingFramework, BusinessPlanProfile } from '../services/planConfigService';
+import { settingsService, BusinessSettings, DEFAULT_SETTINGS } from '../services/settingsService';
 
 const currencyFormatter = new Intl.NumberFormat('en-US', {
   style: 'currency',
@@ -70,8 +71,11 @@ export default function Dashboard() {
   const [expenses, setExpenses] = useState<ExpenseRecord[]>([]);
   const [businessProfile, setBusinessProfile] = useState<BusinessPlanProfile | null>(null);
   const [billingFramework, setBillingFramework] = useState<BillingFramework | null>(null);
+  const [businessSettings, setBusinessSettings] = useState<BusinessSettings>(DEFAULT_SETTINGS);
 
   useEffect(() => {
+    settingsService.getSettings().then(setBusinessSettings).catch(() => setBusinessSettings(DEFAULT_SETTINGS));
+
     const unsubscribeJobs = jobService.subscribeToJobs((data) => {
       setJobs(data);
     });
@@ -131,6 +135,54 @@ export default function Dashboard() {
     const dueDate = toDate(job.next_due_date || job.scheduled_date);
     return dueDate ? startOfDay(dueDate).getTime() < todayDate.getTime() : false;
   });
+  const getScheduleUrgency = (job: Job) => {
+    if (job.status === 'completed') {
+      return {
+        order: 2,
+        badge: 'Completed',
+        badgeClassName: 'bg-green-100 text-green-700',
+        iconClassName: 'bg-green-50 text-green-600',
+      };
+    }
+
+    const dueDate = toDate(job.next_due_date || job.scheduled_date);
+    if (!dueDate) {
+      return {
+        order: 1,
+        badge: 'Scheduled',
+        badgeClassName: 'bg-blue-100 text-blue-700',
+        iconClassName: 'bg-blue-50 text-blue-600',
+      };
+    }
+
+    const diffDays = Math.floor((todayDate.getTime() - startOfDay(dueDate).getTime()) / (1000 * 60 * 60 * 24));
+    const grace = businessSettings.grace_ranges;
+
+    if (diffDays <= grace.due_grace_days) {
+      return {
+        order: 1,
+        badge: 'Today',
+        badgeClassName: 'bg-green-100 text-green-700',
+        iconClassName: 'bg-green-50 text-green-600',
+      };
+    }
+
+    if (diffDays <= grace.overdue_grace_days) {
+      return {
+        order: 0,
+        badge: 'Overdue',
+        badgeClassName: 'bg-orange-100 text-orange-700',
+        iconClassName: 'bg-orange-100 text-orange-700',
+      };
+    }
+
+    return {
+      order: 0,
+      badge: 'Critical',
+      badgeClassName: 'bg-red-100 text-red-700',
+      iconClassName: 'bg-red-50 text-red-600',
+    };
+  };
   const carryoverJobs = jobs.filter((job) => ['skipped', 'delayed'].includes(job.status));
   const quotesAwaitingApproval = quotes.filter((quote) => quote.status === 'sent');
 
@@ -164,6 +216,24 @@ export default function Dashboard() {
   const expensesThisMonth = expenses
     .filter((entry) => isSameMonth(entry.expense_date, todayDate))
     .reduce((sum, entry) => sum + Number(entry.amount || 0), 0);
+  const scheduleJobs = [...jobsToday, ...overdueJobs]
+    .filter((job, index, collection) => collection.findIndex((entry) => entry.id === job.id) === index)
+    .sort((left, right) => {
+      const leftUrgency = getScheduleUrgency(left);
+      const rightUrgency = getScheduleUrgency(right);
+
+      if (leftUrgency.order !== rightUrgency.order) {
+        return leftUrgency.order - rightUrgency.order;
+      }
+
+      const leftDate = toDate(left.next_due_date || left.scheduled_date);
+      const rightDate = toDate(right.next_due_date || right.scheduled_date);
+
+      if (!leftDate && !rightDate) return 0;
+      if (!leftDate) return 1;
+      if (!rightDate) return -1;
+      return leftDate.getTime() - rightDate.getTime();
+    });
 
   const attentionItems: AttentionItem[] = [
     ...overdueJobs.slice(0, 2).map((job) => ({
@@ -306,43 +376,39 @@ export default function Dashboard() {
             <Link to="/jobs" className="text-xs font-bold text-blue-600 hover:underline">View All</Link>
           </div>
           <div className="space-y-3">
-            {jobsToday.length === 0 ? (
+            {scheduleJobs.length === 0 ? (
               <div className="bg-gray-50 rounded-3xl p-12 text-center border-2 border-dashed border-gray-200">
                 <p className="text-sm font-bold text-gray-400 uppercase tracking-widest">No jobs scheduled</p>
               </div>
             ) : (
-              jobsToday.map((job) => (
-                <Link
-                  key={job.id}
-                  to="/jobs"
-                  state={{ viewingJobId: job.id }}
-                  className="bg-white p-5 rounded-2xl border border-gray-100 shadow-sm hover:shadow-md transition-all flex justify-between items-center group"
-                >
-                  <div className="flex items-center gap-4">
-                    <div className={`w-12 h-12 rounded-xl flex items-center justify-center font-bold text-lg ${
-                      job.status === 'completed' ? 'bg-green-50 text-green-600' : 'bg-blue-50 text-blue-600'
-                    }`}>
-                      {job.customer_name_snapshot.charAt(0)}
+              scheduleJobs.map((job) => {
+                const urgency = getScheduleUrgency(job);
+
+                return (
+                  <Link
+                    key={job.id}
+                    to="/jobs"
+                    state={{ viewingJobId: job.id }}
+                    className="bg-white p-5 rounded-2xl border border-gray-100 shadow-sm hover:shadow-md transition-all flex justify-between items-center group"
+                  >
+                    <div className="flex items-center gap-4">
+                      <div className={`w-12 h-12 rounded-xl flex items-center justify-center font-bold text-lg ${urgency.iconClassName}`}>
+                        {job.customer_name_snapshot.charAt(0)}
+                      </div>
+                      <div>
+                        <p className="text-sm font-bold text-gray-900">{job.customer_name_snapshot}</p>
+                        <p className="text-xs font-medium text-gray-500">{job.service_snapshot}</p>
+                      </div>
                     </div>
-                    <div>
-                      <p className="text-sm font-bold text-gray-900">{job.customer_name_snapshot}</p>
-                      <p className="text-xs font-medium text-gray-500">{job.service_snapshot}</p>
+                    <div className="flex items-center gap-3">
+                      <span className={`text-[10px] font-bold px-2 py-1 rounded-full uppercase tracking-wider ${urgency.badgeClassName}`}>
+                        {urgency.badge}
+                      </span>
+                      <ChevronRight className="h-4 w-4 text-gray-300 group-hover:text-blue-600 transition-colors" />
                     </div>
-                  </div>
-                  <div className="flex items-center gap-3">
-                    <span className={`text-[10px] font-bold px-2 py-1 rounded-full uppercase tracking-wider ${
-                      job.status === 'completed'
-                        ? 'bg-green-100 text-green-700'
-                        : job.status === 'approved'
-                        ? 'bg-blue-100 text-blue-700'
-                        : 'bg-orange-100 text-orange-700'
-                    }`}>
-                      {job.status === 'pending' ? 'Pending' : job.status}
-                    </span>
-                    <ChevronRight className="h-4 w-4 text-gray-300 group-hover:text-blue-600 transition-colors" />
-                  </div>
-                </Link>
-              ))
+                  </Link>
+                );
+              })
             )}
           </div>
         </section>
