@@ -370,45 +370,36 @@ export default function Dashboard() {
         <section>
           <div className="flex justify-between items-center mb-4 px-2">
             <h3 className="text-sm font-bold text-gray-900 uppercase tracking-wider flex items-center gap-2">
-              <Calendar className="h-4 w-4 text-blue-600" />
-              Today&apos;s Schedule
+              <AlertTriangle className="h-4 w-4 text-red-500" />
+              Needs Attention
             </h3>
-            <Link to="/jobs" className="text-xs font-bold text-blue-600 hover:underline">View All</Link>
+            <Link to="/alerts" className="text-xs font-bold text-blue-600 hover:underline">Open Alerts</Link>
           </div>
           <div className="space-y-3">
-            {scheduleJobs.length === 0 ? (
+            {attentionItems.length === 0 ? (
               <div className="bg-gray-50 rounded-3xl p-12 text-center border-2 border-dashed border-gray-200">
-                <p className="text-sm font-bold text-gray-400 uppercase tracking-widest">No jobs scheduled</p>
+                <p className="text-sm font-bold text-gray-400 uppercase tracking-widest">Nothing urgent right now</p>
               </div>
             ) : (
-              scheduleJobs.map((job) => {
-                const urgency = getScheduleUrgency(job);
-
-                return (
-                  <Link
-                    key={job.id}
-                    to="/jobs"
-                    state={{ viewingJobId: job.id }}
-                    className="bg-white p-5 rounded-2xl border border-gray-100 shadow-sm hover:shadow-md transition-all flex justify-between items-center group"
-                  >
-                    <div className="flex items-center gap-4">
-                      <div className={`w-12 h-12 rounded-xl flex items-center justify-center font-bold text-lg ${urgency.iconClassName}`}>
-                        {job.customer_name_snapshot.charAt(0)}
-                      </div>
-                      <div>
-                        <p className="text-sm font-bold text-gray-900">{job.customer_name_snapshot}</p>
-                        <p className="text-xs font-medium text-gray-500">{job.service_snapshot}</p>
-                      </div>
+              attentionItems.map((item) => (
+                <Link key={item.id} to={item.to} state={item.state} className="bg-white p-5 rounded-2xl border border-gray-100 shadow-sm hover:shadow-md transition-all flex justify-between items-center group">
+                  <div className="flex items-center gap-4">
+                    <div className={`w-12 h-12 rounded-xl flex items-center justify-center font-bold text-lg ${item.iconClassName}`}>
+                      {item.title.charAt(0)}
                     </div>
-                    <div className="flex items-center gap-3">
-                      <span className={`text-[10px] font-bold px-2 py-1 rounded-full uppercase tracking-wider ${urgency.badgeClassName}`}>
-                        {urgency.badge}
-                      </span>
-                      <ChevronRight className="h-4 w-4 text-gray-300 group-hover:text-blue-600 transition-colors" />
+                    <div>
+                      <p className="text-sm font-bold text-gray-900">{item.title}</p>
+                      <p className="text-xs font-medium text-gray-500 line-clamp-1">{item.subtitle}</p>
                     </div>
-                  </Link>
-                );
-              })
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <span className={`text-[10px] font-bold px-2 py-1 rounded-full uppercase tracking-wider ${item.badgeClassName}`}>
+                      {item.badge}
+                    </span>
+                    <ChevronRight className="h-4 w-4 text-gray-300 group-hover:text-blue-600 transition-colors" />
+                  </div>
+                </Link>
+              ))
             )}
           </div>
         </section>
@@ -473,36 +464,45 @@ export default function Dashboard() {
         <section>
           <div className="flex justify-between items-center mb-4 px-2">
             <h3 className="text-sm font-bold text-gray-900 uppercase tracking-wider flex items-center gap-2">
-              <AlertTriangle className="h-4 w-4 text-red-500" />
-              Needs Attention
+              <Calendar className="h-4 w-4 text-blue-600" />
+              Today&apos;s Schedule
             </h3>
-            <Link to="/alerts" className="text-xs font-bold text-blue-600 hover:underline">Open Alerts</Link>
+            <Link to="/jobs" className="text-xs font-bold text-blue-600 hover:underline">View All</Link>
           </div>
           <div className="space-y-3">
-            {attentionItems.length === 0 ? (
+            {scheduleJobs.length === 0 ? (
               <div className="bg-gray-50 rounded-3xl p-12 text-center border-2 border-dashed border-gray-200">
-                <p className="text-sm font-bold text-gray-400 uppercase tracking-widest">Nothing urgent right now</p>
+                <p className="text-sm font-bold text-gray-400 uppercase tracking-widest">No jobs scheduled</p>
               </div>
             ) : (
-              attentionItems.map((item) => (
-                <Link key={item.id} to={item.to} state={item.state} className="bg-white p-5 rounded-2xl border border-gray-100 shadow-sm hover:shadow-md transition-all flex justify-between items-center group">
-                  <div className="flex items-center gap-4">
-                    <div className={`w-12 h-12 rounded-xl flex items-center justify-center font-bold text-lg ${item.iconClassName}`}>
-                      {item.title.charAt(0)}
+              scheduleJobs.map((job) => {
+                const urgency = getScheduleUrgency(job);
+
+                return (
+                  <Link
+                    key={job.id}
+                    to="/jobs"
+                    state={{ viewingJobId: job.id }}
+                    className="bg-white p-5 rounded-2xl border border-gray-100 shadow-sm hover:shadow-md transition-all flex justify-between items-center group"
+                  >
+                    <div className="flex items-center gap-4">
+                      <div className={`w-12 h-12 rounded-xl flex items-center justify-center font-bold text-lg ${urgency.iconClassName}`}>
+                        {job.customer_name_snapshot.charAt(0)}
+                      </div>
+                      <div>
+                        <p className="text-sm font-bold text-gray-900">{job.customer_name_snapshot}</p>
+                        <p className="text-xs font-medium text-gray-500">{job.service_snapshot}</p>
+                      </div>
                     </div>
-                    <div>
-                      <p className="text-sm font-bold text-gray-900">{item.title}</p>
-                      <p className="text-xs font-medium text-gray-500 line-clamp-1">{item.subtitle}</p>
+                    <div className="flex items-center gap-3">
+                      <span className={`text-[10px] font-bold px-2 py-1 rounded-full uppercase tracking-wider ${urgency.badgeClassName}`}>
+                        {urgency.badge}
+                      </span>
+                      <ChevronRight className="h-4 w-4 text-gray-300 group-hover:text-blue-600 transition-colors" />
                     </div>
-                  </div>
-                  <div className="flex items-center gap-3">
-                    <span className={`text-[10px] font-bold px-2 py-1 rounded-full uppercase tracking-wider ${item.badgeClassName}`}>
-                      {item.badge}
-                    </span>
-                    <ChevronRight className="h-4 w-4 text-gray-300 group-hover:text-blue-600 transition-colors" />
-                  </div>
-                </Link>
-              ))
+                  </Link>
+                );
+              })
             )}
           </div>
         </section>
