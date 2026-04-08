@@ -38,20 +38,33 @@ export interface Job {
 
 export const jobService = {
   subscribeToJobs: (callback: (jobs: Job[]) => void) => {
-    const user = auth.currentUser;
-    if (!user) return () => {};
+    let unsubscribeJobs = () => {};
 
-    const q = query(collection(db, 'jobs'), where('ownerId', '==', user.uid));
-    
-    return onSnapshot(q, (snapshot) => {
-      const jobs = snapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      })) as Job[];
-      callback(jobs);
-    }, (error) => {
-      handleFirestoreError(error, OperationType.GET, 'jobs');
+    const unsubscribeAuth = auth.onAuthStateChanged((user) => {
+      unsubscribeJobs();
+
+      if (!user) {
+        callback([]);
+        return;
+      }
+
+      const q = query(collection(db, 'jobs'), where('ownerId', '==', user.uid));
+
+      unsubscribeJobs = onSnapshot(q, (snapshot) => {
+        const jobs = snapshot.docs.map(doc => ({
+          id: doc.id,
+          ...doc.data()
+        })) as Job[];
+        callback(jobs);
+      }, (error) => {
+        handleFirestoreError(error, OperationType.GET, 'jobs');
+      });
     });
+
+    return () => {
+      unsubscribeJobs();
+      unsubscribeAuth();
+    };
   },
 
   addJob: async (jobData: Omit<Job, 'ownerId' | 'created_at'>) => {

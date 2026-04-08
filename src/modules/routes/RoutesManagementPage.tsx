@@ -547,12 +547,15 @@ export default function RoutesManagementPage() {
               </span>
             </div>
             <p className="text-sm font-bold text-gray-400 uppercase tracking-widest mt-2">
-              Build reusable routes once, then generate the current run from work that is actually due.
+              Start with a reusable route template, then generate the current run from work that is actually due.
             </p>
           </div>
 
           <div className="flex flex-wrap items-center gap-3">
-            <div className="flex items-center gap-2 bg-white p-2 rounded-2xl border border-gray-100 shadow-sm">
+            <div className="flex items-center gap-3 bg-white p-2 rounded-2xl border border-gray-100 shadow-sm">
+              <span className="pl-2 text-[10px] font-black uppercase tracking-widest text-gray-400 whitespace-nowrap">
+                Run Date
+              </span>
               <button
                 onClick={() => setSelectedDate(new Date(selectedDate.getTime() - (24 * 60 * 60 * 1000)))}
                 className="p-2 text-gray-400 hover:text-gray-900 hover:bg-gray-100 rounded-xl transition-all"
@@ -637,6 +640,12 @@ export default function RoutesManagementPage() {
                   <p className="text-[10px] font-black text-gray-300 uppercase tracking-widest mt-2">
                     Create one for a day, area, or both
                   </p>
+                  <button
+                    onClick={openCreateTemplate}
+                    className="mt-4 px-4 py-3 bg-blue-600 text-white rounded-2xl text-xs font-black uppercase tracking-widest hover:bg-blue-700 transition-all"
+                  >
+                    Create First Template
+                  </button>
                 </div>
               )}
 
@@ -690,6 +699,12 @@ export default function RoutesManagementPage() {
               <p className="text-sm font-bold text-gray-400 mt-2">
                 Reusable templates are how the planner knows what route to generate again next cycle.
               </p>
+              <button
+                onClick={openCreateTemplate}
+                className="mt-6 px-5 py-4 bg-blue-600 text-white rounded-2xl text-xs font-black uppercase tracking-widest hover:bg-blue-700 transition-all"
+              >
+                New Route Template
+              </button>
             </div>
           )}
 

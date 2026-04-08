@@ -18,24 +18,37 @@ const normalizeTemplate = (template: Omit<RouteTemplate, 'ownerId' | 'created_at
 
 export const routeTemplateService = {
   subscribeToTemplates: (callback: (templates: RouteTemplate[]) => void) => {
-    const user = auth.currentUser;
-    if (!user) return () => {};
+    let unsubscribeTemplates = () => {};
 
-    const q = query(
-      collection(db, COLLECTION_NAME),
-      where('ownerId', '==', user.uid)
-    );
+    const unsubscribeAuth = auth.onAuthStateChanged((user) => {
+      unsubscribeTemplates();
 
-    return onSnapshot(q, (snapshot) => {
-      const templates = snapshot.docs.map((entry) => ({
-        id: entry.id,
-        ...entry.data(),
-      })) as RouteTemplate[];
-      templates.sort((left, right) => left.name.localeCompare(right.name));
-      callback(templates);
-    }, (error) => {
-      handleFirestoreError(error, OperationType.GET, COLLECTION_NAME);
+      if (!user) {
+        callback([]);
+        return;
+      }
+
+      const q = query(
+        collection(db, COLLECTION_NAME),
+        where('ownerId', '==', user.uid)
+      );
+
+      unsubscribeTemplates = onSnapshot(q, (snapshot) => {
+        const templates = snapshot.docs.map((entry) => ({
+          id: entry.id,
+          ...entry.data(),
+        })) as RouteTemplate[];
+        templates.sort((left, right) => left.name.localeCompare(right.name));
+        callback(templates);
+      }, (error) => {
+        handleFirestoreError(error, OperationType.GET, COLLECTION_NAME);
+      });
     });
+
+    return () => {
+      unsubscribeTemplates();
+      unsubscribeAuth();
+    };
   },
 
   addTemplate: async (template: Omit<RouteTemplate, 'id' | 'ownerId' | 'created_at' | 'updated_at'>) => {

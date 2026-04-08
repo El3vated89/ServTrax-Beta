@@ -86,48 +86,74 @@ export const routeService = {
   },
 
   subscribeToRoutesByDate: (date: Date, callback: (routes: Route[]) => void) => {
-    const user = auth.currentUser;
-    if (!user) return () => {};
+    let unsubscribeRoutes = () => {};
 
-    const start = new Date(date);
-    start.setHours(0, 0, 0, 0);
-    const end = new Date(date);
-    end.setHours(23, 59, 59, 999);
+    const unsubscribeAuth = auth.onAuthStateChanged((user) => {
+      unsubscribeRoutes();
 
-    const q = query(
-      collection(db, 'routes'),
-      where('ownerId', '==', user.uid),
-      where('route_date', '>=', Timestamp.fromDate(start)),
-      where('route_date', '<=', Timestamp.fromDate(end)),
-      orderBy('route_date', 'asc')
-    );
+      if (!user) {
+        callback([]);
+        return;
+      }
 
-    return onSnapshot(q, (snapshot) => {
-      callback(snapshot.docs.map((entry) => ({ id: entry.id, ...entry.data() } as Route)));
-    }, (error) => {
-      handleFirestoreError(error, OperationType.GET, 'routes_by_date');
+      const start = new Date(date);
+      start.setHours(0, 0, 0, 0);
+      const end = new Date(date);
+      end.setHours(23, 59, 59, 999);
+
+      const q = query(
+        collection(db, 'routes'),
+        where('ownerId', '==', user.uid),
+        where('route_date', '>=', Timestamp.fromDate(start)),
+        where('route_date', '<=', Timestamp.fromDate(end)),
+        orderBy('route_date', 'asc')
+      );
+
+      unsubscribeRoutes = onSnapshot(q, (snapshot) => {
+        callback(snapshot.docs.map((entry) => ({ id: entry.id, ...entry.data() } as Route)));
+      }, (error) => {
+        handleFirestoreError(error, OperationType.GET, 'routes_by_date');
+      });
     });
+
+    return () => {
+      unsubscribeRoutes();
+      unsubscribeAuth();
+    };
   },
 
   subscribeToRoutes: (callback: (routes: Route[]) => void) => {
-    const user = auth.currentUser;
-    if (!user) return () => {};
+    let unsubscribeRoutes = () => {};
 
-    const q = query(
-      collection(db, 'routes'), 
-      where('ownerId', '==', user.uid),
-      orderBy('route_date', 'desc')
-    );
-    
-    return onSnapshot(q, (snapshot) => {
-      const routes = snapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      })) as Route[];
-      callback(routes);
-    }, (error) => {
-      handleFirestoreError(error, OperationType.GET, 'routes');
+    const unsubscribeAuth = auth.onAuthStateChanged((user) => {
+      unsubscribeRoutes();
+
+      if (!user) {
+        callback([]);
+        return;
+      }
+
+      const q = query(
+        collection(db, 'routes'), 
+        where('ownerId', '==', user.uid),
+        orderBy('route_date', 'desc')
+      );
+      
+      unsubscribeRoutes = onSnapshot(q, (snapshot) => {
+        const routes = snapshot.docs.map(doc => ({
+          id: doc.id,
+          ...doc.data()
+        })) as Route[];
+        callback(routes);
+      }, (error) => {
+        handleFirestoreError(error, OperationType.GET, 'routes');
+      });
     });
+
+    return () => {
+      unsubscribeRoutes();
+      unsubscribeAuth();
+    };
   },
 
   subscribeToRouteStops: (routeId: string, callback: (stops: RouteStop[]) => void) => {
@@ -149,23 +175,36 @@ export const routeService = {
   },
 
   subscribeToAllRouteStops: (callback: (stops: RouteStop[]) => void) => {
-    const user = auth.currentUser;
-    if (!user) return () => {};
+    let unsubscribeStops = () => {};
 
-    const q = query(
-      collection(db, 'route_stops'),
-      where('ownerId', '==', user.uid)
-    );
+    const unsubscribeAuth = auth.onAuthStateChanged((user) => {
+      unsubscribeStops();
 
-    return onSnapshot(q, (snapshot) => {
-      const stops = snapshot.docs.map((entry) => ({
-        id: entry.id,
-        ...entry.data()
-      })) as RouteStop[];
-      callback(stops);
-    }, (error) => {
-      handleFirestoreError(error, OperationType.GET, 'route_stops');
+      if (!user) {
+        callback([]);
+        return;
+      }
+
+      const q = query(
+        collection(db, 'route_stops'),
+        where('ownerId', '==', user.uid)
+      );
+
+      unsubscribeStops = onSnapshot(q, (snapshot) => {
+        const stops = snapshot.docs.map((entry) => ({
+          id: entry.id,
+          ...entry.data()
+        })) as RouteStop[];
+        callback(stops);
+      }, (error) => {
+        handleFirestoreError(error, OperationType.GET, 'route_stops');
+      });
     });
+
+    return () => {
+      unsubscribeStops();
+      unsubscribeAuth();
+    };
   },
 
   getRouteStops: async (routeId: string) => {
