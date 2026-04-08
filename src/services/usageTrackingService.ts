@@ -3,6 +3,8 @@ import { auth, db } from '../firebase';
 import { planConfigService } from './planConfigService';
 import { storageService } from './StorageService';
 import { handleFirestoreError, OperationType } from './verificationService';
+import { waitForCurrentUser } from './authSessionService';
+import { SaveDebugContext, savePipelineService } from './savePipelineService';
 
 export interface UsageCounter {
   ownerId: string;
@@ -26,26 +28,15 @@ const getCurrentPeriodKey = () => {
 
 const getDocId = (ownerId: string, periodKey: string) => `${ownerId}_${periodKey}`;
 
-const waitForCurrentUser = async () => {
-  if (auth.currentUser) return auth.currentUser;
-
-  return new Promise<typeof auth.currentUser>((resolve) => {
-    const unsubscribe = auth.onAuthStateChanged((user) => {
-      unsubscribe();
-      resolve(user);
-    });
-  });
-};
-
 export const usageTrackingService = {
   getCurrentPeriodKey,
 
-  syncStorageUsageForCurrentUser: async () => {
-    const user = await waitForCurrentUser();
+  syncStorageUsageForCurrentUser: async (debugContext?: SaveDebugContext) => {
+    const user = await waitForCurrentUser({ debugContext });
     if (!user) return null;
 
     try {
-      const summary = await storageService.getUsageSummary();
+      const summary = await storageService.getUsageSummary(debugContext);
       const periodKey = getCurrentPeriodKey();
       const docId = getDocId(user.uid, periodKey);
       const usagePayload: UsageCounter = {
@@ -59,18 +50,33 @@ export const usageTrackingService = {
         storage_limit_bytes: summary.limit_bytes,
       };
 
-      await setDoc(
-        doc(db, COLLECTION_NAME, docId),
+      if (debugContext) {
+        savePipelineService.log(debugContext, 'db_write_attempted', { id: docId, action: 'sync_storage_usage' });
+      }
+      await savePipelineService.withTimeout(
+        setDoc(
+          doc(db, COLLECTION_NAME, docId),
+          {
+            ...usagePayload,
+            updated_at: serverTimestamp(),
+            created_at: serverTimestamp(),
+          },
+          { merge: true }
+        ),
         {
-          ...usagePayload,
-          updated_at: serverTimestamp(),
-          created_at: serverTimestamp(),
-        },
-        { merge: true }
+          timeoutMessage: 'Timed out while syncing storage usage.',
+          debugContext,
+        }
       );
+      if (debugContext) {
+        savePipelineService.log(debugContext, 'db_write_succeeded', { id: docId, action: 'sync_storage_usage' });
+      }
 
       return usagePayload;
     } catch (error) {
+      if (debugContext) {
+        savePipelineService.logError(debugContext, 'db_write_failed', error);
+      }
       handleFirestoreError(error, OperationType.UPDATE, COLLECTION_NAME);
       return null;
     }
@@ -120,41 +126,65 @@ export const usageTrackingService = {
     };
   },
 
-  recordUsage: async (channel: 'sms' | 'email', amount: number = 1) => {
-    const user = await waitForCurrentUser();
+  recordUsage: async (channel: 'sms' | 'email', amount: number = 1, debugContext?: SaveDebugContext) => {
+    const user = await waitForCurrentUser({ debugContext });
     if (!user) return;
 
     try {
-      const businessProfileSnap = await getDoc(doc(db, 'business_profiles', user.uid));
+      const businessProfileSnap = await savePipelineService.withTimeout(getDoc(doc(db, 'business_profiles', user.uid)), {
+        timeoutMessage: 'Timed out while loading the business profile for usage tracking.',
+        debugContext,
+      });
       const resolvedPlan = planConfigService.resolveBusinessPlan(
         businessProfileSnap.exists() ? businessProfileSnap.data() : null
       );
       const periodKey = getCurrentPeriodKey();
       const docId = getDocId(user.uid, periodKey);
 
-      await setDoc(
-        doc(db, COLLECTION_NAME, docId),
+      if (debugContext) {
+        savePipelineService.log(debugContext, 'db_write_attempted', { id: docId, channel, amount, action: 'record_usage' });
+      }
+      await savePipelineService.withTimeout(
+        setDoc(
+          doc(db, COLLECTION_NAME, docId),
+          {
+            ownerId: user.uid,
+            period_key: periodKey,
+            sms_limit: resolvedPlan.limits.monthly_sms_limit,
+            email_limit: resolvedPlan.limits.monthly_email_limit,
+            storage_limit_bytes: resolvedPlan.storageLimitBytes,
+            updated_at: serverTimestamp(),
+            created_at: serverTimestamp(),
+          },
+          { merge: true }
+        ),
         {
-          ownerId: user.uid,
-          period_key: periodKey,
-          sms_limit: resolvedPlan.limits.monthly_sms_limit,
-          email_limit: resolvedPlan.limits.monthly_email_limit,
-          storage_limit_bytes: resolvedPlan.storageLimitBytes,
-          updated_at: serverTimestamp(),
-          created_at: serverTimestamp(),
-        },
-        { merge: true }
+          timeoutMessage: 'Timed out while preparing the usage counter.',
+          debugContext,
+        }
       );
 
-      await setDoc(
-        doc(db, COLLECTION_NAME, docId),
+      await savePipelineService.withTimeout(
+        setDoc(
+          doc(db, COLLECTION_NAME, docId),
+          {
+            [`${channel}_used`]: increment(amount),
+            updated_at: serverTimestamp(),
+          },
+          { merge: true }
+        ),
         {
-          [`${channel}_used`]: increment(amount),
-          updated_at: serverTimestamp(),
-        },
-        { merge: true }
+          timeoutMessage: 'Timed out while recording usage.',
+          debugContext,
+        }
       );
+      if (debugContext) {
+        savePipelineService.log(debugContext, 'db_write_succeeded', { id: docId, channel, amount, action: 'record_usage' });
+      }
     } catch (error) {
+      if (debugContext) {
+        savePipelineService.logError(debugContext, 'db_write_failed', error);
+      }
       handleFirestoreError(error, OperationType.UPDATE, COLLECTION_NAME);
     }
   },

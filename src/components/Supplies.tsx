@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { AlertCircle, CheckCircle, Package, Plus, Save, X } from 'lucide-react';
 import { Timestamp } from 'firebase/firestore';
 import { supplyService, SupplyRecord } from '../services/supplyService';
+import { savePipelineService } from '../services/savePipelineService';
 
 const toDate = (value: any) => {
   if (!value) return null;
@@ -13,6 +14,7 @@ const toDate = (value: any) => {
 export default function Supplies() {
   const [supplies, setSupplies] = useState<SupplyRecord[]>([]);
   const [isAddingSupply, setIsAddingSupply] = useState(false);
+  const [isSavingSupply, setIsSavingSupply] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
@@ -52,36 +54,59 @@ export default function Supplies() {
 
   const handleSaveSupply = async (event: React.FormEvent) => {
     event.preventDefault();
+    const debugContext = {
+      flow: 'supplies-save',
+      traceId: savePipelineService.createTraceId('supplies-save'),
+    };
+
     setErrorMessage(null);
+    setIsSavingSupply(true);
+    savePipelineService.log(debugContext, 'save_started');
 
     const parsedQuantity = Number(quantityOnHand || 0);
     const parsedThreshold = Number(reorderThreshold || 0);
 
     if (!name.trim()) {
+      savePipelineService.log(debugContext, 'validation_failed', 'Supply name is required.');
       setErrorMessage('Supply name is required.');
+      setIsSavingSupply(false);
+      savePipelineService.log(debugContext, 'loading_state_cleared');
       return;
     }
 
     try {
-      await supplyService.addSupply({
-        name: name.trim(),
-        category: category.trim(),
-        unit: unit.trim() || 'units',
-        quantity_on_hand: parsedQuantity,
-        reorder_threshold: parsedThreshold,
-        vendor: vendor.trim(),
-        notes: notes.trim(),
-        active: true,
-        last_restocked_at: parsedQuantity > 0 ? Timestamp.now() : null,
-        last_used_at: null,
-      });
+      savePipelineService.log(debugContext, 'validation_passed');
+      savePipelineService.log(debugContext, 'service_called', 'supplyService.addSupply');
+      await savePipelineService.withTimeout(
+        supplyService.addSupply({
+          name: name.trim(),
+          category: category.trim(),
+          unit: unit.trim() || 'units',
+          quantity_on_hand: parsedQuantity,
+          reorder_threshold: parsedThreshold,
+          vendor: vendor.trim(),
+          notes: notes.trim(),
+          active: true,
+          last_restocked_at: parsedQuantity > 0 ? Timestamp.now() : null,
+          last_used_at: null,
+        }, debugContext),
+        {
+          timeoutMessage: 'Saving the supply took too long. Please try again.',
+          debugContext,
+        }
+      );
 
       resetSupplyForm();
       setIsAddingSupply(false);
       setSuccessMessage('Supply saved');
+      savePipelineService.log(debugContext, 'ui_success_handler_fired');
     } catch (error) {
       console.error('Error saving supply:', error);
-      setErrorMessage('Failed to save supply.');
+      savePipelineService.logError(debugContext, 'db_write_failed', error);
+      setErrorMessage(error instanceof Error ? error.message : 'Failed to save supply.');
+    } finally {
+      setIsSavingSupply(false);
+      savePipelineService.log(debugContext, 'loading_state_cleared');
     }
   };
 
@@ -160,9 +185,9 @@ export default function Supplies() {
       </section>
 
       {isAddingSupply && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-gray-900/50 p-4">
-          <div className="bg-white rounded-[32px] w-full max-w-2xl max-h-[90vh] overflow-y-auto shadow-2xl">
-            <div className="flex items-center justify-between px-8 py-6 border-b border-gray-100 sticky top-0 bg-white z-10">
+        <div className="fixed inset-0 z-[110] flex items-end sm:items-center justify-center bg-gray-900/50 p-0 sm:p-4">
+          <div className="bg-white rounded-t-[32px] sm:rounded-[32px] w-full max-w-2xl max-h-[calc(100dvh-0.5rem)] sm:max-h-[90vh] overflow-hidden shadow-2xl flex flex-col">
+            <div className="flex items-center justify-between px-8 py-6 border-b border-gray-100 bg-white">
               <div>
                 <h3 className="text-xl font-black text-gray-900">New Supply</h3>
                 <p className="text-xs font-bold text-gray-400 uppercase tracking-widest mt-2">Separate consumables from equipment</p>
@@ -172,7 +197,7 @@ export default function Supplies() {
               </button>
             </div>
 
-            <form onSubmit={handleSaveSupply} className="p-8 space-y-6">
+            <form onSubmit={handleSaveSupply} className="flex-1 overflow-y-auto p-8 pb-[calc(7rem+env(safe-area-inset-bottom))] space-y-6">
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <label className="block md:col-span-2">
                   <span className="block text-[10px] font-black uppercase tracking-widest text-gray-400 mb-2">Name</span>
@@ -251,16 +276,20 @@ export default function Supplies() {
                 <button
                   type="button"
                   onClick={() => { setIsAddingSupply(false); resetSupplyForm(); }}
+                  disabled={isSavingSupply}
                   className="px-5 py-3 rounded-2xl bg-gray-100 text-gray-600 text-xs font-black uppercase tracking-widest hover:bg-gray-200 transition-all"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
-                  className="px-5 py-3 rounded-2xl bg-blue-600 text-white text-xs font-black uppercase tracking-widest hover:bg-blue-700 transition-all flex items-center gap-2"
+                  disabled={isSavingSupply}
+                  className={`px-5 py-3 rounded-2xl text-xs font-black uppercase tracking-widest transition-all flex items-center gap-2 ${
+                    isSavingSupply ? 'bg-gray-200 text-gray-400' : 'bg-blue-600 text-white hover:bg-blue-700'
+                  }`}
                 >
                   <Save className="h-4 w-4" />
-                  Save Supply
+                  {isSavingSupply ? 'Saving...' : 'Save Supply'}
                 </button>
               </div>
             </form>

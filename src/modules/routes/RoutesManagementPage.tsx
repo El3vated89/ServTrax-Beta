@@ -22,6 +22,7 @@ import { routeActivityService } from '../../services/routeActivityService';
 import { routePlanningService } from '../../services/routePlanningService';
 import { routeTemplateService } from '../../services/routeTemplateService';
 import { routeService } from '../../services/RouteService';
+import { savePipelineService } from '../../services/savePipelineService';
 import { BASE_CAMP } from './constants';
 import RouteStopCard from './components/RouteStopCard';
 import { BaseCamp, Route, RouteActivityLog, RouteStop, RouteTemplate, RouteTemplateCadence, RouteTemplateMode } from './types';
@@ -492,37 +493,62 @@ export default function RoutesManagementPage() {
 
   const handleSaveRouteOrder = async () => {
     if (!activeRun?.id || draftStops.length === 0) return;
+    const debugContext = {
+      flow: 'routes-save-order',
+      traceId: savePipelineService.createTraceId(`routes-save-order-${activeRun.id}`),
+    };
     setIsSavingOrder(true);
     setErrorMessage(null);
 
     try {
-      await routeService.batchUpdateStopOrders(
-        draftStops
-          .filter((stop) => stop.id)
-          .map((stop, index) => ({
-            id: stop.id!,
-            stop_order: index,
-            manual_order: index,
-          }))
+      savePipelineService.log(debugContext, 'save_started');
+      savePipelineService.log(debugContext, 'validation_passed');
+      await savePipelineService.withTimeout(
+        routeService.batchUpdateStopOrders(
+          draftStops
+            .filter((stop) => stop.id)
+            .map((stop, index) => ({
+              id: stop.id!,
+              stop_order: index,
+              manual_order: index,
+            }))
+        ),
+        {
+          timeoutMessage: 'Saving the route order took too long. Please try again.',
+          debugContext,
+        }
       );
-      await routeService.updateRoute(activeRun.id, { manual_override: true });
-      await routeActivityService.addActivity({
+      await savePipelineService.withTimeout(routeService.updateRoute(activeRun.id, { manual_override: true }), {
+        timeoutMessage: 'Updating this route run took too long. Please try again.',
+        debugContext,
+      });
+      await savePipelineService.withTimeout(routeActivityService.addActivity({
         route: activeRun,
         eventType: 'order_saved',
         summary: `Saved the stop order for ${activeRun.assigned_team_name_snapshot || activeRun.route_run_label || 'this run'}.`,
+      }), {
+        timeoutMessage: 'Logging the route order save took too long. Please try again.',
+        debugContext,
       });
       setHasUnsavedOrder(false);
       setSaveMessage('Route order saved');
+      savePipelineService.log(debugContext, 'ui_success_handler_fired');
     } catch (error) {
       console.error('Error saving route order:', error);
+      savePipelineService.logError(debugContext, 'db_write_failed', error);
       setErrorMessage(getFriendlyErrorMessage(error, 'Failed to save route order.'));
     } finally {
       setIsSavingOrder(false);
+      savePipelineService.log(debugContext, 'loading_state_cleared');
     }
   };
 
   const handleSaveRunDetails = async () => {
     if (!activeRun?.id) return;
+    const debugContext = {
+      flow: 'routes-save-run-details',
+      traceId: savePipelineService.createTraceId(`routes-save-run-details-${activeRun.id}`),
+    };
     setIsSavingRunDetails(true);
     setErrorMessage(null);
 
@@ -530,11 +556,16 @@ export default function RoutesManagementPage() {
     const nextTeamName = runDetailsForm.assigned_team_name_snapshot.trim();
 
     try {
-      await routeService.updateRoute(activeRun.id, {
+      savePipelineService.log(debugContext, 'save_started');
+      savePipelineService.log(debugContext, 'validation_passed');
+      await savePipelineService.withTimeout(routeService.updateRoute(activeRun.id, {
         route_run_label: nextRunLabel,
         assigned_team_name_snapshot: nextTeamName,
+      }), {
+        timeoutMessage: 'Saving the run details took too long. Please try again.',
+        debugContext,
       });
-      await routeActivityService.addActivity({
+      await savePipelineService.withTimeout(routeActivityService.addActivity({
         route: {
           ...activeRun,
           route_run_label: nextRunLabel,
@@ -544,13 +575,19 @@ export default function RoutesManagementPage() {
         summary: nextTeamName
           ? `Updated this run for ${nextTeamName}.`
           : 'Updated this run label and details.',
+      }), {
+        timeoutMessage: 'Logging the run detail update took too long. Please try again.',
+        debugContext,
       });
       setSaveMessage('Run details saved');
+      savePipelineService.log(debugContext, 'ui_success_handler_fired');
     } catch (error) {
       console.error('Error saving run details:', error);
+      savePipelineService.logError(debugContext, 'db_write_failed', error);
       setErrorMessage(getFriendlyErrorMessage(error, 'Failed to save run details.'));
     } finally {
       setIsSavingRunDetails(false);
+      savePipelineService.log(debugContext, 'loading_state_cleared');
     }
   };
 

@@ -4,6 +4,7 @@ import { waitForCurrentUser } from './authSessionService';
 import { handleFirestoreError, OperationType } from './verificationService';
 import { UserProfile } from './userProfileService';
 import { planConfigService, SubscriptionStatus } from './planConfigService';
+import { SaveDebugContext, savePipelineService } from './savePipelineService';
 
 interface AdminBusinessProfile {
   id: string;
@@ -328,14 +329,28 @@ export const adminService = {
       plan_name: string;
       subscription_status: string;
       storage_add_on_quantity: number;
-    }
+    },
+    debugContext?: SaveDebugContext
   ) => {
-    const user = await waitForCurrentUser();
+    const user = await waitForCurrentUser({ debugContext });
     if (!user) throw new Error('User not authenticated');
 
     try {
-      await updateDoc(doc(db, 'business_profiles', ownerId), updates);
+      if (debugContext) {
+        savePipelineService.log(debugContext, 'payload_built', { ownerId, keys: Object.keys(updates) });
+        savePipelineService.log(debugContext, 'db_write_attempted', { path: `business_profiles/${ownerId}` });
+      }
+      await savePipelineService.withTimeout(updateDoc(doc(db, 'business_profiles', ownerId), updates), {
+        timeoutMessage: 'Timed out while updating the business plan.',
+        debugContext,
+      });
+      if (debugContext) {
+        savePipelineService.log(debugContext, 'db_write_succeeded', { path: `business_profiles/${ownerId}` });
+      }
     } catch (error) {
+      if (debugContext) {
+        savePipelineService.logError(debugContext, 'db_write_failed', error);
+      }
       handleFirestoreError(error, OperationType.UPDATE, `business_profiles/${ownerId}`);
     }
   },

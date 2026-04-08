@@ -5,6 +5,7 @@ import { userProfileService } from '../services/userProfileService';
 import { platformMessagingService, PlatformMessagingConfig } from '../services/platformMessagingService';
 import { BillingFramework, BillingPlanDefinition, planConfigService } from '../services/planConfigService';
 import { bugReportService, BugReport } from '../services/bugReportService';
+import { savePipelineService } from '../services/savePipelineService';
 
 const formatBytes = (bytes: number) => {
   if (!bytes) return '0 KB';
@@ -102,57 +103,105 @@ export default function AdminController() {
   };
 
   const handleSaveProviders = async () => {
+    const debugContext = {
+      flow: 'admin-controller-save-providers',
+      traceId: savePipelineService.createTraceId('admin-controller-save-providers'),
+    };
+
     setIsSavingProviders(true);
     setErrorMessage(null);
     try {
-      await platformMessagingService.saveConfig(providerConfig);
+      savePipelineService.log(debugContext, 'save_started');
+      savePipelineService.log(debugContext, 'validation_passed');
+      savePipelineService.log(debugContext, 'service_called', 'platformMessagingService.saveConfig');
+      await savePipelineService.withTimeout(platformMessagingService.saveConfig(providerConfig, debugContext), {
+        timeoutMessage: 'Saving the provider settings took too long. Please try again.',
+        debugContext,
+      });
       setSaveMessage('Provider foundation saved');
+      savePipelineService.log(debugContext, 'ui_success_handler_fired');
     } catch (error) {
       console.error('Error saving provider foundation:', error);
-      setErrorMessage('Failed to save provider foundation.');
+      savePipelineService.logError(debugContext, 'db_write_failed', error);
+      setErrorMessage(error instanceof Error ? error.message : 'Failed to save provider foundation.');
     } finally {
       setIsSavingProviders(false);
+      savePipelineService.log(debugContext, 'loading_state_cleared');
     }
   };
 
   const handleSavePlans = async () => {
+    const debugContext = {
+      flow: 'admin-controller-save-plans',
+      traceId: savePipelineService.createTraceId('admin-controller-save-plans'),
+    };
+
     setIsSavingPlans(true);
     setErrorMessage(null);
 
     try {
-      await planConfigService.saveFramework(billingFramework);
-      const nextMetrics = await adminService.getMetrics();
+      savePipelineService.log(debugContext, 'save_started');
+      savePipelineService.log(debugContext, 'validation_passed');
+      savePipelineService.log(debugContext, 'service_called', 'planConfigService.saveFramework');
+      await savePipelineService.withTimeout(planConfigService.saveFramework(billingFramework, debugContext), {
+        timeoutMessage: 'Saving the plan framework took too long. Please try again.',
+        debugContext,
+      });
+      const nextMetrics = await savePipelineService.withTimeout(adminService.getMetrics(), {
+        timeoutMessage: 'Timed out while refreshing controller metrics.',
+        debugContext,
+      });
       setMetrics(nextMetrics);
       setSaveMessage('Plan framework saved');
+      savePipelineService.log(debugContext, 'ui_success_handler_fired');
     } catch (error) {
       console.error('Error saving billing framework:', error);
-      setErrorMessage('Failed to save plan framework.');
+      savePipelineService.logError(debugContext, 'db_write_failed', error);
+      setErrorMessage(error instanceof Error ? error.message : 'Failed to save plan framework.');
     } finally {
       setIsSavingPlans(false);
+      savePipelineService.log(debugContext, 'loading_state_cleared');
     }
   };
 
   const handleSaveBusinessPlan = async (ownerId: string, planKey: string, subscriptionStatus: string, storageAddOnQuantity: number) => {
+    const debugContext = {
+      flow: 'admin-controller-save-business-plan',
+      traceId: savePipelineService.createTraceId(`admin-controller-save-business-plan-${ownerId}`),
+    };
+
     setSavingBusinessOwnerId(ownerId);
     setErrorMessage(null);
 
     try {
+      savePipelineService.log(debugContext, 'save_started');
       const selectedPlan = billingFramework.plans.find((plan) => plan.key === planKey) || billingFramework.plans[0];
-      await adminService.updateBusinessPlan(ownerId, {
+      savePipelineService.log(debugContext, 'validation_passed');
+      savePipelineService.log(debugContext, 'service_called', 'adminService.updateBusinessPlan');
+      await savePipelineService.withTimeout(adminService.updateBusinessPlan(ownerId, {
         plan_key: selectedPlan.key,
         plan_name: selectedPlan.label,
         subscription_status: subscriptionStatus,
         storage_add_on_quantity: Math.max(0, storageAddOnQuantity),
+      }, debugContext), {
+        timeoutMessage: 'Saving the business plan took too long. Please try again.',
+        debugContext,
       });
 
-      const nextMetrics = await adminService.getMetrics();
+      const nextMetrics = await savePipelineService.withTimeout(adminService.getMetrics(), {
+        timeoutMessage: 'Timed out while refreshing controller metrics.',
+        debugContext,
+      });
       setMetrics(nextMetrics);
       setSaveMessage(`Updated ${nextMetrics.businessPlans.find((entry) => entry.ownerId === ownerId)?.businessName || 'business'} plan`);
+      savePipelineService.log(debugContext, 'ui_success_handler_fired');
     } catch (error) {
       console.error('Error saving business plan:', error);
-      setErrorMessage('Failed to save business plan.');
+      savePipelineService.logError(debugContext, 'db_write_failed', error);
+      setErrorMessage(error instanceof Error ? error.message : 'Failed to save business plan.');
     } finally {
       setSavingBusinessOwnerId(null);
+      savePipelineService.log(debugContext, 'loading_state_cleared');
     }
   };
 

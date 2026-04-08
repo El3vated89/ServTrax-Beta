@@ -10,6 +10,8 @@ import {
 } from 'firebase/firestore';
 import { auth, db } from '../firebase';
 import { localFallbackStore } from './localFallbackStore';
+import { waitForCurrentUser } from './authSessionService';
+import { SaveDebugContext, savePipelineService } from './savePipelineService';
 
 export interface SupplyRecord {
   id?: string;
@@ -33,17 +35,6 @@ const LOCAL_FALLBACK_NAMESPACE = 'supplies';
 type LocalSupplyRecord = SupplyRecord & { _local_deleted?: boolean };
 const supplyCache = new Map<string, SupplyRecord>();
 const toClientTimestamp = () => new Date().toISOString();
-
-const waitForCurrentUser = async () => {
-  if (auth.currentUser) return auth.currentUser;
-
-  return new Promise<typeof auth.currentUser>((resolve) => {
-    const unsubscribe = auth.onAuthStateChanged((user) => {
-      unsubscribe();
-      resolve(user);
-    });
-  });
-};
 
 export const supplyService = {
   subscribeToSupplies: (callback: (supplies: SupplyRecord[]) => void) => {
@@ -129,18 +120,36 @@ export const supplyService = {
     };
   },
 
-  addSupply: async (supply: Omit<SupplyRecord, 'id' | 'ownerId' | 'created_at' | 'updated_at'>) => {
-    const user = await waitForCurrentUser();
+  addSupply: async (
+    supply: Omit<SupplyRecord, 'id' | 'ownerId' | 'created_at' | 'updated_at'>,
+    debugContext?: SaveDebugContext
+  ) => {
+    const user = await waitForCurrentUser({ debugContext });
     if (!user) throw new Error('User not authenticated');
 
     try {
-      return await addDoc(collection(db, COLLECTION_NAME), {
+      if (debugContext) {
+        savePipelineService.log(debugContext, 'payload_built', { name: supply.name, category: supply.category });
+        savePipelineService.log(debugContext, 'db_write_attempted', { collection: COLLECTION_NAME, action: 'add_supply' });
+      }
+      const ref = await savePipelineService.withTimeout(addDoc(collection(db, COLLECTION_NAME), {
         ...supply,
         ownerId: user.uid,
         created_at: serverTimestamp(),
         updated_at: serverTimestamp(),
+      }), {
+        timeoutMessage: 'Timed out while saving the supply.',
+        debugContext,
       });
+      if (debugContext) {
+        savePipelineService.log(debugContext, 'db_write_succeeded', { id: ref.id, action: 'add_supply' });
+      }
+      return ref;
     } catch (error) {
+      if (debugContext) {
+        savePipelineService.logError(debugContext, 'db_write_failed', error);
+        savePipelineService.log(debugContext, 'fallback_write_attempted', { collection: COLLECTION_NAME, action: 'add_supply' });
+      }
       console.error('Primary supply save failed, saving locally instead:', error);
       const localId = localFallbackStore.upsertRecord<LocalSupplyRecord>(LOCAL_FALLBACK_NAMESPACE, user.uid, {
         id: localFallbackStore.createLocalId(LOCAL_FALLBACK_NAMESPACE),
@@ -149,28 +158,51 @@ export const supplyService = {
         created_at: toClientTimestamp() as any,
         updated_at: toClientTimestamp() as any,
       });
+      if (debugContext) {
+        savePipelineService.log(debugContext, 'fallback_write_succeeded', { id: localId, action: 'add_supply' });
+      }
       return { id: localId };
     }
   },
 
-  updateSupply: async (id: string, updates: Partial<SupplyRecord>) => {
-    const user = await waitForCurrentUser();
+  updateSupply: async (id: string, updates: Partial<SupplyRecord>, debugContext?: SaveDebugContext) => {
+    const user = await waitForCurrentUser({ debugContext });
     if (!user) throw new Error('User not authenticated');
 
     try {
       if (localFallbackStore.isLocalId(id, LOCAL_FALLBACK_NAMESPACE)) {
+        if (debugContext) {
+          savePipelineService.log(debugContext, 'fallback_write_attempted', { id, action: 'update_supply' });
+        }
         localFallbackStore.updateRecord<LocalSupplyRecord>(LOCAL_FALLBACK_NAMESPACE, user.uid, id, {
           ...updates,
           updated_at: toClientTimestamp() as any,
           _local_deleted: false,
         });
+        if (debugContext) {
+          savePipelineService.log(debugContext, 'fallback_write_succeeded', { id, action: 'update_supply' });
+        }
         return;
       }
-      await updateDoc(doc(db, COLLECTION_NAME, id), {
+      if (debugContext) {
+        savePipelineService.log(debugContext, 'payload_built', { id, keys: Object.keys(updates) });
+        savePipelineService.log(debugContext, 'db_write_attempted', { id, action: 'update_supply' });
+      }
+      await savePipelineService.withTimeout(updateDoc(doc(db, COLLECTION_NAME, id), {
         ...updates,
         updated_at: serverTimestamp(),
+      }), {
+        timeoutMessage: 'Timed out while updating the supply.',
+        debugContext,
       });
+      if (debugContext) {
+        savePipelineService.log(debugContext, 'db_write_succeeded', { id, action: 'update_supply' });
+      }
     } catch (error) {
+      if (debugContext) {
+        savePipelineService.logError(debugContext, 'db_write_failed', error);
+        savePipelineService.log(debugContext, 'fallback_write_attempted', { id, action: 'update_supply' });
+      }
       console.error('Primary supply update failed, updating local fallback instead:', error);
       const cachedSupply = supplyCache.get(id);
       localFallbackStore.upsertRecord<LocalSupplyRecord>(LOCAL_FALLBACK_NAMESPACE, user.uid, {
@@ -189,6 +221,9 @@ export const supplyService = {
         updated_at: toClientTimestamp() as any,
         _local_deleted: false,
       } as LocalSupplyRecord);
+      if (debugContext) {
+        savePipelineService.log(debugContext, 'fallback_write_succeeded', { id, action: 'update_supply' });
+      }
     }
   },
 };

@@ -9,6 +9,8 @@ import {
 import { auth, db } from '../firebase';
 import { PlatformMessagingConfig } from './platformMessagingService';
 import { handleFirestoreError, OperationType } from './verificationService';
+import { waitForCurrentUser } from './authSessionService';
+import { SaveDebugContext, savePipelineService } from './savePipelineService';
 
 export type MessageChannel = 'sms' | 'email';
 export type MessageDeliveryStatus = 'blocked' | 'queued' | 'sent' | 'failed';
@@ -31,17 +33,6 @@ export interface MessageDeliveryRecord {
 }
 
 const COLLECTION_NAME = 'message_deliveries';
-
-const waitForCurrentUser = async () => {
-  if (auth.currentUser) return auth.currentUser;
-
-  return new Promise<typeof auth.currentUser>((resolve) => {
-    const unsubscribe = auth.onAuthStateChanged((user) => {
-      unsubscribe();
-      resolve(user);
-    });
-  });
-};
 
 export const messageDeliveryService = {
   subscribeToDeliveries: (callback: (deliveries: MessageDeliveryRecord[]) => void) => {
@@ -72,9 +63,10 @@ export const messageDeliveryService = {
 
   sendMessage: async (
     payload: Omit<MessageDeliveryRecord, 'id' | 'ownerId' | 'status' | 'provider' | 'created_at' | 'updated_at'>,
-    providerConfig: PlatformMessagingConfig
+    providerConfig: PlatformMessagingConfig,
+    debugContext?: SaveDebugContext
   ) => {
-    const user = await waitForCurrentUser();
+    const user = await waitForCurrentUser({ debugContext });
     if (!user) throw new Error('User not authenticated');
 
     const isSms = payload.channel === 'sms';
@@ -94,7 +86,16 @@ export const messageDeliveryService = {
     }
 
     try {
-      const ref = await addDoc(collection(db, COLLECTION_NAME), {
+      if (debugContext) {
+        savePipelineService.log(debugContext, 'payload_built', {
+          channel: payload.channel,
+          recipient: payload.recipient,
+          status,
+          provider,
+        });
+        savePipelineService.log(debugContext, 'db_write_attempted', { collection: COLLECTION_NAME, action: 'send_message_log' });
+      }
+      const ref = await savePipelineService.withTimeout(addDoc(collection(db, COLLECTION_NAME), {
         ...payload,
         ownerId: user.uid,
         provider,
@@ -102,10 +103,19 @@ export const messageDeliveryService = {
         error_message: errorMessage || null,
         created_at: serverTimestamp(),
         updated_at: serverTimestamp(),
+      }), {
+        timeoutMessage: 'Timed out while logging the message delivery.',
+        debugContext,
       });
+      if (debugContext) {
+        savePipelineService.log(debugContext, 'db_write_succeeded', { id: ref.id, action: 'send_message_log' });
+      }
 
       return ref;
     } catch (error) {
+      if (debugContext) {
+        savePipelineService.logError(debugContext, 'db_write_failed', error);
+      }
       handleFirestoreError(error, OperationType.WRITE, COLLECTION_NAME);
     }
   },

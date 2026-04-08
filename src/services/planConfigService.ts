@@ -2,6 +2,7 @@ import { doc, getDoc, onSnapshot, serverTimestamp, setDoc } from 'firebase/fires
 import { auth, db } from '../firebase';
 import { handleFirestoreError, OperationType } from './verificationService';
 import { waitForCurrentUser } from './authSessionService';
+import { SaveDebugContext, savePipelineService } from './savePipelineService';
 
 export type PlanKey = 'free' | 'starter_lite' | 'starter' | 'pro';
 export type SubscriptionStatus = 'trialing' | 'active' | 'past_due' | 'paused' | 'canceled';
@@ -286,8 +287,8 @@ export const planConfigService = {
     custom_storage_cap: null,
   }),
 
-  hydrateFramework: async () => {
-    const user = await waitForCurrentUser();
+  hydrateFramework: async (debugContext?: SaveDebugContext) => {
+    const user = await waitForCurrentUser({ debugContext });
 
     if (!user) {
       cachedFramework = DEFAULT_FRAMEWORK;
@@ -295,7 +296,10 @@ export const planConfigService = {
     }
 
     try {
-      const snapshot = await getDoc(getDocRef());
+      const snapshot = await savePipelineService.withTimeout(getDoc(getDocRef()), {
+        timeoutMessage: 'Timed out while loading the billing framework.',
+        debugContext,
+      });
       cachedFramework = snapshot.exists()
         ? normalizeFramework(snapshot.data() as BillingFramework)
         : DEFAULT_FRAMEWORK;
@@ -341,17 +345,23 @@ export const planConfigService = {
     };
   },
 
-  ensureFramework: async () => {
-    const user = await waitForCurrentUser();
+  ensureFramework: async (debugContext?: SaveDebugContext) => {
+    const user = await waitForCurrentUser({ debugContext });
     if (!user || user.email !== ADMIN_EMAIL) return;
 
     try {
-      const snapshot = await getDoc(getDocRef());
+      const snapshot = await savePipelineService.withTimeout(getDoc(getDocRef()), {
+        timeoutMessage: 'Timed out while checking the billing framework.',
+        debugContext,
+      });
       if (!snapshot.exists()) {
-        await setDoc(getDocRef(), {
+        await savePipelineService.withTimeout(setDoc(getDocRef(), {
           ...DEFAULT_FRAMEWORK,
           created_at: serverTimestamp(),
           updated_at: serverTimestamp(),
+        }), {
+          timeoutMessage: 'Timed out while creating the billing framework.',
+          debugContext,
         });
         cachedFramework = DEFAULT_FRAMEWORK;
       }
@@ -360,8 +370,8 @@ export const planConfigService = {
     }
   },
 
-  saveFramework: async (framework: BillingFramework) => {
-    const user = await waitForCurrentUser();
+  saveFramework: async (framework: BillingFramework, debugContext?: SaveDebugContext) => {
+    const user = await waitForCurrentUser({ debugContext });
     if (!user || user.email !== ADMIN_EMAIL) {
       throw new Error('Only the platform admin can update plan settings.');
     }
@@ -369,16 +379,32 @@ export const planConfigService = {
     const normalizedFramework = normalizeFramework(framework);
 
     try {
-      await setDoc(
-        getDocRef(),
+      if (debugContext) {
+        savePipelineService.log(debugContext, 'payload_built', { planCount: normalizedFramework.plans.length });
+        savePipelineService.log(debugContext, 'db_write_attempted', { collection: COLLECTION_NAME, action: 'save_framework' });
+      }
+      await savePipelineService.withTimeout(
+        setDoc(
+          getDocRef(),
+          {
+            ...normalizedFramework,
+            updated_at: serverTimestamp(),
+          },
+          { merge: true }
+        ),
         {
-          ...normalizedFramework,
-          updated_at: serverTimestamp(),
-        },
-        { merge: true }
+          timeoutMessage: 'Timed out while saving the billing framework.',
+          debugContext,
+        }
       );
       cachedFramework = normalizedFramework;
+      if (debugContext) {
+        savePipelineService.log(debugContext, 'db_write_succeeded', { collection: COLLECTION_NAME, action: 'save_framework' });
+      }
     } catch (error) {
+      if (debugContext) {
+        savePipelineService.logError(debugContext, 'db_write_failed', error);
+      }
       handleFirestoreError(error, OperationType.UPDATE, `${COLLECTION_NAME}/${DOC_ID}`);
     }
   },

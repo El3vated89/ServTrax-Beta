@@ -2,6 +2,7 @@ import { doc, getDoc, onSnapshot, serverTimestamp, setDoc, updateDoc } from 'fir
 import { auth, db } from '../firebase';
 import { handleFirestoreError, OperationType } from './verificationService';
 import { waitForCurrentUser } from './authSessionService';
+import { SaveDebugContext, savePipelineService } from './savePipelineService';
 
 export interface PlatformMessagingConfig {
   admin_email_lock: string;
@@ -67,42 +68,64 @@ export const platformMessagingService = {
     };
   },
 
-  ensureConfig: async () => {
-    const user = await waitForCurrentUser();
+  ensureConfig: async (debugContext?: SaveDebugContext) => {
+    const user = await waitForCurrentUser({ debugContext });
     if (!user || user.email !== ADMIN_EMAIL) return;
 
     const docRef = doc(db, 'platform_settings', DOC_ID);
-    const existing = await getDoc(docRef);
+    const existing = await savePipelineService.withTimeout(getDoc(docRef), {
+      timeoutMessage: 'Timed out while loading the messaging provider config.',
+      debugContext,
+    });
 
     if (!existing.exists()) {
-      await setDoc(docRef, {
+      await savePipelineService.withTimeout(setDoc(docRef, {
         ...defaultConfig,
         created_at: serverTimestamp(),
         updated_at: serverTimestamp(),
+      }), {
+        timeoutMessage: 'Timed out while creating the messaging provider config.',
+        debugContext,
       });
       return;
     }
 
-    await updateDoc(docRef, {
+    await savePipelineService.withTimeout(updateDoc(docRef, {
       admin_email_lock: ADMIN_EMAIL,
       updated_at: serverTimestamp(),
+    }), {
+      timeoutMessage: 'Timed out while refreshing the messaging provider config.',
+      debugContext,
     });
   },
 
-  saveConfig: async (updates: Partial<PlatformMessagingConfig>) => {
-    const user = await waitForCurrentUser();
+  saveConfig: async (updates: Partial<PlatformMessagingConfig>, debugContext?: SaveDebugContext) => {
+    const user = await waitForCurrentUser({ debugContext });
     if (!user || user.email !== ADMIN_EMAIL) {
       throw new Error('Only the platform admin can update messaging providers.');
     }
 
     try {
-      await setDoc(doc(db, 'platform_settings', DOC_ID), {
+      if (debugContext) {
+        savePipelineService.log(debugContext, 'payload_built', { keys: Object.keys(updates) });
+        savePipelineService.log(debugContext, 'db_write_attempted', { collection: 'platform_settings', action: 'save_provider_config' });
+      }
+      await savePipelineService.withTimeout(setDoc(doc(db, 'platform_settings', DOC_ID), {
         ...defaultConfig,
         ...updates,
         admin_email_lock: ADMIN_EMAIL,
         updated_at: serverTimestamp(),
-      }, { merge: true });
+      }, { merge: true }), {
+        timeoutMessage: 'Timed out while saving the messaging provider config.',
+        debugContext,
+      });
+      if (debugContext) {
+        savePipelineService.log(debugContext, 'db_write_succeeded', { collection: 'platform_settings', action: 'save_provider_config' });
+      }
     } catch (error) {
+      if (debugContext) {
+        savePipelineService.logError(debugContext, 'db_write_failed', error);
+      }
       handleFirestoreError(error, OperationType.UPDATE, `platform_settings/${DOC_ID}`);
     }
   },

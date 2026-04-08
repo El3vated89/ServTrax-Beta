@@ -1,8 +1,10 @@
-import { db, auth } from '../firebase';
+import { db } from '../firebase';
 import { collection, query, getDocs, deleteDoc, doc, Timestamp, orderBy, where, getDoc, updateDoc } from 'firebase/firestore';
 import { storagePolicyService } from './storagePolicyService';
 import { handleFirestoreError, OperationType } from './verificationService';
 import { localFallbackStore } from './localFallbackStore';
+import { waitForCurrentUser } from './authSessionService';
+import { SaveDebugContext, savePipelineService } from './savePipelineService';
 
 export interface StorageAsset {
   id: string;
@@ -21,25 +23,20 @@ export interface StorageAsset {
 
 const LOCAL_FALLBACK_NAMESPACE = 'verification_records';
 
-const getBusinessProfile = async (userId: string) => {
-  const profileSnap = await getDoc(doc(db, 'business_profiles', userId));
+const getBusinessProfile = async (userId: string, debugContext?: SaveDebugContext) => {
+  const profileSnap = await savePipelineService.withTimeout(
+    getDoc(doc(db, 'business_profiles', userId)),
+    {
+      timeoutMessage: 'Timed out while loading the business profile for storage.',
+      debugContext,
+    }
+  );
   return profileSnap.exists() ? profileSnap.data() : null;
 };
 
-const waitForCurrentUser = async () => {
-  if (auth.currentUser) return auth.currentUser;
-
-  return new Promise<typeof auth.currentUser>((resolve) => {
-    const unsubscribe = auth.onAuthStateChanged((user) => {
-      unsubscribe();
-      resolve(user);
-    });
-  });
-};
-
 export const storageService = {
-  getUsageSummary: async () => {
-    const user = await waitForCurrentUser();
+  getUsageSummary: async (debugContext?: SaveDebugContext) => {
+    const user = await waitForCurrentUser({ debugContext });
     const fallbackPolicy = storagePolicyService.resolvePolicy();
     if (!user) return {
       used_bytes: 0,
@@ -51,9 +48,12 @@ export const storageService = {
     };
 
     const q = query(collection(db, 'verification_records'), where('ownerId', '==', user.uid));
-    const businessProfile = await getBusinessProfile(user.uid);
+    const businessProfile = await getBusinessProfile(user.uid, debugContext);
     const policy = storagePolicyService.resolvePolicy(businessProfile);
-    const assetsSnapshot = await getDocs(q);
+    const assetsSnapshot = await savePipelineService.withTimeout(getDocs(q), {
+      timeoutMessage: 'Timed out while loading storage usage records.',
+      debugContext,
+    });
     let totalBytes = 0;
     assetsSnapshot.forEach(doc => {
       const data = doc.data();
@@ -77,15 +77,18 @@ export const storageService = {
       retention_days: policy.retentionDays,
     };
   },
-  getAssets: async () => {
-    const user = await waitForCurrentUser();
+  getAssets: async (debugContext?: SaveDebugContext) => {
+    const user = await waitForCurrentUser({ debugContext });
     if (!user) return [];
 
     const q = query(
       collection(db, 'verification_records'), 
       where('ownerId', '==', user.uid)
     );
-    const snapshot = await getDocs(q);
+    const snapshot = await savePipelineService.withTimeout(getDocs(q), {
+      timeoutMessage: 'Timed out while loading storage assets.',
+      debugContext,
+    });
     
     const primaryAssets = await Promise.all(snapshot.docs.map(async (docSnap) => {
       const data = docSnap.data();
@@ -95,7 +98,10 @@ export const storageService = {
       
       if (data.jobId) {
         try {
-          const jobSnap = await getDoc(doc(db, 'jobs', data.jobId));
+          const jobSnap = await savePipelineService.withTimeout(getDoc(doc(db, 'jobs', data.jobId)), {
+            timeoutMessage: 'Timed out while loading job details for storage assets.',
+            debugContext,
+          });
           if (jobSnap.exists()) {
             const jobData = jobSnap.data();
             customer_name = jobData.customer_name_snapshot || 'Unknown';
@@ -107,7 +113,10 @@ export const storageService = {
         }
       } else if (data.customerId) {
         try {
-          const customerSnap = await getDoc(doc(db, 'customers', data.customerId));
+          const customerSnap = await savePipelineService.withTimeout(getDoc(doc(db, 'customers', data.customerId)), {
+            timeoutMessage: 'Timed out while loading customer details for storage assets.',
+            debugContext,
+          });
           if (customerSnap.exists()) {
             const customerData = customerSnap.data();
             customer_name = customerData.name || 'Unknown';
@@ -138,7 +147,10 @@ export const storageService = {
 
         if (data.jobId) {
           try {
-            const jobSnap = await getDoc(doc(db, 'jobs', data.jobId));
+            const jobSnap = await savePipelineService.withTimeout(getDoc(doc(db, 'jobs', data.jobId)), {
+              timeoutMessage: 'Timed out while loading local job details for storage assets.',
+              debugContext,
+            });
             if (jobSnap.exists()) {
               const jobData = jobSnap.data();
               customer_name = jobData.customer_name_snapshot || 'Unknown';
@@ -149,7 +161,10 @@ export const storageService = {
           }
         } else if (data.customerId) {
           try {
-            const customerSnap = await getDoc(doc(db, 'customers', data.customerId));
+            const customerSnap = await savePipelineService.withTimeout(getDoc(doc(db, 'customers', data.customerId)), {
+              timeoutMessage: 'Timed out while loading local customer details for storage assets.',
+              debugContext,
+            });
             if (customerSnap.exists()) {
               customer_name = customerSnap.data().name || 'Unknown';
             }
@@ -175,50 +190,101 @@ export const storageService = {
     // Sort client-side to avoid index errors
     return [...localRecords, ...primaryAssets].sort((a, b) => b.uploaded_at.seconds - a.uploaded_at.seconds);
   },
-  updateAsset: async (id: string, data: Partial<StorageAsset>) => {
-    const user = await waitForCurrentUser();
+  updateAsset: async (id: string, data: Partial<StorageAsset>, debugContext?: SaveDebugContext) => {
+    const user = await waitForCurrentUser({ debugContext });
     if (!user) throw new Error('User not authenticated');
 
     try {
       if (localFallbackStore.isLocalId(id, LOCAL_FALLBACK_NAMESPACE)) {
+        if (debugContext) {
+          savePipelineService.log(debugContext, 'fallback_write_attempted', { id, action: 'update_storage_asset' });
+        }
         localFallbackStore.updateRecord(LOCAL_FALLBACK_NAMESPACE, user.uid, id, {
           ...data,
           updated_at: new Date().toISOString(),
         });
+        if (debugContext) {
+          savePipelineService.log(debugContext, 'fallback_write_succeeded', { id, action: 'update_storage_asset' });
+        }
         return;
       }
-      await updateDoc(doc(db, 'verification_records', id), data);
+      if (debugContext) {
+        savePipelineService.log(debugContext, 'db_write_attempted', { id, action: 'update_storage_asset' });
+      }
+      await savePipelineService.withTimeout(updateDoc(doc(db, 'verification_records', id), data), {
+        timeoutMessage: 'Timed out while updating the storage asset.',
+        debugContext,
+      });
+      if (debugContext) {
+        savePipelineService.log(debugContext, 'db_write_succeeded', { id, action: 'update_storage_asset' });
+      }
     } catch (error) {
+      if (debugContext) {
+        savePipelineService.logError(debugContext, 'db_write_failed', error);
+      }
       handleFirestoreError(error, OperationType.UPDATE, `verification_records/${id}`);
     }
   },
-  deleteAsset: async (id: string) => {
-    const user = await waitForCurrentUser();
+  deleteAsset: async (id: string, debugContext?: SaveDebugContext) => {
+    const user = await waitForCurrentUser({ debugContext });
     if (!user) throw new Error('User not authenticated');
 
     try {
       if (localFallbackStore.isLocalId(id, LOCAL_FALLBACK_NAMESPACE)) {
+        if (debugContext) {
+          savePipelineService.log(debugContext, 'fallback_write_attempted', { id, action: 'delete_storage_asset' });
+        }
         localFallbackStore.removeRecord(LOCAL_FALLBACK_NAMESPACE, user.uid, id);
+        if (debugContext) {
+          savePipelineService.log(debugContext, 'fallback_write_succeeded', { id, action: 'delete_storage_asset' });
+        }
         return;
       }
-      await deleteDoc(doc(db, 'verification_records', id));
+      if (debugContext) {
+        savePipelineService.log(debugContext, 'db_write_attempted', { id, action: 'delete_storage_asset' });
+      }
+      await savePipelineService.withTimeout(deleteDoc(doc(db, 'verification_records', id)), {
+        timeoutMessage: 'Timed out while deleting the storage asset.',
+        debugContext,
+      });
+      if (debugContext) {
+        savePipelineService.log(debugContext, 'db_write_succeeded', { id, action: 'delete_storage_asset' });
+      }
     } catch (error) {
+      if (debugContext) {
+        savePipelineService.logError(debugContext, 'db_write_failed', error);
+      }
       handleFirestoreError(error, OperationType.DELETE, `verification_records/${id}`);
     }
   },
-  bulkDeleteAssets: async (ids: string[]) => {
-    const user = await waitForCurrentUser();
+  bulkDeleteAssets: async (ids: string[], debugContext?: SaveDebugContext) => {
+    const user = await waitForCurrentUser({ debugContext });
     if (!user) throw new Error('User not authenticated');
 
     try {
-      await Promise.all(ids.map(id => {
-        if (localFallbackStore.isLocalId(id, LOCAL_FALLBACK_NAMESPACE)) {
-          localFallbackStore.removeRecord(LOCAL_FALLBACK_NAMESPACE, user.uid, id);
-          return Promise.resolve();
+      if (debugContext) {
+        savePipelineService.log(debugContext, 'db_write_attempted', { count: ids.length, action: 'bulk_delete_storage_assets' });
+      }
+      await savePipelineService.withTimeout(
+        Promise.all(ids.map(id => {
+          if (localFallbackStore.isLocalId(id, LOCAL_FALLBACK_NAMESPACE)) {
+            localFallbackStore.removeRecord(LOCAL_FALLBACK_NAMESPACE, user.uid, id);
+            return Promise.resolve();
+          }
+          return deleteDoc(doc(db, 'verification_records', id));
+        })),
+        {
+          timeoutMessage: 'Timed out while deleting the selected storage assets.',
+          debugContext,
         }
-        return deleteDoc(doc(db, 'verification_records', id));
-      }));
+      );
+      if (debugContext) {
+        savePipelineService.log(debugContext, 'db_write_succeeded', { count: ids.length, action: 'bulk_delete_storage_assets' });
+      }
     } catch (error) {
+      if (debugContext) {
+        savePipelineService.logError(debugContext, 'db_write_failed', error);
+      }
       handleFirestoreError(error, OperationType.DELETE, 'verification_records_bulk');
     }
   }
