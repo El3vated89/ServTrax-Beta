@@ -51,6 +51,7 @@ export interface AdminMetrics {
   activeBusinesses: number;
   activePlans: Record<string, number>;
   totalStorageBytes: number;
+  users: Array<{ uid: string; email: string; name: string; role: string; active: boolean }>;
   storageByBusiness: Array<{ ownerId: string; businessName: string; usedBytes: number }>;
   recentActivityByBusiness: Array<{ ownerId: string; businessName: string; activityCount: number }>;
   recentJobCount: number;
@@ -151,6 +152,15 @@ export const adminService = {
         activeBusinesses: businesses.length,
         activePlans: planCounts,
         totalStorageBytes: Object.values(storageByOwner).reduce((sum, size) => sum + size, 0),
+        users: users
+          .map((user) => ({
+            uid: user.uid,
+            email: user.email || '',
+            name: user.name || '',
+            role: user.role || 'owner',
+            active: user.active !== false,
+          }))
+          .sort((left, right) => left.email.localeCompare(right.email)),
         storageByBusiness: Object.entries(storageByOwner)
           .map(([ownerId, usedBytes]) => ({
             ownerId,
@@ -195,6 +205,7 @@ export const adminService = {
         activeBusinesses: 0,
         activePlans: {},
         totalStorageBytes: 0,
+        users: [],
         storageByBusiness: [],
         recentActivityByBusiness: [],
         recentJobCount: 0,

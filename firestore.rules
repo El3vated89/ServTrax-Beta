@@ -22,11 +22,8 @@ service cloud.firestore {
 
     function isAdmin() {
       return isAuthenticated() &&
-        (
-          (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
-           get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role in ['admin', 'owner']) ||
-          (request.auth.token.email == "thomaslmiller89@gmail.com" && request.auth.token.email_verified == true)
-        );
+        request.auth.token.email == "thomaslmiller89@gmail.com" &&
+        request.auth.token.email_verified == true;
     }
     
     function ownerIdUnchanged() {
@@ -205,6 +202,23 @@ service cloud.firestore {
              (!('seasonal_defaults' in data) || data.seasonal_defaults is map);
     }
 
+    function isValidPlatformSettings(data) {
+      return (!('admin_email_lock' in data) || data.admin_email_lock is string) &&
+             (!('sms_provider' in data) || data.sms_provider in ['twilio']) &&
+             (!('email_provider' in data) || data.email_provider in ['sendgrid']) &&
+             (!('sms_enabled' in data) || data.sms_enabled is bool) &&
+             (!('email_enabled' in data) || data.email_enabled is bool) &&
+             (!('in_app_notifications_enabled' in data) || data.in_app_notifications_enabled is bool) &&
+             (!('twilio_account_sid' in data) || data.twilio_account_sid is string) &&
+             (!('twilio_messaging_service_sid' in data) || data.twilio_messaging_service_sid is string) &&
+             (!('twilio_from_number' in data) || data.twilio_from_number is string) &&
+             (!('sendgrid_from_email' in data) || data.sendgrid_from_email is string) &&
+             (!('sendgrid_from_name' in data) || data.sendgrid_from_name is string) &&
+             (!('secret_storage_status' in data) || data.secret_storage_status is string) &&
+             (!('created_at' in data) || data.created_at is timestamp) &&
+             (!('updated_at' in data) || data.updated_at is timestamp);
+    }
+
     function isValidRecurringPlan(data) {
       return data.ownerId is string &&
              data.customerId is string &&
@@ -312,6 +326,12 @@ service cloud.firestore {
       allow create: if isOwner(settingsId) && isValidBusinessSettings(request.resource.data);
       allow update: if (isOwner(settingsId) || isAdmin()) && isValidBusinessSettings(request.resource.data);
       allow delete: if isOwner(settingsId) || isAdmin();
+    }
+
+    match /platform_settings/{settingsId} {
+      allow read: if isAdmin();
+      allow create, update: if isAdmin() && isValidPlatformSettings(request.resource.data);
+      allow delete: if isAdmin();
     }
 
     match /recurring_plans/{planId} {

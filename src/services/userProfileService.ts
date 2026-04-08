@@ -33,14 +33,27 @@ export const userProfileService = {
   },
 
   subscribeToCurrentUserProfile: (callback: (profile: UserProfile | null) => void) => {
-    const user = auth.currentUser;
-    if (!user) return () => {};
+    let unsubscribeProfile = () => {};
 
-    return onSnapshot(doc(db, 'users', user.uid), (snapshot) => {
-      callback(snapshot.exists() ? ({ uid: user.uid, ...snapshot.data() } as UserProfile) : null);
-    }, (error) => {
-      handleFirestoreError(error, OperationType.GET, 'users');
+    const unsubscribeAuth = auth.onAuthStateChanged((user) => {
+      unsubscribeProfile();
+
+      if (!user) {
+        callback(null);
+        return;
+      }
+
+      unsubscribeProfile = onSnapshot(doc(db, 'users', user.uid), (snapshot) => {
+        callback(snapshot.exists() ? ({ uid: user.uid, ...snapshot.data() } as UserProfile) : null);
+      }, (error) => {
+        handleFirestoreError(error, OperationType.GET, 'users');
+      });
     });
+
+    return () => {
+      unsubscribeProfile();
+      unsubscribeAuth();
+    };
   },
 
   ensureCurrentUserProfile: async () => {
@@ -62,6 +75,14 @@ export const userProfileService = {
         created_at: serverTimestamp(),
         updated_at: serverTimestamp(),
       });
+    } else {
+      await updateDoc(docRef, {
+        email: user.email || docSnap.data().email || '',
+        name: user.displayName || docSnap.data().name || '',
+        role: user.email === PLATFORM_ADMIN_EMAIL ? 'admin' : (docSnap.data().role || 'owner'),
+        active: true,
+        updated_at: serverTimestamp(),
+      });
     }
   },
 
@@ -81,7 +102,7 @@ export const userProfileService = {
 
   isPlatformAdmin: (profile?: UserProfile | null) => {
     const email = auth.currentUser?.email || profile?.email || '';
-    return profile?.role === 'admin' || email === PLATFORM_ADMIN_EMAIL;
+    return email === PLATFORM_ADMIN_EMAIL;
   },
 
   getAllUsers: async (): Promise<UserProfile[]> => {
