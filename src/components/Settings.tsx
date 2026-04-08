@@ -54,11 +54,11 @@ type SettingsTabId = 'profile' | 'services' | 'system' | 'messaging' | 'storage'
 
 const settingsTabs = [
   {
-    id: 'services' as SettingsTabId,
-    label: 'Services',
-    icon: Snowflake,
-    title: 'Service Offerings',
-    description: 'Pricing, frequency, and seasonal service rules',
+    id: 'profile' as SettingsTabId,
+    label: 'Profile',
+    icon: Briefcase,
+    title: 'Business Profile',
+    description: 'Business identity, contact info, and base camp',
   },
   {
     id: 'system' as SettingsTabId,
@@ -82,25 +82,17 @@ const settingsTabs = [
     description: 'Temporary links and storage behavior',
   },
   {
-    id: 'profile' as SettingsTabId,
-    label: 'Profile',
-    icon: Briefcase,
-    title: 'Business Profile',
-    description: 'Business identity, contact info, and base camp',
+    id: 'services' as SettingsTabId,
+    label: 'Services',
+    icon: Snowflake,
+    title: 'Service Offerings',
+    description: 'Pricing, frequency, and seasonal service rules',
   },
 ];
 
 export default function Settings() {
   const [servicePlans, setServicePlans] = useState<ServicePlan[]>([]);
-  const [activeTab, setActiveTab] = useState<SettingsTabId>(() => {
-    if (typeof window !== 'undefined') {
-      const storedTab = window.localStorage.getItem('servtrax_settings_active_tab') as SettingsTabId | null;
-      if (storedTab && settingsTabs.some((tab) => tab.id === storedTab)) {
-        return storedTab;
-      }
-    }
-    return 'services';
-  });
+  const [activeTab, setActiveTab] = useState<SettingsTabId>('profile');
   const [isAddingPlan, setIsAddingPlan] = useState(false);
   const [editingPlanId, setEditingPlanId] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -183,12 +175,6 @@ export default function Settings() {
       unsubscribeAuth();
     };
   }, []);
-
-  useEffect(() => {
-    if (typeof window !== 'undefined') {
-      window.localStorage.setItem('servtrax_settings_active_tab', activeTab);
-    }
-  }, [activeTab]);
 
   const handleSaveSettings = async (e: React.FormEvent) => {
     e.preventDefault();
