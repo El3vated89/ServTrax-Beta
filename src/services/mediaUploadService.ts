@@ -2,6 +2,7 @@ import { getDownloadURL, ref, uploadString } from 'firebase/storage';
 import { storage } from '../firebase';
 
 const DATA_URL_PREFIX = 'data:image/';
+const DEFAULT_INLINE_FALLBACK_LIMIT_BYTES = 450 * 1024;
 
 const createUniqueId = () => {
   if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) {
@@ -24,6 +25,10 @@ const getExtensionFromContentType = (contentType: string) => {
 };
 
 const normalizeFolder = (folder: string) => folder.replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
+const estimateDataUrlBytes = (dataUrl: string) => {
+  const base64Payload = dataUrl.split(',')[1] || '';
+  return Math.ceil((base64Payload.length * 3) / 4);
+};
 
 export const mediaUploadService = {
   isDataUrl: (value?: string | null) => typeof value === 'string' && value.startsWith(DATA_URL_PREFIX),
@@ -34,18 +39,23 @@ export const mediaUploadService = {
     dataUrl,
     contentType,
     fileNamePrefix = 'image',
+    allowInlineFallback = false,
+    maxInlineFallbackBytes = DEFAULT_INLINE_FALLBACK_LIMIT_BYTES,
   }: {
     ownerId: string;
     folder: string;
     dataUrl: string;
     contentType?: string;
     fileNamePrefix?: string;
+    allowInlineFallback?: boolean;
+    maxInlineFallbackBytes?: number;
   }) => {
     if (!mediaUploadService.isDataUrl(dataUrl)) {
       return {
         downloadUrl: dataUrl,
         storagePath: '',
         contentType: contentType || '',
+        source: 'passthrough' as const,
       };
     }
 
@@ -65,14 +75,22 @@ export const mediaUploadService = {
         downloadUrl,
         storagePath,
         contentType: resolvedContentType,
+        source: 'storage' as const,
       };
     } catch (error) {
-      console.error('Error uploading image to Firebase Storage, falling back to inline data URL:', error);
-      return {
-        downloadUrl: dataUrl,
-        storagePath: '',
-        contentType: resolvedContentType,
-      };
+      const estimatedBytes = estimateDataUrlBytes(dataUrl);
+      if (allowInlineFallback && estimatedBytes <= maxInlineFallbackBytes) {
+        console.warn('Error uploading image to Firebase Storage, using inline fallback:', error);
+        return {
+          downloadUrl: dataUrl,
+          storagePath: '',
+          contentType: resolvedContentType,
+          source: 'inline_fallback' as const,
+        };
+      }
+
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      throw new Error(`Unable to upload image for ${storagePath}: ${errorMessage}`);
     }
   },
 
@@ -82,12 +100,16 @@ export const mediaUploadService = {
     dataUrls,
     contentType,
     fileNamePrefix = 'image',
+    allowInlineFallback = false,
+    maxInlineFallbackBytes = DEFAULT_INLINE_FALLBACK_LIMIT_BYTES,
   }: {
     ownerId: string;
     folder: string;
     dataUrls: string[];
     contentType?: string;
     fileNamePrefix?: string;
+    allowInlineFallback?: boolean;
+    maxInlineFallbackBytes?: number;
   }) => {
     return Promise.all(
       (dataUrls || []).map((dataUrl, index) =>
@@ -97,6 +119,8 @@ export const mediaUploadService = {
           dataUrl,
           contentType,
           fileNamePrefix: `${fileNamePrefix}-${index + 1}`,
+          allowInlineFallback,
+          maxInlineFallbackBytes,
         })
       )
     );

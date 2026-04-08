@@ -39,15 +39,33 @@ export default function App() {
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
       setUser(currentUser);
-      
-      if (currentUser) {
-        await userProfileService.ensureCurrentUserProfile();
-        await planConfigService.hydrateFramework();
-        await servicePlanService.initializeDefaultServices();
-        await usageTrackingService.syncStorageUsageForCurrentUser();
+
+      try {
+        if (currentUser) {
+          const startupTasks = await Promise.allSettled([
+            userProfileService.ensureCurrentUserProfile(),
+            planConfigService.hydrateFramework(),
+            servicePlanService.initializeDefaultServices(),
+            usageTrackingService.syncStorageUsageForCurrentUser(),
+          ]);
+
+          startupTasks.forEach((result, index) => {
+            if (result.status === 'rejected') {
+              const taskNames = [
+                'ensureCurrentUserProfile',
+                'hydrateFramework',
+                'initializeDefaultServices',
+                'syncStorageUsageForCurrentUser',
+              ];
+              console.error(`Startup task failed: ${taskNames[index]}`, result.reason);
+            }
+          });
+        }
+      } catch (error) {
+        console.error('Unhandled app startup error:', error);
+      } finally {
+        setLoading(false);
       }
-      
-      setLoading(false);
     });
 
     return () => unsubscribe();

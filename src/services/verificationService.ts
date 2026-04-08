@@ -70,6 +70,7 @@ export interface VerificationRecord {
 }
 
 const COLLECTION_NAME = 'verification_records';
+const INLINE_VERIFICATION_FALLBACK_LIMIT_BYTES = 450 * 1024;
 
 const resolveVerificationFolder = (record: Partial<VerificationRecord>) => {
   if (record.jobId) return `verification_records/jobs/${record.jobId}`;
@@ -87,6 +88,8 @@ const normalizeVerificationPhotos = async (userId: string, record: Partial<Verif
       folder,
       dataUrls: record.photo_urls,
       fileNamePrefix: 'proof',
+      allowInlineFallback: true,
+      maxInlineFallbackBytes: INLINE_VERIFICATION_FALLBACK_LIMIT_BYTES,
     });
     nextRecord.photo_urls = uploads.map((entry) => entry.downloadUrl);
 
@@ -99,6 +102,8 @@ const normalizeVerificationPhotos = async (userId: string, record: Partial<Verif
       folder,
       dataUrl: record.photo_url,
       fileNamePrefix: 'proof',
+      allowInlineFallback: true,
+      maxInlineFallbackBytes: INLINE_VERIFICATION_FALLBACK_LIMIT_BYTES,
     });
     nextRecord.photo_url = upload.downloadUrl;
   }

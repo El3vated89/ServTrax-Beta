@@ -206,6 +206,9 @@ export const billingService = {
   },
 
   updateBillingRecord: async (id: string, updates: Partial<BillingRecord>) => {
+    const user = await waitForCurrentUser();
+    if (!user) throw new Error('User not authenticated');
+
     try {
       await updateDoc(doc(db, BILLING_COLLECTION, id), {
         ...updates,

@@ -1,0 +1,33 @@
+name: Deploy Firebase Rules
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - firestore.rules
+      - storage.rules
+      - firebase.json
+      - .firebaserc
+      - .github/workflows/firebase-rules.yml
+  workflow_dispatch:
+
+jobs:
+  deploy-firebase-rules:
+    if: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_GEN_LANG_CLIENT_0817756399 != '' }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_GEN_LANG_CLIENT_0817756399 }}
+
+      - run: npm install -g firebase-tools
+
+      - run: firebase deploy --project gen-lang-client-0817756399 --only firestore:ai-studio-381be7b8-df99-4213-a6da-cbb27a730f65,storage --non-interactive

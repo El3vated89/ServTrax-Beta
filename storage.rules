@@ -1,0 +1,23 @@
+rules_version = '2';
+
+service firebase.storage {
+  match /b/{bucket}/o {
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(ownerId) {
+      return isAuthenticated() && request.auth.uid == ownerId;
+    }
+
+    function isAdmin() {
+      return isAuthenticated() &&
+        request.auth.token.email == "thomaslmiller89@gmail.com" &&
+        request.auth.token.email_verified == true;
+    }
+
+    match /uploads/{ownerId}/{allPaths=**} {
+      allow read, write, delete: if isOwner(ownerId) || isAdmin();
+    }
+  }
+}

@@ -58,6 +58,7 @@ const COLLECTION_NAME = 'bug_reports';
 
 const MAX_SCREENSHOT_WIDTH = 1280;
 const SCREENSHOT_QUALITY = 0.72;
+const INLINE_BUG_REPORT_FALLBACK_LIMIT_BYTES = 300 * 1024;
 
 const loadImage = (file: File) =>
   new Promise<HTMLImageElement>((resolve, reject) => {
@@ -105,15 +106,29 @@ export const bugReportService = {
     if (!user) throw new Error('User not authenticated');
 
     try {
-      const screenshotUpload = input.screenshot_data_url
-        ? await mediaUploadService.uploadImageDataUrl({
+      let screenshotUpload = null;
+      let screenshotUploadStatus: 'not_provided' | 'saved' | 'skipped_after_upload_failure' = input.screenshot_data_url
+        ? 'saved'
+        : 'not_provided';
+      let screenshotUploadError = '';
+
+      if (input.screenshot_data_url) {
+        try {
+          screenshotUpload = await mediaUploadService.uploadImageDataUrl({
             ownerId: user.uid,
             folder: 'bug_reports',
             dataUrl: input.screenshot_data_url,
             contentType: input.screenshot_content_type,
             fileNamePrefix: 'report',
-          })
-        : null;
+            allowInlineFallback: true,
+            maxInlineFallbackBytes: INLINE_BUG_REPORT_FALLBACK_LIMIT_BYTES,
+          });
+        } catch (error) {
+          screenshotUploadStatus = 'skipped_after_upload_failure';
+          screenshotUploadError = error instanceof Error ? error.message : String(error);
+          console.error('Bug report screenshot upload failed, saving report without screenshot:', error);
+        }
+      }
 
       return await addDoc(collection(db, COLLECTION_NAME), {
         ownerId: user.uid,
@@ -127,6 +142,8 @@ export const bugReportService = {
         current_url: input.current_url,
         screenshot_data_url: screenshotUpload?.downloadUrl || '',
         screenshot_content_type: screenshotUpload?.contentType || input.screenshot_content_type || '',
+        screenshot_upload_status: screenshotUploadStatus,
+        screenshot_upload_error: screenshotUploadError,
         browser_info: typeof navigator !== 'undefined' ? navigator.userAgent : '',
         created_at: serverTimestamp(),
         updated_at: serverTimestamp(),
