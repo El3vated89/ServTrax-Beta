@@ -10,6 +10,7 @@ export default function Messaging() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [formData, setFormData] = useState({ name: '', content: '' });
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
 
   useEffect(() => {
@@ -22,16 +23,25 @@ export default function Messaging() {
     return () => unsubscribe();
   }, []);
 
+  useEffect(() => {
+    if (!successMessage) return undefined;
+    const timeout = window.setTimeout(() => setSuccessMessage(null), 3000);
+    return () => window.clearTimeout(timeout);
+  }, [successMessage]);
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMessage(null);
+    setSuccessMessage(null);
     try {
       if (editingId) {
         await templateService.updateTemplate(editingId, formData);
         setEditingId(null);
+        setSuccessMessage('Template updated successfully.');
       } else {
         await templateService.addTemplate(formData);
         setIsAdding(false);
+        setSuccessMessage('Template saved successfully.');
       }
       setFormData({ name: '', content: '' });
     } catch (error: any) {
@@ -50,13 +60,16 @@ export default function Messaging() {
     setFormData({ name: template.name, content: template.content });
     setIsAdding(true);
     setErrorMessage(null);
+    setSuccessMessage(null);
   };
 
   const handleDelete = async (id: string) => {
     setErrorMessage(null);
+    setSuccessMessage(null);
     try {
       await templateService.deleteTemplate(id);
       setConfirmDeleteId(null);
+      setSuccessMessage('Template deleted successfully.');
     } catch (error: any) {
       console.error('Error deleting template:', error);
       let msg = 'Failed to delete template.';
@@ -94,6 +107,13 @@ export default function Messaging() {
         <div className="mb-6 p-4 bg-red-50 border border-red-100 rounded-2xl flex items-center gap-3 text-red-700">
           <Info className="h-5 w-5 shrink-0" />
           <p className="text-sm font-bold">{errorMessage}</p>
+        </div>
+      )}
+
+      {successMessage && (
+        <div className="mb-6 p-4 bg-green-50 border border-green-100 rounded-2xl flex items-center gap-3 text-green-700">
+          <Info className="h-5 w-5 shrink-0" />
+          <p className="text-sm font-bold">{successMessage}</p>
         </div>
       )}
 
@@ -205,6 +225,18 @@ export default function Messaging() {
             </div>
             <h3 className="text-lg font-black text-gray-900">No templates yet</h3>
             <p className="text-sm font-bold text-gray-400 uppercase tracking-widest mt-1">Create your first messaging template</p>
+            <button
+              onClick={() => {
+                setIsAdding(true);
+                setEditingId(null);
+                setFormData({ name: '', content: '' });
+                setErrorMessage(null);
+                setSuccessMessage(null);
+              }}
+              className="mt-6 bg-blue-600 text-white px-5 py-3 rounded-2xl text-xs font-black uppercase tracking-widest hover:bg-blue-700 transition-all"
+            >
+              Create First Template
+            </button>
           </div>
         ) : (
           templates.map((template) => (

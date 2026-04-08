@@ -4,7 +4,7 @@ import { RouteTemplate, RouteStop } from '../modules/routes/types';
 import { routeService } from './RouteService';
 
 const DEFAULT_MAX_STOPS_PER_RUN = 15;
-const ABSOLUTE_MAX_STOPS_PER_RUN = 30;
+const ABSOLUTE_MAX_STOPS_PER_RUN = 20;
 
 const startOfDay = (value: Date) => {
   const next = new Date(value);
@@ -32,14 +32,25 @@ const deriveJobCity = (job: Job) => {
   return normalizeCity(parts[1]);
 };
 
-const buildStableStopKey = (job: Job) => job.customerId || job.id || `${job.customer_name_snapshot}-${job.address_snapshot}`;
+const buildStableStopKey = (job: Job) => job.id || job.customerId || `${job.customer_name_snapshot}-${job.address_snapshot}`;
+const buildStopKeyFromRouteStop = (stop: RouteStop) => stop.job_id || stop.customer_id || `${stop.customer_name_snapshot}-${stop.address_snapshot}`;
+
+const deriveDueState = (job: Job, routeDate: Date): RouteStop['due_state'] => {
+  if (job.status === 'delayed') return 'delayed';
+
+  const scheduledDate = toDate(job.scheduled_date || job.next_due_date);
+  if (!scheduledDate) return 'due';
+
+  return startOfDay(scheduledDate).getTime() < startOfDay(routeDate).getTime() ? 'overdue' : 'due';
+};
 
 const buildStopFromJob = (
   routeId: string,
   job: Job,
   stopOrder: number,
   existingStop?: RouteStop,
-  baseCamp?: { lat: number; lng: number }
+  baseCamp?: { lat: number; lng: number },
+  routeDate: Date = new Date()
 ): Omit<RouteStop, 'id' | 'created_at' | 'updated_at'> => ({
   route_id: routeId,
   job_id: job.id,
@@ -48,13 +59,7 @@ const buildStopFromJob = (
   manual_order: stopOrder,
   optimized_order: stopOrder,
   status: 'pending',
-  due_state: job.status === 'delayed'
-    ? 'delayed'
-    : (() => {
-        const scheduledDate = toDate(job.scheduled_date || job.next_due_date);
-        if (!scheduledDate) return 'due';
-        return startOfDay(scheduledDate).getTime() < startOfDay(new Date()).getTime() ? 'overdue' : 'due';
-      })(),
+  due_state: deriveDueState(job, routeDate),
   city_snapshot: deriveJobCity(job),
   address_snapshot: job.address_snapshot || '',
   lat_snapshot: existingStop?.lat_snapshot || baseCamp?.lat || 0,
@@ -69,10 +74,21 @@ const buildStopFromJob = (
 });
 
 export const routePlanningService = {
+  getMaxStopsPerRun: (value?: number) => Math.min(ABSOLUTE_MAX_STOPS_PER_RUN, Math.max(1, value || DEFAULT_MAX_STOPS_PER_RUN)),
+
   isTemplateActiveForDate: (template: RouteTemplate, date: Date) => {
     if (template.preferred_day == null) return true;
     return date.getDay() === template.preferred_day;
   },
+
+  buildRouteStopFromJob: (
+    routeId: string,
+    job: Job,
+    stopOrder: number,
+    baseCamp: { lat: number; lng: number },
+    routeDate: Date,
+    existingStop?: RouteStop
+  ) => buildStopFromJob(routeId, job, stopOrder, existingStop, baseCamp, routeDate),
 
   getEligibleJobsForTemplate: (jobs: Job[], template: RouteTemplate, date: Date) => {
     const selectedDay = endOfDay(date).getTime();
@@ -109,7 +125,7 @@ export const routePlanningService = {
     if (!template.id) return null;
 
     const eligibleJobs = routePlanningService.getEligibleJobsForTemplate(jobs, template, date);
-    const maxStops = Math.min(ABSOLUTE_MAX_STOPS_PER_RUN, Math.max(1, template.max_stops_per_run || DEFAULT_MAX_STOPS_PER_RUN));
+    const maxStops = routePlanningService.getMaxStopsPerRun(template.max_stops_per_run);
     const chunks = eligibleJobs.reduce<Job[][]>((groups, job) => {
       const currentGroup = groups[groups.length - 1];
       if (!currentGroup || currentGroup.length >= maxStops) {
@@ -136,12 +152,12 @@ export const routePlanningService = {
 
       const runJobs = chunks[chunkIndex];
       const existingStops = await routeService.getRouteStops(run.id);
-      const existingByKey = new Map(existingStops.map((stop) => [stop.customer_id || stop.job_id || `${stop.customer_name_snapshot}-${stop.address_snapshot}`, stop]));
+      const existingByKey = new Map(existingStops.map((stop) => [buildStopKeyFromRouteStop(stop), stop]));
       const desiredStops = runJobs.map((job, index) => {
         const existingStop = existingByKey.get(buildStableStopKey(job));
         return {
           existingStop,
-          stopData: buildStopFromJob(run.id!, job, index, existingStop, baseCamp),
+          stopData: buildStopFromJob(run.id!, job, index, existingStop, baseCamp, date),
         };
       });
       const desiredJobIds = new Set(runJobs.map((job) => job.id).filter(Boolean));

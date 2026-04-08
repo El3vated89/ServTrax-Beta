@@ -288,12 +288,44 @@ export default function RoutesManagementPage() {
     const query = searchQuery.trim().toLowerCase();
     return eligibleJobs.filter((job) => {
       const matchesSearch = !query ||
-        job.customer_name_snapshot.toLowerCase().includes(query) ||
-        job.service_snapshot.toLowerCase().includes(query) ||
-        job.address_snapshot.toLowerCase().includes(query);
+        (job.customer_name_snapshot || '').toLowerCase().includes(query) ||
+        (job.service_snapshot || '').toLowerCase().includes(query) ||
+        (job.address_snapshot || '').toLowerCase().includes(query);
       return matchesSearch;
     });
   }, [eligibleJobs, searchQuery]);
+
+  const runLookup = useMemo(
+    () => new Map(currentRuns.filter((route) => route.id).map((route) => [route.id!, route])),
+    [currentRuns]
+  );
+
+  const assignedStopByJobId = useMemo(() => {
+    const map = new Map<string, RouteStop>();
+    Object.values(runStopsByRoute)
+      .flat()
+      .forEach((stop) => {
+        if (stop.job_id) {
+          map.set(stop.job_id, stop);
+        }
+      });
+    return map;
+  }, [runStopsByRoute]);
+
+  const assignedRunByJobId = useMemo(() => {
+    const map = new Map<string, Route>();
+    Object.entries(runStopsByRoute).forEach(([routeId, stops]) => {
+      const route = runLookup.get(routeId);
+      if (!route) return;
+
+      stops.forEach((stop) => {
+        if (stop.job_id) {
+          map.set(stop.job_id, route);
+        }
+      });
+    });
+    return map;
+  }, [runLookup, runStopsByRoute]);
 
   const queueStats = useMemo(() => ({
     due: eligibleJobs.filter((job) => getJobTimingState(job, selectedDate) === 'due').length,
@@ -533,6 +565,46 @@ export default function RoutesManagementPage() {
         selectedRouteDate: selectedDate.toISOString(),
       },
     });
+  };
+
+  const handleAddJobToRun = async (job: Job) => {
+    if (!activeRun?.id || !job.id) {
+      setErrorMessage('Generate a route run first, then place this job into it.');
+      return;
+    }
+
+    if (assignedStopByJobId.has(job.id)) {
+      setErrorMessage('This job is already placed on a route run.');
+      return;
+    }
+
+    const maxStops = routePlanningService.getMaxStopsPerRun(activeRun.route_capacity || selectedTemplate?.max_stops_per_run);
+    if (activeStops.length >= maxStops) {
+      setErrorMessage(`This run is full at ${maxStops} stops. Use another same-day run first.`);
+      return;
+    }
+
+    try {
+      const stopData = routePlanningService.buildRouteStopFromJob(
+        activeRun.id,
+        job,
+        activeStops.length,
+        baseCamp,
+        selectedDate
+      );
+
+      const stopRef = await routeService.addRouteStop(stopData);
+      await routeActivityService.addActivity({
+        route: activeRun,
+        eventType: 'stop_added',
+        stop: stopRef?.id ? { ...stopData, id: stopRef.id } as RouteStop : undefined,
+        summary: `Added ${job.customer_name_snapshot} to ${activeRun.assigned_team_name_snapshot || activeRun.route_run_label || 'this run'}.`,
+      });
+      setSaveMessage('Job added to the current route run');
+    } catch (error) {
+      console.error('Error adding job to route run:', error);
+      setErrorMessage('Failed to add this job to the current route run.');
+    }
   };
 
   return (
@@ -835,6 +907,39 @@ export default function RoutesManagementPage() {
                     </div>
                   </button>
                 </div>
+
+                <div className="grid grid-cols-2 xl:grid-cols-4 gap-3 mt-4">
+                  <div className="rounded-3xl border border-gray-100 bg-gray-50 p-4">
+                    <p className="text-[10px] font-black uppercase tracking-widest text-gray-400">Template</p>
+                    <p className="text-sm font-black text-gray-900 mt-2">Reusable</p>
+                    <p className="text-[10px] font-black uppercase tracking-widest text-gray-400 mt-2">
+                      Generates new runs from work that is due
+                    </p>
+                  </div>
+                  <div className="rounded-3xl border border-gray-100 bg-gray-50 p-4">
+                    <p className="text-[10px] font-black uppercase tracking-widest text-gray-400">Runs For Date</p>
+                    <p className="text-sm font-black text-gray-900 mt-2">{currentRuns.length || 0}</p>
+                    <p className="text-[10px] font-black uppercase tracking-widest text-gray-400 mt-2">
+                      Same-day runs can split for separate crews
+                    </p>
+                  </div>
+                  <div className="rounded-3xl border border-gray-100 bg-gray-50 p-4">
+                    <p className="text-[10px] font-black uppercase tracking-widest text-gray-400">Needs Placement</p>
+                    <p className="text-sm font-black text-gray-900 mt-2">{queueStats.unassigned}</p>
+                    <p className="text-[10px] font-black uppercase tracking-widest text-gray-400 mt-2">
+                      Due work not yet assigned to a run
+                    </p>
+                  </div>
+                  <div className="rounded-3xl border border-gray-100 bg-gray-50 p-4">
+                    <p className="text-[10px] font-black uppercase tracking-widest text-gray-400">Max Stops / Run</p>
+                    <p className="text-sm font-black text-gray-900 mt-2">
+                      {routePlanningService.getMaxStopsPerRun(selectedTemplate.max_stops_per_run)}
+                    </p>
+                    <p className="text-[10px] font-black uppercase tracking-widest text-gray-400 mt-2">
+                      Auto-splits into extra runs after this
+                    </p>
+                  </div>
+                </div>
               </div>
 
               <div className="grid grid-cols-1 2xl:grid-cols-[minmax(0,1fr)_420px] gap-6 items-start">
@@ -885,7 +990,9 @@ export default function RoutesManagementPage() {
                           <div className="grid grid-cols-1 gap-3">
                             {section.jobs.map((job) => {
                               const timingState = getJobTimingState(job, selectedDate);
-                              const isAssigned = assignedJobIds.has(job.id);
+                              const isAssigned = Boolean(job.id && assignedJobIds.has(job.id));
+                              const assignedRun = job.id ? assignedRunByJobId.get(job.id) : null;
+                              const isOnActiveRun = Boolean(job.id && activeRun?.id && assignedStopByJobId.get(job.id)?.route_id === activeRun.id);
 
                               return (
                                 <div
@@ -916,9 +1023,51 @@ export default function RoutesManagementPage() {
                                       <span className={`px-2 py-1 rounded-full text-[10px] font-black uppercase tracking-widest ${
                                         isAssigned ? 'bg-green-100 text-green-700' : 'bg-white text-gray-500 border border-gray-200'
                                       }`}>
-                                        {isAssigned ? 'On Run' : 'Needs Placement'}
+                                        {isAssigned ? 'Placed' : 'Needs Placement'}
                                       </span>
                                     </div>
+                                  </div>
+
+                                  <div className="mt-4 flex flex-wrap items-center gap-3">
+                                    {assignedRun ? (
+                                      <>
+                                        <button
+                                          onClick={() => {
+                                            setActiveRunId(assignedRun.id || null);
+                                            if (assignedRun.route_date) {
+                                              setSelectedDate(toDate(assignedRun.route_date));
+                                            }
+                                          }}
+                                          className="px-4 py-2 bg-white border border-gray-200 text-gray-700 rounded-2xl text-[10px] font-black uppercase tracking-widest hover:border-blue-300 hover:bg-blue-50 transition-all"
+                                        >
+                                          {isOnActiveRun
+                                            ? 'On Current Run'
+                                            : `Open ${assignedRun.assigned_team_name_snapshot || assignedRun.route_run_label || 'Assigned Run'}`}
+                                        </button>
+                                        <p className="text-[10px] font-black uppercase tracking-widest text-gray-400">
+                                          {assignedRun.route_run_label || 'Run 1'} • {assignedRun.status.replace('_', ' ')}
+                                        </p>
+                                      </>
+                                    ) : (
+                                      <>
+                                        <button
+                                          onClick={() => handleAddJobToRun(job)}
+                                          disabled={!activeRun}
+                                          className={`px-4 py-2 rounded-2xl text-[10px] font-black uppercase tracking-widest transition-all ${
+                                            !activeRun
+                                              ? 'bg-gray-200 text-gray-400 cursor-not-allowed'
+                                              : 'bg-blue-600 text-white hover:bg-blue-700 shadow-lg shadow-blue-100'
+                                          }`}
+                                        >
+                                          {activeRun ? 'Add To Current Run' : 'Generate Run First'}
+                                        </button>
+                                        <p className="text-[10px] font-black uppercase tracking-widest text-gray-400">
+                                          {activeRun
+                                            ? `${activeStops.length}/${routePlanningService.getMaxStopsPerRun(activeRun.route_capacity || selectedTemplate.max_stops_per_run)} stops used`
+                                            : 'No active run selected'}
+                                        </p>
+                                      </>
+                                    )}
                                   </div>
                                 </div>
                               );
@@ -1011,7 +1160,7 @@ export default function RoutesManagementPage() {
                           <p className={`text-[10px] font-black uppercase tracking-widest mt-1 ${
                             route.id === activeRun?.id ? 'text-blue-100' : 'text-gray-400'
                           }`}>
-                            Capacity {route.route_capacity || selectedTemplate.max_stops_per_run || 15}
+                            {(runStopsByRoute[route.id || ''] || []).length}/{routePlanningService.getMaxStopsPerRun(route.route_capacity || selectedTemplate.max_stops_per_run)} stops
                           </p>
                         </button>
                       ))}
@@ -1277,7 +1426,7 @@ export default function RoutesManagementPage() {
                   <input
                     type="number"
                     min="1"
-                    max="30"
+                    max="20"
                     value={templateForm.max_stops_per_run}
                     onChange={(event) => setTemplateForm((prev) => ({ ...prev, max_stops_per_run: event.target.value }))}
                     className="w-full px-5 py-4 bg-gray-50 rounded-2xl border-none text-sm font-bold text-gray-900 placeholder:text-gray-300 focus:ring-2 focus:ring-blue-500 outline-none"

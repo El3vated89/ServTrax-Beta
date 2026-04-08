@@ -1,12 +1,13 @@
 import React, { useState, useEffect } from 'react';
 import { Plus, X, Settings, Trash2, Wrench, Calendar, FileText } from 'lucide-react';
 import { equipmentService, Equipment } from '../services/equipmentService';
-import { customerService, Customer } from '../services/customerService';
 
 export default function Equip() {
   const [equipmentList, setEquipmentList] = useState<Equipment[]>([]);
   const [isAdding, setIsAdding] = useState(false);
   const [editingEquipment, setEditingEquipment] = useState<Equipment | null>(null);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
   // Form state
   const [name, setName] = useState('');
@@ -30,8 +31,16 @@ export default function Equip() {
     };
   }, []);
 
+  useEffect(() => {
+    if (!successMessage) return undefined;
+    const timeout = window.setTimeout(() => setSuccessMessage(null), 3000);
+    return () => window.clearTimeout(timeout);
+  }, [successMessage]);
+
   const handleAddEquipment = async (e: React.FormEvent) => {
     e.preventDefault();
+    setErrorMessage(null);
+    setSuccessMessage(null);
     try {
       if (editingEquipment && editingEquipment.id) {
         await equipmentService.updateEquipment(editingEquipment.id, {
@@ -43,6 +52,7 @@ export default function Equip() {
           notes
         });
         setEditingEquipment(null);
+        setSuccessMessage('Equipment updated successfully.');
       } else {
         await equipmentService.addEquipment({
           name,
@@ -54,16 +64,20 @@ export default function Equip() {
           service_history: []
         });
         setIsAdding(false);
+        setSuccessMessage('Equipment saved successfully.');
       }
       resetForm();
     } catch (error) {
       console.error('Error saving equipment:', error);
+      setErrorMessage('Failed to save equipment.');
     }
   };
 
   const handleAddServiceRecord = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!editingEquipment || !editingEquipment.id) return;
+    setErrorMessage(null);
+    setSuccessMessage(null);
     
     try {
       const newHistory = [
@@ -83,8 +97,10 @@ export default function Equip() {
       setIsAddingService(false);
       setServiceDate('');
       setServiceDescription('');
+      setSuccessMessage('Service record added successfully.');
     } catch (error) {
       console.error('Error adding service record:', error);
+      setErrorMessage('Failed to save the service record.');
     }
   };
 
@@ -96,11 +112,15 @@ export default function Equip() {
 
   const confirmDelete = async () => {
     if (!confirmDeleteId) return;
+    setErrorMessage(null);
+    setSuccessMessage(null);
     try {
       await equipmentService.deleteEquipment(confirmDeleteId);
       setConfirmDeleteId(null);
+      setSuccessMessage('Equipment deleted successfully.');
     } catch (error) {
       console.error('Error deleting equipment:', error);
+      setErrorMessage('Failed to delete equipment.');
     }
   };
 
@@ -138,6 +158,18 @@ export default function Equip() {
           <p className="text-sm font-bold text-gray-400 uppercase tracking-widest">Track and service your business equipment</p>
         </div>
       </header>
+
+      {errorMessage && (
+        <div className="mx-2 bg-red-50 border border-red-100 p-4 rounded-2xl">
+          <p className="text-sm font-bold text-red-700">{errorMessage}</p>
+        </div>
+      )}
+
+      {successMessage && (
+        <div className="mx-2 bg-green-50 border border-green-100 p-4 rounded-2xl">
+          <p className="text-sm font-bold text-green-700">{successMessage}</p>
+        </div>
+      )}
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         {equipmentList.length === 0 ? (

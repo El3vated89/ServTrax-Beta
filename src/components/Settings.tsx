@@ -94,9 +94,8 @@ export default function Settings() {
       setServicePlans(data);
     });
 
-    const loadBusinessProfile = async () => {
-      if (!auth.currentUser) return;
-      const docRef = doc(db, 'business_profiles', auth.currentUser.uid);
+    const loadBusinessProfile = async (userId: string) => {
+      const docRef = doc(db, 'business_profiles', userId);
       const docSnap = await getDoc(docRef);
       if (docSnap.exists()) {
         const data = docSnap.data();
@@ -123,10 +122,16 @@ export default function Settings() {
       setAllowNoExpiration(settingsData.storage_settings.allow_no_expiration || false);
     };
 
-    loadBusinessProfile();
+    const unsubscribeAuth = auth.onAuthStateChanged((user) => {
+      if (!user) return;
+      loadBusinessProfile(user.uid);
+    });
     loadSettings();
 
-    return () => unsubscribe();
+    return () => {
+      unsubscribe();
+      unsubscribeAuth();
+    };
   }, []);
 
   const handleSaveSettings = async (e: React.FormEvent) => {
