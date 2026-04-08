@@ -16,6 +16,7 @@ import { waitForCurrentUser } from './authSessionService';
 import { handleFirestoreError, OperationType } from './verificationService';
 import { mediaUploadService } from './mediaUploadService';
 import { localFallbackStore } from './localFallbackStore';
+import { SaveDebugContext, savePipelineService } from './savePipelineService';
 
 export type BugReportCategory =
   | 'ui_layout'
@@ -167,8 +168,11 @@ export const bugReportService = {
     return canvas.toDataURL('image/jpeg', SCREENSHOT_QUALITY);
   },
 
-  createBugReport: async (input: CreateBugReportInput) => {
-    const user = await waitForCurrentUser();
+  createBugReport: async (input: CreateBugReportInput, debugContext?: SaveDebugContext) => {
+    if (debugContext) {
+      savePipelineService.log(debugContext, 'service_called', 'bugReportService.createBugReport');
+    }
+    const user = await waitForCurrentUser({ debugContext });
     if (!user) throw new Error('User not authenticated');
 
     const buildReportPayload = (screenshotUpload: { downloadUrl: string; contentType: string } | null, screenshotUploadStatus: 'not_provided' | 'saved' | 'skipped_after_upload_failure', screenshotUploadError: string) => ({
@@ -205,6 +209,7 @@ export const bugReportService = {
             fileNamePrefix: 'report',
             allowInlineFallback: true,
             maxInlineFallbackBytes: INLINE_BUG_REPORT_FALLBACK_LIMIT_BYTES,
+            debugContext,
           });
         } catch (error) {
           screenshotUploadStatus = 'skipped_after_upload_failure';
@@ -214,32 +219,68 @@ export const bugReportService = {
       }
 
       const reportPayload = buildReportPayload(screenshotUpload, screenshotUploadStatus, screenshotUploadError);
+      if (debugContext) {
+        savePipelineService.log(debugContext, 'payload_built', {
+          category: reportPayload.category,
+          hasScreenshot: !!reportPayload.screenshot_data_url,
+        });
+      }
 
       try {
-        return await addDoc(collection(db, COLLECTION_NAME), {
-          ...reportPayload,
-          created_at: serverTimestamp(),
-          updated_at: serverTimestamp(),
-        });
+        if (debugContext) {
+          savePipelineService.log(debugContext, 'db_write_attempted', COLLECTION_NAME);
+        }
+        const response = await savePipelineService.withTimeout(
+          addDoc(collection(db, COLLECTION_NAME), {
+            ...reportPayload,
+            created_at: serverTimestamp(),
+            updated_at: serverTimestamp(),
+          }),
+          {
+            timeoutMessage: 'Bug report save timed out while writing to the database.',
+            debugContext,
+          }
+        );
+        if (debugContext) {
+          savePipelineService.log(debugContext, 'db_write_succeeded', response.id);
+        }
+        return response;
       } catch (primaryError) {
+        if (debugContext) {
+          savePipelineService.logError(debugContext, 'db_write_failed', primaryError);
+          savePipelineService.log(debugContext, 'fallback_write_attempted', 'users/{uid}.bug_report_fallbacks');
+        }
         console.error('Primary bug report save failed, falling back to user profile storage:', primaryError);
         const fallbackId = createFallbackId();
         const timestamp = createClientTimestamp();
         try {
-          await updateDoc(doc(db, 'users', user.uid), {
-            [FALLBACK_USER_FIELD]: arrayUnion({
-              fallback_id: fallbackId,
-              ...reportPayload,
-              created_at: timestamp,
-              updated_at: timestamp,
+          await savePipelineService.withTimeout(
+            updateDoc(doc(db, 'users', user.uid), {
+              [FALLBACK_USER_FIELD]: arrayUnion({
+                fallback_id: fallbackId,
+                ...reportPayload,
+                created_at: timestamp,
+                updated_at: timestamp,
+              }),
+              updated_at: serverTimestamp(),
             }),
-            updated_at: serverTimestamp(),
-          });
+            {
+              timeoutMessage: 'Bug report fallback save timed out while writing to the user document.',
+              debugContext,
+            }
+          );
+
+          if (debugContext) {
+            savePipelineService.log(debugContext, 'fallback_write_succeeded', `fallback:${user.uid}:${fallbackId}`);
+          }
 
           return {
             id: `fallback:${user.uid}:${fallbackId}`,
           };
         } catch (fallbackError) {
+          if (debugContext) {
+            savePipelineService.logError(debugContext, 'fallback_write_failed', fallbackError);
+          }
           console.error('User-doc bug report fallback failed, saving locally instead:', fallbackError);
           const localId = localFallbackStore.upsertRecord(LOCAL_FALLBACK_NAMESPACE, user.uid, {
             id: localFallbackStore.createLocalId(LOCAL_FALLBACK_NAMESPACE),
@@ -247,6 +288,10 @@ export const bugReportService = {
             created_at: timestamp,
             updated_at: timestamp,
           });
+
+          if (debugContext) {
+            savePipelineService.log(debugContext, 'fallback_write_succeeded', localId);
+          }
 
           return {
             id: localId,

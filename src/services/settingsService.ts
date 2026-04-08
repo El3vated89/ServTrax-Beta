@@ -2,6 +2,7 @@ import { doc, getDoc, setDoc, updateDoc } from 'firebase/firestore';
 import { db } from '../firebase';
 import { waitForCurrentUser } from './authSessionService';
 import { handleFirestoreError, OperationType } from './verificationService';
+import { savePipelineService } from './savePipelineService';
 
 export interface SeasonalRule {
   id?: string;
@@ -91,7 +92,9 @@ export const settingsService = {
 
     try {
       const docRef = doc(db, 'business_settings', user.uid);
-      const docSnap = await getDoc(docRef);
+      const docSnap = await savePipelineService.withTimeout(getDoc(docRef), {
+        timeoutMessage: 'Settings load timed out while reading business settings.',
+      });
       if (docSnap.exists()) {
         return { ...DEFAULT_SETTINGS, ...docSnap.data() } as BusinessSettings;
       }
@@ -108,11 +111,17 @@ export const settingsService = {
 
     try {
       const docRef = doc(db, 'business_settings', user.uid);
-      const docSnap = await getDoc(docRef);
+      const docSnap = await savePipelineService.withTimeout(getDoc(docRef), {
+        timeoutMessage: 'Settings save timed out while loading the current settings record.',
+      });
       if (docSnap.exists()) {
-        await updateDoc(docRef, settings);
+        await savePipelineService.withTimeout(updateDoc(docRef, settings), {
+          timeoutMessage: 'Settings save timed out while updating the settings record.',
+        });
       } else {
-        await setDoc(docRef, { ...DEFAULT_SETTINGS, ...settings });
+        await savePipelineService.withTimeout(setDoc(docRef, { ...DEFAULT_SETTINGS, ...settings }), {
+          timeoutMessage: 'Settings save timed out while creating the settings record.',
+        });
       }
     } catch (error) {
       handleFirestoreError(error, OperationType.UPDATE, 'business_settings');

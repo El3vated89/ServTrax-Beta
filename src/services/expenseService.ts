@@ -12,6 +12,7 @@ import { auth, db } from '../firebase';
 import { handleFirestoreError, OperationType } from './verificationService';
 import { waitForCurrentUser } from './authSessionService';
 import { localFallbackStore } from './localFallbackStore';
+import { savePipelineService } from './savePipelineService';
 
 export type ExpenseCategory =
   | 'fuel'
@@ -103,12 +104,17 @@ export const expenseService = {
     if (!user) throw new Error('User not authenticated');
 
     try {
-      return await addDoc(collection(db, COLLECTION_NAME), {
-        ...expense,
-        ownerId: user.uid,
-        created_at: serverTimestamp(),
-        updated_at: serverTimestamp(),
-      });
+      return await savePipelineService.withTimeout(
+        addDoc(collection(db, COLLECTION_NAME), {
+          ...expense,
+          ownerId: user.uid,
+          created_at: serverTimestamp(),
+          updated_at: serverTimestamp(),
+        }),
+        {
+          timeoutMessage: 'Expense save timed out while writing to the database.',
+        }
+      );
     } catch (error) {
       console.error('Primary expense save failed, saving locally instead:', error);
       const localId = localFallbackStore.upsertRecord<ExpenseRecord>(LOCAL_FALLBACK_NAMESPACE, user.uid, {
@@ -135,10 +141,15 @@ export const expenseService = {
         return;
       }
 
-      await updateDoc(doc(db, COLLECTION_NAME, id), {
-        ...updates,
-        updated_at: serverTimestamp(),
-      });
+      await savePipelineService.withTimeout(
+        updateDoc(doc(db, COLLECTION_NAME, id), {
+          ...updates,
+          updated_at: serverTimestamp(),
+        }),
+        {
+          timeoutMessage: 'Expense update timed out while writing to the database.',
+        }
+      );
     } catch (error) {
       console.error('Primary expense update failed, updating local fallback instead:', error);
       localFallbackStore.updateRecord<ExpenseRecord>(LOCAL_FALLBACK_NAMESPACE, user.uid, id, {

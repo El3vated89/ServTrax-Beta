@@ -1,8 +1,10 @@
 import { getDownloadURL, ref, uploadString } from 'firebase/storage';
 import { storage } from '../firebase';
+import { SaveDebugContext, savePipelineService } from './savePipelineService';
 
 const DATA_URL_PREFIX = 'data:image/';
 const DEFAULT_INLINE_FALLBACK_LIMIT_BYTES = 450 * 1024;
+const DEFAULT_UPLOAD_TIMEOUT_MS = 20000;
 
 const createUniqueId = () => {
   if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) {
@@ -41,6 +43,7 @@ export const mediaUploadService = {
     fileNamePrefix = 'image',
     allowInlineFallback = false,
     maxInlineFallbackBytes = DEFAULT_INLINE_FALLBACK_LIMIT_BYTES,
+    debugContext,
   }: {
     ownerId: string;
     folder: string;
@@ -49,6 +52,7 @@ export const mediaUploadService = {
     fileNamePrefix?: string;
     allowInlineFallback?: boolean;
     maxInlineFallbackBytes?: number;
+    debugContext?: SaveDebugContext;
   }) => {
     if (!mediaUploadService.isDataUrl(dataUrl)) {
       return {
@@ -65,11 +69,29 @@ export const mediaUploadService = {
 
     try {
       const storageRef = ref(storage, storagePath);
-      await uploadString(storageRef, dataUrl, 'data_url', {
-        contentType: resolvedContentType,
-        cacheControl: 'public,max-age=31536000',
+      if (debugContext) {
+        savePipelineService.log(debugContext, 'storage_upload_attempted', { storagePath });
+      }
+      await savePipelineService.withTimeout(
+        uploadString(storageRef, dataUrl, 'data_url', {
+          contentType: resolvedContentType,
+          cacheControl: 'public,max-age=31536000',
+        }),
+        {
+          timeoutMs: DEFAULT_UPLOAD_TIMEOUT_MS,
+          timeoutMessage: `Image upload timed out for ${storagePath}.`,
+          debugContext,
+        }
+      );
+      const downloadUrl = await savePipelineService.withTimeout(getDownloadURL(storageRef), {
+        timeoutMs: DEFAULT_UPLOAD_TIMEOUT_MS,
+        timeoutMessage: `Image URL retrieval timed out for ${storagePath}.`,
+        debugContext,
       });
-      const downloadUrl = await getDownloadURL(storageRef);
+
+      if (debugContext) {
+        savePipelineService.log(debugContext, 'storage_upload_succeeded', { storagePath });
+      }
 
       return {
         downloadUrl,
@@ -78,6 +100,9 @@ export const mediaUploadService = {
         source: 'storage' as const,
       };
     } catch (error) {
+      if (debugContext) {
+        savePipelineService.logError(debugContext, 'storage_upload_failed', error);
+      }
       const estimatedBytes = estimateDataUrlBytes(dataUrl);
       if (allowInlineFallback && estimatedBytes <= maxInlineFallbackBytes) {
         console.warn('Error uploading image to Firebase Storage, using inline fallback:', error);
@@ -102,6 +127,7 @@ export const mediaUploadService = {
     fileNamePrefix = 'image',
     allowInlineFallback = false,
     maxInlineFallbackBytes = DEFAULT_INLINE_FALLBACK_LIMIT_BYTES,
+    debugContext,
   }: {
     ownerId: string;
     folder: string;
@@ -110,6 +136,7 @@ export const mediaUploadService = {
     fileNamePrefix?: string;
     allowInlineFallback?: boolean;
     maxInlineFallbackBytes?: number;
+    debugContext?: SaveDebugContext;
   }) => {
     return Promise.all(
       (dataUrls || []).map((dataUrl, index) =>
@@ -121,6 +148,7 @@ export const mediaUploadService = {
           fileNamePrefix: `${fileNamePrefix}-${index + 1}`,
           allowInlineFallback,
           maxInlineFallbackBytes,
+          debugContext,
         })
       )
     );

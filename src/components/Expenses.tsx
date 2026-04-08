@@ -3,6 +3,7 @@ import { useLocation, useNavigate } from 'react-router-dom';
 import { AlertCircle, CheckCircle, Plus, Receipt, Save, X } from 'lucide-react';
 import { Timestamp } from 'firebase/firestore';
 import { expenseService, ExpenseCategory, ExpenseRecord, ExpenseRecurrence } from '../services/expenseService';
+import { savePipelineService } from '../services/savePipelineService';
 
 const formatCurrency = (amount: number) =>
   amount.toLocaleString('en-US', { style: 'currency', currency: 'USD' });
@@ -31,6 +32,7 @@ export default function Expenses() {
   const [isAddingExpense, setIsAddingExpense] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
+  const [isSavingExpense, setIsSavingExpense] = useState(false);
 
   const [title, setTitle] = useState('');
   const [category, setCategory] = useState<ExpenseCategory>('fuel');
@@ -91,34 +93,59 @@ export default function Expenses() {
 
   const handleSaveExpense = async (event: React.FormEvent) => {
     event.preventDefault();
+    const debugContext = {
+      flow: 'quick_action_expense_save',
+      traceId: savePipelineService.createTraceId('quick_action_expense_save'),
+    };
+
+    savePipelineService.log(debugContext, 'save_started');
     setErrorMessage(null);
 
     const parsedAmount = Number(amount || 0);
     if (parsedAmount <= 0) {
+      savePipelineService.log(debugContext, 'validation_failed', 'Expense amount must be greater than zero.');
       setErrorMessage('Expense amount must be greater than zero.');
       return;
     }
 
+    setIsSavingExpense(true);
     try {
-      await expenseService.addExpense({
-        title: title.trim() || categoryLabels.find((entry) => entry.value === category)?.label || 'Expense',
-        category,
-        amount: parsedAmount,
-        vendor: vendor.trim(),
-        notes: notes.trim(),
-        expense_date: Timestamp.fromDate(new Date(expenseDate)),
-        is_recurring: isRecurring,
-        recurrence_frequency: isRecurring ? recurrenceFrequency : 'none',
-        next_due_date: isRecurring && nextDueDate ? Timestamp.fromDate(new Date(nextDueDate)) : null,
-        status: 'active',
-      });
+      savePipelineService.log(debugContext, 'validation_passed');
+      const response = await savePipelineService.withTimeout(
+        expenseService.addExpense({
+          title: title.trim() || categoryLabels.find((entry) => entry.value === category)?.label || 'Expense',
+          category,
+          amount: parsedAmount,
+          vendor: vendor.trim(),
+          notes: notes.trim(),
+          expense_date: Timestamp.fromDate(new Date(expenseDate)),
+          is_recurring: isRecurring,
+          recurrence_frequency: isRecurring ? recurrenceFrequency : 'none',
+          next_due_date: isRecurring && nextDueDate ? Timestamp.fromDate(new Date(nextDueDate)) : null,
+          status: 'active',
+        }),
+        {
+          timeoutMs: 25000,
+          timeoutMessage: 'Expense save took too long and was stopped. Please try again.',
+          debugContext,
+        }
+      );
+      savePipelineService.log(debugContext, 'response_received', response?.id || 'expense_saved');
 
       resetExpenseForm();
       setIsAddingExpense(false);
+      savePipelineService.log(debugContext, 'ui_success_handler_fired');
       setSuccessMessage('Expense saved');
     } catch (error) {
+      savePipelineService.logError(debugContext, 'db_write_failed', error);
       console.error('Error saving expense:', error);
-      setErrorMessage('Failed to save expense.');
+      const nextMessage = error instanceof Error && error.message
+        ? error.message
+        : 'Failed to save expense.';
+      setErrorMessage(nextMessage);
+    } finally {
+      setIsSavingExpense(false);
+      savePipelineService.log(debugContext, 'loading_state_cleared');
     }
   };
 
@@ -197,8 +224,8 @@ export default function Expenses() {
       </section>
 
       {isAddingExpense && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-gray-900/50 p-4">
-          <div className="bg-white rounded-[32px] w-full max-w-2xl max-h-[90vh] overflow-y-auto shadow-2xl">
+        <div className="fixed inset-0 z-[110] flex items-end sm:items-center justify-center bg-gray-900/50 p-0 sm:p-4">
+          <div className="bg-white rounded-t-[32px] sm:rounded-[32px] w-full max-w-2xl max-h-[calc(100dvh-0.5rem)] sm:max-h-[90vh] overflow-hidden shadow-2xl flex flex-col">
             <div className="flex items-center justify-between px-8 py-6 border-b border-gray-100 sticky top-0 bg-white z-10">
               <div>
                 <h3 className="text-xl font-black text-gray-900">New Expense</h3>
@@ -209,7 +236,7 @@ export default function Expenses() {
               </button>
             </div>
 
-            <form onSubmit={handleSaveExpense} className="p-8 space-y-6">
+            <form onSubmit={handleSaveExpense} className="flex-1 overflow-y-auto p-8 pb-[calc(7rem+env(safe-area-inset-bottom))] space-y-6">
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <label className="block md:col-span-2">
                   <span className="block text-[10px] font-black uppercase tracking-widest text-gray-400 mb-2">Title</span>
@@ -322,10 +349,11 @@ export default function Expenses() {
                 </button>
                 <button
                   type="submit"
-                  className="px-5 py-3 rounded-2xl bg-blue-600 text-white text-xs font-black uppercase tracking-widest hover:bg-blue-700 transition-all flex items-center gap-2"
+                  disabled={isSavingExpense}
+                  className="px-5 py-3 rounded-2xl bg-blue-600 text-white text-xs font-black uppercase tracking-widest hover:bg-blue-700 transition-all flex items-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed"
                 >
                   <Save className="h-4 w-4" />
-                  Save Expense
+                  {isSavingExpense ? 'Saving...' : 'Save Expense'}
                 </button>
               </div>
             </form>

@@ -15,6 +15,8 @@ import { auth, db } from '../firebase';
 import { Job, jobService } from './jobService';
 import { handleFirestoreError, OperationType } from './verificationService';
 import { localFallbackStore } from './localFallbackStore';
+import { waitForCurrentUser } from './authSessionService';
+import { SaveDebugContext, savePipelineService } from './savePipelineService';
 
 export type BillingStatus = 'draft' | 'scheduled' | 'due' | 'partial' | 'paid' | 'overdue' | 'canceled';
 export type BillingType = 'one_time' | 'auto_bill';
@@ -225,17 +227,6 @@ const isRecurringBillingFrequency = (frequency?: string) => {
   return ['weekly', 'bi-weekly', 'bi_weekly', 'monthly'].includes(normalized);
 };
 
-const waitForCurrentUser = async () => {
-  if (auth.currentUser) return auth.currentUser;
-
-  return new Promise<typeof auth.currentUser>((resolve) => {
-    const unsubscribe = auth.onAuthStateChanged((user) => {
-      unsubscribe();
-      resolve(user);
-    });
-  });
-};
-
 const syncCoveredJobs = async (record: BillingRecord) => {
   const isPaid = record.balance_due <= 0;
 
@@ -372,25 +363,48 @@ export const billingService = {
   },
 
   addBillingRecord: async (
-    record: Omit<BillingRecord, 'id' | 'ownerId' | 'created_at' | 'updated_at' | 'amount_paid' | 'balance_due' | 'status'>
+    record: Omit<BillingRecord, 'id' | 'ownerId' | 'created_at' | 'updated_at' | 'amount_paid' | 'balance_due' | 'status'>,
+    debugContext?: SaveDebugContext
   ) => {
-    const user = await waitForCurrentUser();
+    if (debugContext) {
+      savePipelineService.log(debugContext, 'service_called', 'billingService.addBillingRecord');
+    }
+    const user = await waitForCurrentUser({ debugContext });
     if (!user) throw new Error('User not authenticated');
 
     const totalAmount = Number(record.total_amount || 0);
     const dueDate = record.due_date || Timestamp.fromDate(new Date());
     const status = getBillingStatus(totalAmount, dueDate);
+    if (debugContext) {
+      savePipelineService.log(debugContext, 'payload_built', {
+        customerId: record.customerId,
+        totalAmount,
+        status,
+      });
+    }
 
     try {
-      const ref = await addDoc(collection(db, BILLING_COLLECTION), {
-        ...record,
-        ownerId: user.uid,
-        amount_paid: 0,
-        balance_due: totalAmount,
-        status,
-        created_at: serverTimestamp(),
-        updated_at: serverTimestamp(),
-      });
+      if (debugContext) {
+        savePipelineService.log(debugContext, 'db_write_attempted', BILLING_COLLECTION);
+      }
+      const ref = await savePipelineService.withTimeout(
+        addDoc(collection(db, BILLING_COLLECTION), {
+          ...record,
+          ownerId: user.uid,
+          amount_paid: 0,
+          balance_due: totalAmount,
+          status,
+          created_at: serverTimestamp(),
+          updated_at: serverTimestamp(),
+        }),
+        {
+          timeoutMessage: 'Billing save timed out while writing to the database.',
+          debugContext,
+        }
+      );
+      if (debugContext) {
+        savePipelineService.log(debugContext, 'db_write_succeeded', ref.id);
+      }
 
       try {
         await syncCoveredJobs({
@@ -407,6 +421,10 @@ export const billingService = {
 
       return ref;
     } catch (error) {
+      if (debugContext) {
+        savePipelineService.logError(debugContext, 'db_write_failed', error);
+        savePipelineService.log(debugContext, 'fallback_write_attempted', 'users/{uid}.billing_record_fallbacks');
+      }
       console.error('Primary billing save failed, using fallback storage:', error);
       const fallbackId = createFallbackId('billing');
       const timestamp = createClientTimestamp();
@@ -425,10 +443,19 @@ export const billingService = {
       };
 
       try {
-        await updateDoc(doc(db, 'users', user.uid), {
-          [FALLBACK_BILLING_FIELD]: arrayUnion(fallbackRecord),
-          updated_at: serverTimestamp(),
-        });
+        await savePipelineService.withTimeout(
+          updateDoc(doc(db, 'users', user.uid), {
+            [FALLBACK_BILLING_FIELD]: arrayUnion(fallbackRecord),
+            updated_at: serverTimestamp(),
+          }),
+          {
+            timeoutMessage: 'Billing fallback save timed out while writing to the user document.',
+            debugContext,
+          }
+        );
+        if (debugContext) {
+          savePipelineService.log(debugContext, 'fallback_write_succeeded', `fallback:${user.uid}:${fallbackId}`);
+        }
 
         try {
           await syncCoveredJobs({
@@ -445,6 +472,9 @@ export const billingService = {
 
         return { id: `fallback:${user.uid}:${fallbackId}` };
       } catch (fallbackError) {
+        if (debugContext) {
+          savePipelineService.logError(debugContext, 'fallback_write_failed', fallbackError);
+        }
         console.error('User-doc billing fallback failed, saving locally instead:', fallbackError);
         const localId = localFallbackStore.upsertRecord(LOCAL_BILLING_NAMESPACE, user.uid, {
           id: localFallbackStore.createLocalId(LOCAL_BILLING_NAMESPACE),
@@ -465,13 +495,16 @@ export const billingService = {
           console.error('Covered job sync failed after local billing fallback save:', syncError);
         }
 
+        if (debugContext) {
+          savePipelineService.log(debugContext, 'fallback_write_succeeded', localId);
+        }
         return { id: localId };
       }
     }
   },
 
-  updateBillingRecord: async (id: string, updates: Partial<BillingRecord>) => {
-    const user = await waitForCurrentUser();
+  updateBillingRecord: async (id: string, updates: Partial<BillingRecord>, debugContext?: SaveDebugContext) => {
+    const user = await waitForCurrentUser({ debugContext });
     if (!user) throw new Error('User not authenticated');
 
     try {
@@ -490,7 +523,10 @@ export const billingService = {
       if (id.startsWith('fallback:')) {
         const [, ownerId, fallbackId] = id.split(':');
         const userDocRef = doc(db, 'users', ownerId);
-        const userDoc = await getDoc(userDocRef);
+        const userDoc = await savePipelineService.withTimeout(getDoc(userDocRef), {
+          timeoutMessage: 'Billing update timed out while loading the fallback record.',
+          debugContext,
+        });
         const existingFallbacks = Array.isArray(userDoc.data()?.[FALLBACK_BILLING_FIELD]) ? userDoc.data()?.[FALLBACK_BILLING_FIELD] : [];
         const nextFallbacks = existingFallbacks.map((entry: any) =>
           entry.fallback_id === fallbackId
@@ -505,17 +541,29 @@ export const billingService = {
               }
             : entry
         );
-        await updateDoc(userDocRef, {
-          [FALLBACK_BILLING_FIELD]: nextFallbacks,
-          updated_at: serverTimestamp(),
-        });
+        await savePipelineService.withTimeout(
+          updateDoc(userDocRef, {
+            [FALLBACK_BILLING_FIELD]: nextFallbacks,
+            updated_at: serverTimestamp(),
+          }),
+          {
+            timeoutMessage: 'Billing update timed out while writing the fallback record.',
+            debugContext,
+          }
+        );
         return;
       }
 
-      await updateDoc(doc(db, BILLING_COLLECTION, id), {
-        ...updates,
-        updated_at: serverTimestamp(),
-      });
+      await savePipelineService.withTimeout(
+        updateDoc(doc(db, BILLING_COLLECTION, id), {
+          ...updates,
+          updated_at: serverTimestamp(),
+        }),
+        {
+          timeoutMessage: 'Billing update timed out while writing to the database.',
+          debugContext,
+        }
+      );
     } catch (error) {
       console.error('Billing update failed, updating local fallback instead:', error);
       localFallbackStore.updateRecord(LOCAL_BILLING_NAMESPACE, user.uid, id, {
@@ -531,9 +579,17 @@ export const billingService = {
 
   addPaymentEntry: async (
     record: Omit<PaymentEntry, 'id' | 'ownerId' | 'created_at'>,
-    billingRecord: BillingRecord
+    billingRecord: BillingRecord,
+    debugContext?: SaveDebugContext
   ) => {
-    const user = await waitForCurrentUser();
+    if (debugContext) {
+      savePipelineService.log(debugContext, 'service_called', 'billingService.addPaymentEntry');
+      savePipelineService.log(debugContext, 'payload_built', {
+        billingRecordId: billingRecord.id || null,
+        amount: Number(record.amount || 0),
+      });
+    }
+    const user = await waitForCurrentUser({ debugContext });
     if (!user) throw new Error('User not authenticated');
 
     const nextAmountPaid = Number(billingRecord.amount_paid || 0) + Number(record.amount || 0);
@@ -592,7 +648,10 @@ export const billingService = {
         const fallbackTimestamp = createClientTimestamp();
         const paymentFallbackId = createFallbackId('payment');
         const userDocRef = doc(db, 'users', ownerId);
-        const userDoc = await getDoc(userDocRef);
+        const userDoc = await savePipelineService.withTimeout(getDoc(userDocRef), {
+          timeoutMessage: 'Payment save timed out while loading the fallback billing record.',
+          debugContext,
+        });
         const existingBilling = Array.isArray(userDoc.data()?.[FALLBACK_BILLING_FIELD]) ? userDoc.data()?.[FALLBACK_BILLING_FIELD] : [];
         const nextBilling = existingBilling.map((entry: any) =>
           entry.fallback_id === fallbackId
@@ -607,22 +666,34 @@ export const billingService = {
             : entry
         );
 
-        await updateDoc(userDocRef, {
-          [FALLBACK_BILLING_FIELD]: nextBilling,
-          [FALLBACK_PAYMENT_FIELD]: arrayUnion({
-            fallback_id: paymentFallbackId,
-            ownerId: user.uid,
-            billing_record_id: billingRecord.id,
-            customerId: record.customerId,
-            customer_name_snapshot: record.customer_name_snapshot,
-            amount: Number(record.amount || 0),
-            method: record.method,
-            note: record.note?.trim() || '',
-            received_at: serializeDateValue(record.received_at),
-            created_at: fallbackTimestamp,
+        if (debugContext) {
+          savePipelineService.log(debugContext, 'fallback_write_attempted', `fallback:${ownerId}:${fallbackId}`);
+        }
+        await savePipelineService.withTimeout(
+          updateDoc(userDocRef, {
+            [FALLBACK_BILLING_FIELD]: nextBilling,
+            [FALLBACK_PAYMENT_FIELD]: arrayUnion({
+              fallback_id: paymentFallbackId,
+              ownerId: user.uid,
+              billing_record_id: billingRecord.id,
+              customerId: record.customerId,
+              customer_name_snapshot: record.customer_name_snapshot,
+              amount: Number(record.amount || 0),
+              method: record.method,
+              note: record.note?.trim() || '',
+              received_at: serializeDateValue(record.received_at),
+              created_at: fallbackTimestamp,
+            }),
+            updated_at: serverTimestamp(),
           }),
-          updated_at: serverTimestamp(),
-        });
+          {
+            timeoutMessage: 'Payment save timed out while writing the fallback record.',
+            debugContext,
+          }
+        );
+        if (debugContext) {
+          savePipelineService.log(debugContext, 'fallback_write_succeeded', `fallback:${ownerId}:${paymentFallbackId}`);
+        }
 
         try {
           await syncCoveredJobs({
@@ -637,13 +708,25 @@ export const billingService = {
         return { id: `fallback:${ownerId}:${paymentFallbackId}` };
       }
 
-      const paymentRef = await addDoc(collection(db, PAYMENT_COLLECTION), {
-        ...record,
-        ownerId: user.uid,
-        created_at: serverTimestamp(),
-      });
+      if (debugContext) {
+        savePipelineService.log(debugContext, 'db_write_attempted', PAYMENT_COLLECTION);
+      }
+      const paymentRef = await savePipelineService.withTimeout(
+        addDoc(collection(db, PAYMENT_COLLECTION), {
+          ...record,
+          ownerId: user.uid,
+          created_at: serverTimestamp(),
+        }),
+        {
+          timeoutMessage: 'Payment save timed out while writing the payment entry.',
+          debugContext,
+        }
+      );
+      if (debugContext) {
+        savePipelineService.log(debugContext, 'db_write_succeeded', paymentRef.id);
+      }
 
-      await billingService.updateBillingRecord(billingRecord.id!, updates);
+      await billingService.updateBillingRecord(billingRecord.id!, updates, debugContext);
       try {
         await syncCoveredJobs({
           ...billingRecord,
@@ -654,6 +737,10 @@ export const billingService = {
       }
       return paymentRef;
     } catch (error) {
+      if (debugContext) {
+        savePipelineService.logError(debugContext, 'db_write_failed', error);
+        savePipelineService.log(debugContext, 'fallback_write_attempted', 'payment_local_fallback');
+      }
       console.error('Primary payment save failed, using fallback storage:', error);
       const fallbackTimestamp = createClientTimestamp();
       const paymentFallbackId = createFallbackId('payment');
@@ -674,7 +761,10 @@ export const billingService = {
 
       try {
         const userDocRef = doc(db, 'users', user.uid);
-        const userDoc = await getDoc(userDocRef);
+        const userDoc = await savePipelineService.withTimeout(getDoc(userDocRef), {
+          timeoutMessage: 'Payment fallback save timed out while loading the user document.',
+          debugContext,
+        });
         const existingBilling = Array.isArray(userDoc.data()?.[FALLBACK_BILLING_FIELD]) ? userDoc.data()?.[FALLBACK_BILLING_FIELD] : [];
         const existingPayments = Array.isArray(userDoc.data()?.[FALLBACK_PAYMENT_FIELD]) ? userDoc.data()?.[FALLBACK_PAYMENT_FIELD] : [];
         const hasMirroredBilling = existingBilling.some((entry: any) => entry.source_billing_record_id === mirroredBillingId || entry.fallback_id === mirroredBillingId);
@@ -726,14 +816,26 @@ export const billingService = {
           serializeDateValue(entry.received_at) === serializeDateValue(record.received_at)
         );
 
-        await updateDoc(userDocRef, {
-          [FALLBACK_BILLING_FIELD]: nextBillingArray,
-          ...(shouldCreateFallbackPayment ? {
-            [FALLBACK_PAYMENT_FIELD]: arrayUnion(fallbackPaymentRecord),
-          } : {}),
-          updated_at: serverTimestamp(),
-        });
+        await savePipelineService.withTimeout(
+          updateDoc(userDocRef, {
+            [FALLBACK_BILLING_FIELD]: nextBillingArray,
+            ...(shouldCreateFallbackPayment ? {
+              [FALLBACK_PAYMENT_FIELD]: arrayUnion(fallbackPaymentRecord),
+            } : {}),
+            updated_at: serverTimestamp(),
+          }),
+          {
+            timeoutMessage: 'Payment fallback save timed out while writing the user document.',
+            debugContext,
+          }
+        );
+        if (debugContext) {
+          savePipelineService.log(debugContext, 'fallback_write_succeeded', `fallback:${user.uid}:${paymentFallbackId}`);
+        }
       } catch (fallbackError) {
+        if (debugContext) {
+          savePipelineService.logError(debugContext, 'fallback_write_failed', fallbackError);
+        }
         console.error('User-doc payment fallback failed, saving locally instead:', fallbackError);
         const localBillingId = billingRecord.id && localFallbackStore.isLocalId(billingRecord.id)
           ? billingRecord.id
@@ -776,6 +878,9 @@ export const billingService = {
           billing_record_id: localBillingId,
           storage_source: 'local_storage',
         });
+        if (debugContext) {
+          savePipelineService.log(debugContext, 'fallback_write_succeeded', localBillingId);
+        }
       }
 
       try {
@@ -791,8 +896,15 @@ export const billingService = {
     }
   },
 
-  recordManualPayment: async (payment: ManualPaymentInput) => {
-    const user = await waitForCurrentUser();
+  recordManualPayment: async (payment: ManualPaymentInput, debugContext?: SaveDebugContext) => {
+    if (debugContext) {
+      savePipelineService.log(debugContext, 'service_called', 'billingService.recordManualPayment');
+      savePipelineService.log(debugContext, 'payload_built', {
+        customerId: payment.customerId,
+        amount: Number(payment.amount || 0),
+      });
+    }
+    const user = await waitForCurrentUser({ debugContext });
     if (!user) throw new Error('User not authenticated');
 
     const amount = Number(payment.amount || 0);
@@ -805,41 +917,63 @@ export const billingService = {
     try {
       let billingRef: { id: string } | null = null;
 
-      billingRef = await addDoc(collection(db, BILLING_COLLECTION), {
-        ownerId: user.uid,
-        customerId: payment.customerId,
-        customer_name_snapshot: payment.customer_name_snapshot,
-        label: payment.label?.trim() || `Manual Payment - ${payment.customer_name_snapshot}`,
-        billing_type: 'one_time',
-        billing_frequency: 'manual_payment',
-        status: 'paid',
-        source: 'manual',
-        total_amount: amount,
-        amount_paid: amount,
-        balance_due: 0,
-        covered_job_ids: [],
-        covered_service_count: 0,
-        auto_bill_enabled: false,
-        due_date: receivedAt,
-        paid_at: receivedAt,
-        notes: payment.note?.trim() || 'Manual payment recorded before an open billing record existed.',
-        created_at: serverTimestamp(),
-        updated_at: serverTimestamp(),
-      });
-
-      try {
-        await addDoc(collection(db, PAYMENT_COLLECTION), {
+      if (debugContext) {
+        savePipelineService.log(debugContext, 'db_write_attempted', BILLING_COLLECTION);
+      }
+      billingRef = await savePipelineService.withTimeout(
+        addDoc(collection(db, BILLING_COLLECTION), {
           ownerId: user.uid,
-          billing_record_id: billingRef.id,
           customerId: payment.customerId,
           customer_name_snapshot: payment.customer_name_snapshot,
-          amount,
-          method: payment.method,
-          note: payment.note?.trim() || '',
-          received_at: receivedAt,
+          label: payment.label?.trim() || `Manual Payment - ${payment.customer_name_snapshot}`,
+          billing_type: 'one_time',
+          billing_frequency: 'manual_payment',
+          status: 'paid',
+          source: 'manual',
+          total_amount: amount,
+          amount_paid: amount,
+          balance_due: 0,
+          covered_job_ids: [],
+          covered_service_count: 0,
+          auto_bill_enabled: false,
+          due_date: receivedAt,
+          paid_at: receivedAt,
+          notes: payment.note?.trim() || 'Manual payment recorded before an open billing record existed.',
           created_at: serverTimestamp(),
-        });
+          updated_at: serverTimestamp(),
+        }),
+        {
+          timeoutMessage: 'Manual payment timed out while creating the billing record.',
+          debugContext,
+        }
+      );
+      if (debugContext) {
+        savePipelineService.log(debugContext, 'db_write_succeeded', billingRef.id);
+      }
+
+      try {
+        await savePipelineService.withTimeout(
+          addDoc(collection(db, PAYMENT_COLLECTION), {
+            ownerId: user.uid,
+            billing_record_id: billingRef.id,
+            customerId: payment.customerId,
+            customer_name_snapshot: payment.customer_name_snapshot,
+            amount,
+            method: payment.method,
+            note: payment.note?.trim() || '',
+            received_at: receivedAt,
+            created_at: serverTimestamp(),
+          }),
+          {
+            timeoutMessage: 'Manual payment timed out while creating the payment entry.',
+            debugContext,
+          }
+        );
       } catch (paymentError) {
+        if (debugContext) {
+          savePipelineService.logError(debugContext, 'db_write_failed', paymentError);
+          savePipelineService.log(debugContext, 'fallback_write_attempted', 'users/{uid}.payment_entry_fallbacks');
+        }
         console.error('Primary manual payment entry save failed, using fallback payment storage:', paymentError);
         const paymentFallbackRecord = {
           fallback_id: createFallbackId('payment'),
@@ -856,22 +990,41 @@ export const billingService = {
         };
 
         try {
-          await updateDoc(doc(db, 'users', user.uid), {
-            [FALLBACK_PAYMENT_FIELD]: arrayUnion(paymentFallbackRecord),
-            updated_at: serverTimestamp(),
-          });
+          await savePipelineService.withTimeout(
+            updateDoc(doc(db, 'users', user.uid), {
+              [FALLBACK_PAYMENT_FIELD]: arrayUnion(paymentFallbackRecord),
+              updated_at: serverTimestamp(),
+            }),
+            {
+              timeoutMessage: 'Manual payment fallback timed out while writing the user document.',
+              debugContext,
+            }
+          );
+          if (debugContext) {
+            savePipelineService.log(debugContext, 'fallback_write_succeeded', `fallback:${user.uid}:${paymentFallbackRecord.fallback_id}`);
+          }
         } catch (fallbackError) {
+          if (debugContext) {
+            savePipelineService.logError(debugContext, 'fallback_write_failed', fallbackError);
+          }
           console.error('User-doc manual payment fallback failed, saving locally instead:', fallbackError);
           localFallbackStore.upsertRecord(LOCAL_PAYMENT_NAMESPACE, user.uid, {
             id: localFallbackStore.createLocalId(LOCAL_PAYMENT_NAMESPACE),
             ...paymentFallbackRecord,
             storage_source: 'local_storage',
           });
+          if (debugContext) {
+            savePipelineService.log(debugContext, 'fallback_write_succeeded', LOCAL_PAYMENT_NAMESPACE);
+          }
         }
       }
 
       return billingRef;
     } catch (error) {
+      if (debugContext) {
+        savePipelineService.logError(debugContext, 'db_write_failed', error);
+        savePipelineService.log(debugContext, 'fallback_write_attempted', 'manual_payment_local_fallback');
+      }
       console.error('Primary manual payment save failed, using fallback storage:', error);
       const fallbackTimestamp = createClientTimestamp();
       const billingFallbackId = createFallbackId('billing');
@@ -912,14 +1065,26 @@ export const billingService = {
       };
 
       try {
-        await updateDoc(doc(db, 'users', user.uid), {
-          [FALLBACK_BILLING_FIELD]: arrayUnion(fallbackBillingRecord),
-          [FALLBACK_PAYMENT_FIELD]: arrayUnion(fallbackPaymentRecord),
-          updated_at: serverTimestamp(),
-        });
+        await savePipelineService.withTimeout(
+          updateDoc(doc(db, 'users', user.uid), {
+            [FALLBACK_BILLING_FIELD]: arrayUnion(fallbackBillingRecord),
+            [FALLBACK_PAYMENT_FIELD]: arrayUnion(fallbackPaymentRecord),
+            updated_at: serverTimestamp(),
+          }),
+          {
+            timeoutMessage: 'Manual payment fallback timed out while writing the user document.',
+            debugContext,
+          }
+        );
+        if (debugContext) {
+          savePipelineService.log(debugContext, 'fallback_write_succeeded', `fallback:${user.uid}:${billingFallbackId}`);
+        }
 
         return { id: `fallback:${user.uid}:${billingFallbackId}` };
       } catch (fallbackError) {
+        if (debugContext) {
+          savePipelineService.logError(debugContext, 'fallback_write_failed', fallbackError);
+        }
         console.error('User-doc manual payment save failed, saving locally instead:', fallbackError);
         const localBillingId = localFallbackStore.upsertRecord(LOCAL_BILLING_NAMESPACE, user.uid, {
           id: localFallbackStore.createLocalId(LOCAL_BILLING_NAMESPACE),
@@ -933,6 +1098,9 @@ export const billingService = {
           storage_source: 'local_storage',
         });
 
+        if (debugContext) {
+          savePipelineService.log(debugContext, 'fallback_write_succeeded', localBillingId);
+        }
         return { id: localBillingId };
       }
     }

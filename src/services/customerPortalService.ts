@@ -17,6 +17,7 @@ import { Job } from './jobService';
 import { Quote } from './quoteService';
 import { waitForCurrentUser } from './authSessionService';
 import { BillingFramework, BusinessPlanProfile, planConfigService } from './planConfigService';
+import { savePipelineService } from './savePipelineService';
 
 export interface PortalCapabilities {
   allowsPortal: boolean;
@@ -155,9 +156,21 @@ const deletePublicPortalSnapshots = async (portalToken?: string) => {
   if (!portalToken) return;
 
   const [portalSnap, historySnap, quoteSnap] = await Promise.all([
-    getDoc(doc(db, PUBLIC_PORTAL_COLLECTION, portalToken)),
-    getDocs(query(collection(db, PUBLIC_PORTAL_HISTORY_COLLECTION), where('portal_token', '==', portalToken))),
-    getDocs(query(collection(db, PUBLIC_PORTAL_QUOTES_COLLECTION), where('portal_token', '==', portalToken))),
+    savePipelineService.withTimeout(getDoc(doc(db, PUBLIC_PORTAL_COLLECTION, portalToken)), {
+      timeoutMessage: 'Portal cleanup timed out while loading the public portal record.',
+    }),
+    savePipelineService.withTimeout(
+      getDocs(query(collection(db, PUBLIC_PORTAL_HISTORY_COLLECTION), where('portal_token', '==', portalToken))),
+      {
+        timeoutMessage: 'Portal cleanup timed out while loading public portal history.',
+      }
+    ),
+    savePipelineService.withTimeout(
+      getDocs(query(collection(db, PUBLIC_PORTAL_QUOTES_COLLECTION), where('portal_token', '==', portalToken))),
+      {
+        timeoutMessage: 'Portal cleanup timed out while loading public portal quotes.',
+      }
+    ),
   ]);
 
   const batch = writeBatch(db);
@@ -179,7 +192,9 @@ const deletePublicPortalSnapshots = async (portalToken?: string) => {
   });
 
   if (operationCount > 0) {
-    await batch.commit();
+    await savePipelineService.withTimeout(batch.commit(), {
+      timeoutMessage: 'Portal cleanup timed out while deleting public portal snapshots.',
+    });
   }
 };
 
@@ -214,24 +229,34 @@ export const customerPortalService = {
     const user = await waitForCurrentUser();
     if (!user || !customerId) return;
 
-    const portalSnap = await getDoc(doc(db, INTERNAL_PORTAL_COLLECTION, customerId));
+    const portalSnap = await savePipelineService.withTimeout(getDoc(doc(db, INTERNAL_PORTAL_COLLECTION, customerId)), {
+      timeoutMessage: 'Portal disable timed out while loading the current portal record.',
+    });
     const existingPortalToken = portalSnap.exists() ? String(portalSnap.data().portal_token || '') : '';
     await deletePublicPortalSnapshots(existingPortalToken);
 
     const batch = writeBatch(db);
 
-    const portalHistorySnapshot = await getDocs(
-      query(collection(db, INTERNAL_PORTAL_HISTORY_COLLECTION), where('customerId', '==', customerId))
+    const portalHistorySnapshot = await savePipelineService.withTimeout(
+      getDocs(query(collection(db, INTERNAL_PORTAL_HISTORY_COLLECTION), where('customerId', '==', customerId))),
+      {
+        timeoutMessage: 'Portal disable timed out while loading portal history.',
+      }
     );
     portalHistorySnapshot.docs.forEach((entry) => batch.delete(entry.ref));
 
-    const portalQuoteSnapshot = await getDocs(
-      query(collection(db, INTERNAL_PORTAL_QUOTES_COLLECTION), where('customerId', '==', customerId))
+    const portalQuoteSnapshot = await savePipelineService.withTimeout(
+      getDocs(query(collection(db, INTERNAL_PORTAL_QUOTES_COLLECTION), where('customerId', '==', customerId))),
+      {
+        timeoutMessage: 'Portal disable timed out while loading portal quotes.',
+      }
     );
     portalQuoteSnapshot.docs.forEach((entry) => batch.delete(entry.ref));
 
     batch.delete(doc(db, INTERNAL_PORTAL_COLLECTION, customerId));
-    await batch.commit();
+    await savePipelineService.withTimeout(batch.commit(), {
+      timeoutMessage: 'Portal disable timed out while committing portal cleanup.',
+    });
   },
 
   syncPortalContent: async (
@@ -248,7 +273,12 @@ export const customerPortalService = {
       return;
     }
 
-    const existingPortalSnap = await getDoc(doc(db, INTERNAL_PORTAL_COLLECTION, customer.id));
+    const existingPortalSnap = await savePipelineService.withTimeout(
+      getDoc(doc(db, INTERNAL_PORTAL_COLLECTION, customer.id)),
+      {
+        timeoutMessage: 'Portal sync timed out while loading the current portal record.',
+      }
+    );
     const previousPortalToken = existingPortalSnap.exists()
       ? String(existingPortalSnap.data().portal_token || '')
       : '';
@@ -279,7 +309,9 @@ export const customerPortalService = {
       created_at: serverTimestamp(),
     };
 
-    await setDoc(doc(db, INTERNAL_PORTAL_COLLECTION, customer.id), portalDoc, { merge: true });
+    await savePipelineService.withTimeout(setDoc(doc(db, INTERNAL_PORTAL_COLLECTION, customer.id), portalDoc, { merge: true }), {
+      timeoutMessage: 'Portal sync timed out while saving the internal portal record.',
+    });
 
     const historyDocs = jobs
       .filter((job) =>
@@ -316,11 +348,17 @@ export const customerPortalService = {
         .map((quote) => quoteItemFromQuote(customer, quote)),
     ];
 
-    const historySnapshot = await getDocs(
-      query(collection(db, INTERNAL_PORTAL_HISTORY_COLLECTION), where('customerId', '==', customer.id))
+    const historySnapshot = await savePipelineService.withTimeout(
+      getDocs(query(collection(db, INTERNAL_PORTAL_HISTORY_COLLECTION), where('customerId', '==', customer.id))),
+      {
+        timeoutMessage: 'Portal sync timed out while loading internal portal history.',
+      }
     );
-    const quoteSnapshot = await getDocs(
-      query(collection(db, INTERNAL_PORTAL_QUOTES_COLLECTION), where('customerId', '==', customer.id))
+    const quoteSnapshot = await savePipelineService.withTimeout(
+      getDocs(query(collection(db, INTERNAL_PORTAL_QUOTES_COLLECTION), where('customerId', '==', customer.id))),
+      {
+        timeoutMessage: 'Portal sync timed out while loading internal portal quotes.',
+      }
     );
 
     const batch = writeBatch(db);
@@ -350,7 +388,9 @@ export const customerPortalService = {
       });
     });
 
-    await batch.commit();
+    await savePipelineService.withTimeout(batch.commit(), {
+      timeoutMessage: 'Portal sync timed out while saving internal portal history.',
+    });
 
     try {
       const publicPortalDoc: CustomerPortalRecord = {
@@ -358,13 +398,24 @@ export const customerPortalService = {
         created_at: existingPortalSnap.exists() ? existingPortalSnap.data().created_at || serverTimestamp() : serverTimestamp(),
       };
 
-      await setDoc(doc(db, PUBLIC_PORTAL_COLLECTION, customer.portal_token), publicPortalDoc, { merge: true });
-
-      const publicHistorySnapshot = await getDocs(
-        query(collection(db, PUBLIC_PORTAL_HISTORY_COLLECTION), where('portal_token', '==', customer.portal_token))
+      await savePipelineService.withTimeout(
+        setDoc(doc(db, PUBLIC_PORTAL_COLLECTION, customer.portal_token), publicPortalDoc, { merge: true }),
+        {
+          timeoutMessage: 'Portal sync timed out while saving the public portal mirror.',
+        }
       );
-      const publicQuoteSnapshot = await getDocs(
-        query(collection(db, PUBLIC_PORTAL_QUOTES_COLLECTION), where('portal_token', '==', customer.portal_token))
+
+      const publicHistorySnapshot = await savePipelineService.withTimeout(
+        getDocs(query(collection(db, PUBLIC_PORTAL_HISTORY_COLLECTION), where('portal_token', '==', customer.portal_token))),
+        {
+          timeoutMessage: 'Portal sync timed out while loading the public portal history mirror.',
+        }
+      );
+      const publicQuoteSnapshot = await savePipelineService.withTimeout(
+        getDocs(query(collection(db, PUBLIC_PORTAL_QUOTES_COLLECTION), where('portal_token', '==', customer.portal_token))),
+        {
+          timeoutMessage: 'Portal sync timed out while loading the public portal quote mirror.',
+        }
       );
 
       const publicBatch = writeBatch(db);
@@ -398,7 +449,9 @@ export const customerPortalService = {
         });
       });
 
-      await publicBatch.commit();
+      await savePipelineService.withTimeout(publicBatch.commit(), {
+        timeoutMessage: 'Portal sync timed out while saving the public portal mirror.',
+      });
     } catch (error) {
       console.error('Public portal mirror sync failed. Internal portal preview remains available:', error);
     }

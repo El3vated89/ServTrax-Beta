@@ -2,6 +2,7 @@ import { doc, getDoc, onSnapshot, serverTimestamp, setDoc, updateDoc, collection
 import { auth, db } from '../firebase';
 import { waitForCurrentUser } from './authSessionService';
 import { handleFirestoreError, OperationType } from './verificationService';
+import { savePipelineService } from './savePipelineService';
 
 export interface UserProfile {
   uid: string;
@@ -27,7 +28,9 @@ export const userProfileService = {
 
     try {
       const docRef = doc(db, 'users', user.uid);
-      const docSnap = await getDoc(docRef);
+      const docSnap = await savePipelineService.withTimeout(getDoc(docRef), {
+        timeoutMessage: 'Profile load timed out while reading the user profile.',
+      });
       return docSnap.exists() ? ({ uid: user.uid, ...docSnap.data() } as UserProfile) : null;
     } catch (error) {
       handleFirestoreError(error, OperationType.GET, 'users');
@@ -64,9 +67,11 @@ export const userProfileService = {
     if (!user) return;
 
     const docRef = doc(db, 'users', user.uid);
-    const docSnap = await getDoc(docRef);
+    const docSnap = await savePipelineService.withTimeout(getDoc(docRef), {
+      timeoutMessage: 'Profile ensure timed out while loading the user profile.',
+    });
     if (!docSnap.exists()) {
-      await setDoc(docRef, {
+      await savePipelineService.withTimeout(setDoc(docRef, {
         uid: user.uid,
         email: user.email || '',
         name: user.displayName || '',
@@ -77,14 +82,18 @@ export const userProfileService = {
         active: true,
         created_at: serverTimestamp(),
         updated_at: serverTimestamp(),
+      }), {
+        timeoutMessage: 'Profile ensure timed out while creating the user profile.',
       });
     } else {
-      await updateDoc(docRef, {
+      await savePipelineService.withTimeout(updateDoc(docRef, {
         email: user.email || docSnap.data().email || '',
         name: user.displayName || docSnap.data().name || '',
         role: user.email === PLATFORM_ADMIN_EMAIL ? 'admin' : (docSnap.data().role || 'owner'),
         active: true,
         updated_at: serverTimestamp(),
+      }), {
+        timeoutMessage: 'Profile ensure timed out while updating the user profile.',
       });
     }
   },
@@ -95,17 +104,21 @@ export const userProfileService = {
 
     try {
       const docRef = doc(db, 'users', user.uid);
-      const existing = await getDoc(docRef);
+      const existing = await savePipelineService.withTimeout(getDoc(docRef), {
+        timeoutMessage: 'Profile save timed out while loading the current user profile.',
+      });
 
       if (existing.exists()) {
-        await updateDoc(docRef, {
+        await savePipelineService.withTimeout(updateDoc(docRef, {
           ...updates,
           updated_at: serverTimestamp(),
+        }), {
+          timeoutMessage: 'Profile save timed out while updating the user profile.',
         });
         return;
       }
 
-      await setDoc(docRef, {
+      await savePipelineService.withTimeout(setDoc(docRef, {
         uid: user.uid,
         email: user.email || '',
         name: updates.name ?? user.displayName ?? '',
@@ -116,6 +129,8 @@ export const userProfileService = {
         active: true,
         created_at: serverTimestamp(),
         updated_at: serverTimestamp(),
+      }), {
+        timeoutMessage: 'Profile save timed out while creating the user profile.',
       });
     } catch (error) {
       handleFirestoreError(error, OperationType.UPDATE, `users/${user.uid}`);

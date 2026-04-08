@@ -8,6 +8,7 @@ import { customerPortalService } from '../services/customerPortalService';
 import { BillingFramework, BusinessPlanProfile, planConfigService } from '../services/planConfigService';
 import { Timestamp, doc, onSnapshot } from 'firebase/firestore';
 import { auth, db } from '../firebase';
+import { savePipelineService } from '../services/savePipelineService';
 
 export default function Customers() {
   const location = useLocation();
@@ -31,6 +32,7 @@ export default function Customers() {
   const [quotes, setQuotes] = useState<Quote[]>([]);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
+  const [isSavingCustomer, setIsSavingCustomer] = useState(false);
   const [businessProfile, setBusinessProfile] = useState<BusinessPlanProfile | null>(null);
   const [billingFramework, setBillingFramework] = useState<BillingFramework | null>(null);
   const [portalEnabled, setPortalEnabled] = useState(false);
@@ -147,10 +149,18 @@ export default function Customers() {
 
   const handleAddCustomer = async (e: React.FormEvent) => {
     e.preventDefault();
+    const debugContext = {
+      flow: editingCustomer ? 'customer_update' : 'customer_create',
+      traceId: savePipelineService.createTraceId(editingCustomer ? 'customer_update' : 'customer_create'),
+    };
+
+    savePipelineService.log(debugContext, 'save_started');
     setErrorMessage(null);
     setSuccessMessage(null);
+    setIsSavingCustomer(true);
     try {
       if (editingCustomer && editingCustomer.id) {
+        savePipelineService.log(debugContext, 'validation_passed');
         const nextPortalEnabled = portalCapabilities.allowsPortal ? portalEnabled : false;
         const nextPortalToken = nextPortalEnabled ? (portalToken || customerPortalService.createPortalToken()) : '';
         const updates: Partial<Customer> = {
@@ -171,7 +181,15 @@ export default function Customers() {
           portal_show_quotes: nextPortalEnabled ? portalShowQuotes : false,
         };
 
-        await customerService.updateCustomer(editingCustomer.id, updates);
+        const customerUpdateResponse = await savePipelineService.withTimeout(
+          customerService.updateCustomer(editingCustomer.id, updates),
+          {
+            timeoutMs: 25000,
+            timeoutMessage: 'Client update took too long and was stopped. Please try again.',
+            debugContext,
+          }
+        );
+        savePipelineService.log(debugContext, 'response_received', 'customer_updated');
 
         const updatedCustomer: Customer = {
           ...editingCustomer,
@@ -190,26 +208,48 @@ export default function Customers() {
 
         if (nextPortalEnabled) {
           setPortalToken(nextPortalToken);
-          await customerPortalService.syncPortalContent(updatedCustomer, allJobs, quotes, portalCapabilities.planLabel);
+          await savePipelineService.withTimeout(
+            customerPortalService.syncPortalContent(updatedCustomer, allJobs, quotes, portalCapabilities.planLabel),
+            {
+              timeoutMs: 25000,
+              timeoutMessage: 'Portal sync took too long and was stopped. The client record saved, but portal content will need another try.',
+              debugContext,
+            }
+          );
         } else {
-          await customerPortalService.disablePortal(editingCustomer.id);
+          await savePipelineService.withTimeout(customerPortalService.disablePortal(editingCustomer.id), {
+            timeoutMs: 25000,
+            timeoutMessage: 'Portal disable took too long and was stopped. The client record saved, but portal cleanup will need another try.',
+            debugContext,
+          });
         }
 
         setEditingCustomer(null);
+        savePipelineService.log(debugContext, 'ui_success_handler_fired');
         setSuccessMessage('Client updated successfully.');
       } else {
-        await customerService.addCustomer({
-          name,
-          phone,
-          email,
-          street,
-          city,
-          state,
-          zip,
-          notes,
-          status: 'active',
-        });
+        savePipelineService.log(debugContext, 'validation_passed');
+        const customerCreateResponse = await savePipelineService.withTimeout(
+          customerService.addCustomer({
+            name,
+            phone,
+            email,
+            street,
+            city,
+            state,
+            zip,
+            notes,
+            status: 'active',
+          }),
+          {
+            timeoutMs: 25000,
+            timeoutMessage: 'Client save took too long and was stopped. Please try again.',
+            debugContext,
+          }
+        );
+        savePipelineService.log(debugContext, 'response_received', customerCreateResponse?.id || 'customer_saved');
         setIsAdding(false);
+        savePipelineService.log(debugContext, 'ui_success_handler_fired');
         setSuccessMessage('Client added successfully.');
       }
       setName('');
@@ -221,8 +261,15 @@ export default function Customers() {
       setZip('');
       setNotes('');
     } catch (error) {
+      savePipelineService.logError(debugContext, 'db_write_failed', error);
       console.error('Error saving customer:', error);
-      setErrorMessage('Failed to save client.');
+      const nextMessage = error instanceof Error && error.message
+        ? error.message
+        : 'Failed to save client.';
+      setErrorMessage(nextMessage);
+    } finally {
+      setIsSavingCustomer(false);
+      savePipelineService.log(debugContext, 'loading_state_cleared');
     }
   };
 
@@ -374,9 +421,9 @@ export default function Customers() {
 
       {/* Add/Edit Customer Modal */}
       {(isAdding || editingCustomer) && (
-        <div className="fixed inset-0 bg-gray-900/40 backdrop-blur-sm z-[70] flex justify-center items-center p-2 sm:p-4">
-          <div className="bg-white w-full h-[95vh] sm:h-auto sm:max-w-lg rounded-3xl p-8 overflow-y-auto shadow-2xl relative">
-            <div className="flex justify-between items-center mb-8">
+        <div className="fixed inset-0 bg-gray-900/40 backdrop-blur-sm z-[110] flex justify-center items-end sm:items-center p-0 sm:p-4">
+          <div className="bg-white w-full h-[100dvh] sm:h-auto sm:max-h-[90vh] sm:max-w-lg rounded-t-3xl sm:rounded-3xl shadow-2xl relative overflow-hidden flex flex-col">
+            <div className="flex justify-between items-center px-8 pt-8 pb-6 border-b border-gray-100">
               <div>
                 <h3 className="text-2xl font-black text-gray-900 tracking-tight">{editingCustomer ? 'Edit Client' : 'Add Client'}</h3>
                 <p className="text-sm font-bold text-gray-400 uppercase tracking-widest">Customer information and details</p>
@@ -386,7 +433,7 @@ export default function Customers() {
               </button>
             </div>
 
-            <form onSubmit={handleAddCustomer} className="space-y-6">
+            <form onSubmit={handleAddCustomer} className="flex-1 overflow-y-auto px-8 pb-[calc(7rem+env(safe-area-inset-bottom))] space-y-6">
               <div className="space-y-4">
                 <div>
                   <label className="block text-xs font-black text-gray-400 uppercase tracking-widest mb-2 ml-1">Full Name</label>
@@ -644,12 +691,16 @@ export default function Customers() {
                 )}
               </div>
 
-              <div className="pt-4">
-                <button type="submit" className="w-full bg-blue-600 text-white py-5 px-4 rounded-2xl text-sm font-black uppercase tracking-widest hover:bg-blue-700 shadow-xl shadow-blue-100 transition-all active:scale-95">
-                  {editingCustomer ? 'Update Client' : 'Save Client'}
+                <div className="pt-4">
+                <button
+                  type="submit"
+                  disabled={isSavingCustomer}
+                  className="w-full bg-blue-600 text-white py-5 px-4 rounded-2xl text-sm font-black uppercase tracking-widest hover:bg-blue-700 shadow-xl shadow-blue-100 transition-all active:scale-95 disabled:opacity-60 disabled:cursor-not-allowed"
+                >
+                  {isSavingCustomer ? 'Saving...' : editingCustomer ? 'Update Client' : 'Save Client'}
                 </button>
-              </div>
-            </form>
+                </div>
+              </form>
           </div>
         </div>
       )}

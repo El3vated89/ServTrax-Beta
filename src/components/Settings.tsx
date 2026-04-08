@@ -5,6 +5,7 @@ import { settingsService, BusinessSettings, DEFAULT_SETTINGS } from '../services
 import { planConfigService } from '../services/planConfigService';
 import { db, auth } from '../firebase';
 import { doc, getDoc, setDoc, updateDoc } from 'firebase/firestore';
+import { savePipelineService } from '../services/savePipelineService';
 
 const getDefaultOffSeasonIntervalDays = (frequency?: string) => {
   if (frequency === 'weekly') return 7;
@@ -107,6 +108,7 @@ export default function Settings() {
   const [planSeasonalEnabled, setPlanSeasonalEnabled] = useState(false);
   const [planSeasonalRules, setPlanSeasonalRules] = useState<any[]>([]);
   const [confirmSeasonalRuleDelete, setConfirmSeasonalRuleDelete] = useState<{ planId?: string; draft?: boolean } | null>(null);
+  const [isSavingPlan, setIsSavingPlan] = useState(false);
 
   // Business Profile Form
   const [businessName, setBusinessName] = useState('');
@@ -223,30 +225,53 @@ export default function Settings() {
 
   const handleAddPlan = async (e: React.FormEvent) => {
     e.preventDefault();
+    const debugContext = {
+      flow: editingPlanId ? 'service_plan_update' : 'service_plan_create',
+      traceId: savePipelineService.createTraceId(editingPlanId ? 'service_plan_update' : 'service_plan_create'),
+    };
+
+    savePipelineService.log(debugContext, 'save_started');
     setErrorMessage(null);
     setSuccessMessage(null);
+    setIsSavingPlan(true);
     try {
+      savePipelineService.log(debugContext, 'validation_passed');
       if (editingPlanId) {
-        await servicePlanService.updateServicePlan(editingPlanId, {
-          name: planName,
-          description: planDescription,
-          price: Number(planPrice),
-          billing_frequency: planFrequency,
-          requires_photos: planRequiresPhotos,
-          seasonal_enabled: planSeasonalEnabled,
-          seasonal_rules: planSeasonalRules.slice(0, 1)
-        });
+        await savePipelineService.withTimeout(
+          servicePlanService.updateServicePlan(editingPlanId, {
+            name: planName,
+            description: planDescription,
+            price: Number(planPrice),
+            billing_frequency: planFrequency,
+            requires_photos: planRequiresPhotos,
+            seasonal_enabled: planSeasonalEnabled,
+            seasonal_rules: planSeasonalRules.slice(0, 1)
+          }),
+          {
+            timeoutMs: 25000,
+            timeoutMessage: 'Service update took too long and was stopped. Please try again.',
+            debugContext,
+          }
+        );
         setSuccessMessage('Service plan updated successfully!');
       } else {
-        await servicePlanService.addServicePlan({
-          name: planName,
-          description: planDescription,
-          price: Number(planPrice),
-          billing_frequency: planFrequency,
-          requires_photos: planRequiresPhotos,
-          seasonal_enabled: planSeasonalEnabled,
-          seasonal_rules: planSeasonalRules.slice(0, 1)
-        });
+        const response = await savePipelineService.withTimeout(
+          servicePlanService.addServicePlan({
+            name: planName,
+            description: planDescription,
+            price: Number(planPrice),
+            billing_frequency: planFrequency,
+            requires_photos: planRequiresPhotos,
+            seasonal_enabled: planSeasonalEnabled,
+            seasonal_rules: planSeasonalRules.slice(0, 1)
+          }),
+          {
+            timeoutMs: 25000,
+            timeoutMessage: 'Service save took too long and was stopped. Please try again.',
+            debugContext,
+          }
+        );
+        savePipelineService.log(debugContext, 'response_received', response?.id || 'service_plan_saved');
         setSuccessMessage('Service plan added successfully!');
       }
       setIsAddingPlan(false);
@@ -258,10 +283,18 @@ export default function Settings() {
       setPlanRequiresPhotos(true);
       setPlanSeasonalEnabled(false);
       setPlanSeasonalRules([]);
+      savePipelineService.log(debugContext, 'ui_success_handler_fired');
       setTimeout(() => setSuccessMessage(null), 3000);
     } catch (error) {
+      savePipelineService.logError(debugContext, 'db_write_failed', error);
       console.error('Error saving service plan:', error);
-      setErrorMessage('Failed to save service plan. Please check your permissions.');
+      const nextMessage = error instanceof Error && error.message
+        ? error.message
+        : 'Failed to save service plan. Please check your permissions.';
+      setErrorMessage(nextMessage);
+    } finally {
+      setIsSavingPlan(false);
+      savePipelineService.log(debugContext, 'loading_state_cleared');
     }
   };
 
@@ -336,12 +369,23 @@ export default function Settings() {
   const handleSaveProfile = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!auth.currentUser) return;
+    const debugContext = {
+      flow: 'business_profile_save',
+      traceId: savePipelineService.createTraceId('business_profile_save'),
+    };
+
+    savePipelineService.log(debugContext, 'save_started');
     setIsSavingProfile(true);
     setErrorMessage(null);
     setSuccessMessage(null);
     try {
       const docRef = doc(db, 'business_profiles', auth.currentUser.uid);
-      const docSnap = await getDoc(docRef);
+      savePipelineService.log(debugContext, 'validation_passed');
+      const docSnap = await savePipelineService.withTimeout(getDoc(docRef), {
+        timeoutMs: 25000,
+        timeoutMessage: 'Profile save took too long while loading the current business profile.',
+        debugContext,
+      });
       const profileFields = {
         ownerId: auth.currentUser.uid,
         business_name: businessName,
@@ -356,20 +400,34 @@ export default function Settings() {
         base_camp_lng: baseCampLng === '' ? null : Number(baseCampLng)
       };
       if (docSnap.exists()) {
-        await updateDoc(docRef, profileFields);
+        await savePipelineService.withTimeout(updateDoc(docRef, profileFields), {
+          timeoutMs: 25000,
+          timeoutMessage: 'Profile save took too long while updating the business profile.',
+          debugContext,
+        });
       } else {
-        await setDoc(docRef, {
+        await savePipelineService.withTimeout(setDoc(docRef, {
           ...planConfigService.getDefaultBusinessPlanFields(),
           ...profileFields,
+        }), {
+          timeoutMs: 25000,
+          timeoutMessage: 'Profile save took too long while creating the business profile.',
+          debugContext,
         });
       }
+      savePipelineService.log(debugContext, 'ui_success_handler_fired');
       setSuccessMessage('Business profile saved successfully!');
       setTimeout(() => setSuccessMessage(null), 3000);
     } catch (error) {
+      savePipelineService.logError(debugContext, 'db_write_failed', error);
       console.error('Error saving business profile:', error);
-      setErrorMessage('Failed to save business profile. Please check your permissions.');
+      const nextMessage = error instanceof Error && error.message
+        ? error.message
+        : 'Failed to save business profile. Please check your permissions.';
+      setErrorMessage(nextMessage);
     } finally {
       setIsSavingProfile(false);
+      savePipelineService.log(debugContext, 'loading_state_cleared');
     }
   };
 
@@ -889,10 +947,14 @@ export default function Settings() {
                 </div>
               </div>
               <div className="pt-4">
-                <button type="submit" className="w-full bg-blue-600 text-white py-5 px-4 rounded-2xl text-sm font-black uppercase tracking-widest hover:bg-blue-700 shadow-xl shadow-blue-100 transition-all active:scale-95">
-                  {editingPlanId ? 'Save Changes' : 'Save Service Offering'}
-                </button>
-              </div>
+                  <button
+                    type="submit"
+                    disabled={isSavingPlan}
+                    className="w-full bg-blue-600 text-white py-5 px-4 rounded-2xl text-sm font-black uppercase tracking-widest hover:bg-blue-700 shadow-xl shadow-blue-100 transition-all active:scale-95 disabled:opacity-60 disabled:cursor-not-allowed"
+                  >
+                    {isSavingPlan ? 'Saving...' : editingPlanId ? 'Save Changes' : 'Save Service Offering'}
+                  </button>
+                </div>
             </form>
           </div>
         </div>

@@ -2,6 +2,7 @@ import { collection, addDoc, updateDoc, deleteDoc, doc, query, where, serverTime
 import { db, auth } from '../firebase';
 import { waitForCurrentUser } from './authSessionService';
 import { localFallbackStore } from './localFallbackStore';
+import { savePipelineService } from './savePipelineService';
 
 export interface Job {
   id?: string;
@@ -154,11 +155,16 @@ export const jobService = {
     if (!user) throw new Error('User not authenticated');
 
     try {
-      return await addDoc(collection(db, COLLECTION_NAME), {
-        ...jobData,
-        ownerId: user.uid,
-        created_at: serverTimestamp()
-      });
+      return await savePipelineService.withTimeout(
+        addDoc(collection(db, COLLECTION_NAME), {
+          ...jobData,
+          ownerId: user.uid,
+          created_at: serverTimestamp()
+        }),
+        {
+          timeoutMessage: 'Job save timed out while writing to the database.',
+        }
+      );
     } catch (error) {
       console.error('Primary job save failed, saving locally instead:', error);
       const localId = localFallbackStore.upsertRecord<LocalJob>(LOCAL_FALLBACK_NAMESPACE, user.uid, {
@@ -183,7 +189,9 @@ export const jobService = {
         });
         return;
       }
-      return await updateDoc(docRef, data);
+      return await savePipelineService.withTimeout(updateDoc(docRef, data), {
+        timeoutMessage: 'Job update timed out while writing to the database.',
+      });
     } catch (error) {
       console.error('Primary job update failed, updating local fallback instead:', error);
       const cachedJob = jobCache.get(id);
@@ -222,7 +230,9 @@ export const jobService = {
         jobCache.delete(id);
         return;
       }
-      return await deleteDoc(docRef);
+      return await savePipelineService.withTimeout(deleteDoc(docRef), {
+        timeoutMessage: 'Job delete timed out while writing to the database.',
+      });
     } catch (error) {
       console.error('Primary job delete failed, hiding it locally instead:', error);
       const cachedJob = jobCache.get(id);

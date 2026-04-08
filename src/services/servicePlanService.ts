@@ -2,6 +2,7 @@ import { db, auth } from '../firebase';
 import { collection, addDoc, onSnapshot, query, where, serverTimestamp, updateDoc, doc, deleteDoc, getDocs, getDoc } from 'firebase/firestore';
 import { waitForCurrentUser } from './authSessionService';
 import { localFallbackStore } from './localFallbackStore';
+import { savePipelineService } from './savePipelineService';
 
 export interface ServicePlan {
   id?: string;
@@ -148,7 +149,9 @@ export const servicePlanService = {
     };
 
     try {
-      return await addDoc(collection(db, COLLECTION_NAME), newPlan);
+      return await savePipelineService.withTimeout(addDoc(collection(db, COLLECTION_NAME), newPlan), {
+        timeoutMessage: 'Service plan save timed out while writing to the database.',
+      });
     } catch (error) {
       console.error('Primary service plan save failed, saving locally instead:', error);
       const localId = localFallbackStore.upsertRecord<LocalServicePlan>(LOCAL_FALLBACK_NAMESPACE, user.uid, {
@@ -168,7 +171,9 @@ export const servicePlanService = {
 
     if (!localFallbackStore.isLocalId(id, LOCAL_FALLBACK_NAMESPACE)) {
       try {
-        const docSnap = await getDoc(docRef);
+        const docSnap = await savePipelineService.withTimeout(getDoc(docRef), {
+          timeoutMessage: 'Service plan update timed out while loading the current record.',
+        });
         currentPlan = docSnap.exists() ? docSnap.data() as ServicePlan : currentPlan;
       } catch (error) {
         console.error('Unable to load current service plan before update, using cached plan instead:', error);
@@ -193,7 +198,9 @@ export const servicePlanService = {
         return;
       }
 
-      return await updateDoc(docRef, safeUpdates);
+      return await savePipelineService.withTimeout(updateDoc(docRef, safeUpdates), {
+        timeoutMessage: 'Service plan update timed out while writing to the database.',
+      });
     } catch (error) {
       console.error('Primary service plan update failed, updating local fallback instead:', error);
       localFallbackStore.upsertRecord<LocalServicePlan>(LOCAL_FALLBACK_NAMESPACE, user.uid, {
@@ -216,7 +223,9 @@ export const servicePlanService = {
         servicePlanCache.delete(id);
         return;
       }
-      return await deleteDoc(docRef);
+      return await savePipelineService.withTimeout(deleteDoc(docRef), {
+        timeoutMessage: 'Service plan delete timed out while writing to the database.',
+      });
     } catch (error) {
       console.error('Primary service plan delete failed, hiding it locally instead:', error);
       const currentPlan = servicePlanCache.get(id);

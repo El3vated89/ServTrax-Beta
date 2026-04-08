@@ -5,6 +5,7 @@ import { Timestamp } from 'firebase/firestore';
 import { billingService, BillingRecord, PaymentEntry, PaymentMethod } from '../services/billingService';
 import { customerService, Customer } from '../services/customerService';
 import { jobService, Job } from '../services/jobService';
+import { savePipelineService } from '../services/savePipelineService';
 
 const formatCurrency = (amount: number) =>
   amount.toLocaleString('en-US', { style: 'currency', currency: 'USD' });
@@ -31,6 +32,8 @@ export default function Billing() {
   const [hasBillingLoaded, setHasBillingLoaded] = useState(false);
   const [pendingQuickPayment, setPendingQuickPayment] = useState(false);
   const [isManualPayment, setIsManualPayment] = useState(false);
+  const [isSavingBilling, setIsSavingBilling] = useState(false);
+  const [isSavingPayment, setIsSavingPayment] = useState(false);
 
   const [customerId, setCustomerId] = useState('');
   const [billingType, setBillingType] = useState<'one_time' | 'auto_bill'>('one_time');
@@ -193,10 +196,17 @@ export default function Billing() {
 
   const handleCreateBilling = async (event: React.FormEvent) => {
     event.preventDefault();
+    const debugContext = {
+      flow: 'billing_record_save',
+      traceId: savePipelineService.createTraceId('billing_record_save'),
+    };
+
+    savePipelineService.log(debugContext, 'save_started');
     setErrorMessage(null);
 
     const customer = customers.find((entry) => entry.id === customerId);
     if (!customer) {
+      savePipelineService.log(debugContext, 'validation_failed', 'Customer is required.');
       setErrorMessage('Choose a customer before saving billing.');
       return;
     }
@@ -204,86 +214,145 @@ export default function Billing() {
     const coveredJobs = availableJobsForCustomer.filter((job) => selectedJobIds.includes(job.id || ''));
     const totalAmount = Number(billingAmount || 0);
     if (totalAmount <= 0) {
+      savePipelineService.log(debugContext, 'validation_failed', 'Billing amount must be greater than zero.');
       setErrorMessage('Billing amount must be greater than zero.');
       return;
     }
 
+    setIsSavingBilling(true);
     try {
-      await billingService.addBillingRecord({
-        customerId: customer.id || '',
-        customer_name_snapshot: customer.name,
-        label: billingLabel.trim() || `${billingType === 'auto_bill' ? 'Auto Bill' : 'Billing'} - ${customer.name}`,
-        billing_type: billingType,
-        billing_frequency: billingFrequency,
-        source: 'manual',
-        total_amount: totalAmount,
-        covered_job_ids: coveredJobs.map((job) => job.id!).filter(Boolean),
-        covered_service_count: coveredJobs.length,
-        auto_bill_enabled: billingType === 'auto_bill',
-        billing_period_key: billingType === 'auto_bill' && periodStart ? periodStart.slice(0, 7) : undefined,
-        billing_period_start: periodStart ? Timestamp.fromDate(new Date(periodStart)) : null,
-        billing_period_end: periodEnd ? Timestamp.fromDate(new Date(periodEnd)) : null,
-        due_date: billingDueDate ? Timestamp.fromDate(new Date(billingDueDate)) : Timestamp.fromDate(new Date()),
-        notes: billingNotes.trim(),
-      });
+      savePipelineService.log(debugContext, 'validation_passed');
+      const response = await savePipelineService.withTimeout(
+        billingService.addBillingRecord({
+          customerId: customer.id || '',
+          customer_name_snapshot: customer.name,
+          label: billingLabel.trim() || `${billingType === 'auto_bill' ? 'Auto Bill' : 'Billing'} - ${customer.name}`,
+          billing_type: billingType,
+          billing_frequency: billingFrequency,
+          source: 'manual',
+          total_amount: totalAmount,
+          covered_job_ids: coveredJobs.map((job) => job.id!).filter(Boolean),
+          covered_service_count: coveredJobs.length,
+          auto_bill_enabled: billingType === 'auto_bill',
+          billing_period_key: billingType === 'auto_bill' && periodStart ? periodStart.slice(0, 7) : undefined,
+          billing_period_start: periodStart ? Timestamp.fromDate(new Date(periodStart)) : null,
+          billing_period_end: periodEnd ? Timestamp.fromDate(new Date(periodEnd)) : null,
+          due_date: billingDueDate ? Timestamp.fromDate(new Date(billingDueDate)) : Timestamp.fromDate(new Date()),
+          notes: billingNotes.trim(),
+        }, debugContext),
+        {
+          timeoutMs: 25000,
+          timeoutMessage: 'Billing save took too long and was stopped. Please try again.',
+          debugContext,
+        }
+      );
+      savePipelineService.log(debugContext, 'response_received', response?.id || 'billing_saved');
 
       resetBillingForm();
       setIsAddingBilling(false);
+      savePipelineService.log(debugContext, 'ui_success_handler_fired');
       setSuccessMessage('Billing saved');
     } catch (error) {
+      savePipelineService.logError(debugContext, 'db_write_failed', error);
       console.error('Error saving billing:', error);
-      setErrorMessage('Failed to save billing.');
+      const nextMessage = error instanceof Error && error.message
+        ? error.message
+        : 'Failed to save billing.';
+      setErrorMessage(nextMessage);
+    } finally {
+      setIsSavingBilling(false);
+      savePipelineService.log(debugContext, 'loading_state_cleared');
     }
   };
 
   const handleRecordPayment = async (event: React.FormEvent) => {
     event.preventDefault();
+    const debugContext = {
+      flow: isManualPayment ? 'manual_payment_save' : 'quick_action_record_payment',
+      traceId: savePipelineService.createTraceId(isManualPayment ? 'manual_payment_save' : 'quick_action_record_payment'),
+    };
+
+    savePipelineService.log(debugContext, 'save_started');
+    setErrorMessage(null);
 
     const amount = Number(paymentAmount || 0);
     if (amount <= 0) {
+      savePipelineService.log(debugContext, 'validation_failed', 'Payment amount must be greater than zero.');
       setErrorMessage('Payment amount must be greater than zero.');
       return;
     }
 
+    setIsSavingPayment(true);
     try {
+      savePipelineService.log(debugContext, 'validation_passed');
       if (isManualPayment) {
         const customer = customers.find((entry) => entry.id === manualPaymentCustomerId);
         if (!customer?.id) {
+          savePipelineService.log(debugContext, 'validation_failed', 'Customer is required for a manual payment.');
           setErrorMessage('Choose a customer before saving a manual payment.');
           return;
         }
 
-        await billingService.recordManualPayment({
-          customerId: customer.id,
-          customer_name_snapshot: customer.name,
-          amount,
-          method: paymentMethod,
-          note: paymentNote.trim(),
-          received_at: Timestamp.fromDate(new Date(paymentDate)),
-          label: manualPaymentLabel.trim(),
-        });
-      } else {
-        if (!paymentTarget?.id) return;
-
-        await billingService.addPaymentEntry(
-          {
-            billing_record_id: paymentTarget.id,
-            customerId: paymentTarget.customerId,
-            customer_name_snapshot: paymentTarget.customer_name_snapshot,
+        const response = await savePipelineService.withTimeout(
+          billingService.recordManualPayment({
+            customerId: customer.id,
+            customer_name_snapshot: customer.name,
             amount,
             method: paymentMethod,
             note: paymentNote.trim(),
             received_at: Timestamp.fromDate(new Date(paymentDate)),
-          },
-          paymentTarget
+            label: manualPaymentLabel.trim(),
+          }, debugContext),
+          {
+            timeoutMs: 25000,
+            timeoutMessage: 'Manual payment save took too long and was stopped. Please try again.',
+            debugContext,
+          }
         );
+        savePipelineService.log(debugContext, 'response_received', response?.id || 'manual_payment_saved');
+      } else {
+        if (!paymentTarget?.id) {
+          savePipelineService.log(debugContext, 'validation_failed', 'A billing record is required for payment entry.');
+          setErrorMessage('Choose a billing record before saving the payment.');
+          return;
+        }
+
+        const response = await savePipelineService.withTimeout(
+          billingService.addPaymentEntry(
+            {
+              billing_record_id: paymentTarget.id,
+              customerId: paymentTarget.customerId,
+              customer_name_snapshot: paymentTarget.customer_name_snapshot,
+              amount,
+              method: paymentMethod,
+              note: paymentNote.trim(),
+              received_at: Timestamp.fromDate(new Date(paymentDate)),
+            },
+            paymentTarget,
+            debugContext
+          ),
+          {
+            timeoutMs: 25000,
+            timeoutMessage: 'Payment save took too long and was stopped. Please try again.',
+            debugContext,
+          }
+        );
+        savePipelineService.log(debugContext, 'response_received', response?.id || 'payment_saved');
       }
 
       resetPaymentForm();
+      savePipelineService.log(debugContext, 'ui_success_handler_fired');
       setSuccessMessage('Payment recorded');
     } catch (error) {
+      savePipelineService.logError(debugContext, 'db_write_failed', error);
       console.error('Error recording payment:', error);
-      setErrorMessage('Failed to record payment.');
+      const nextMessage = error instanceof Error && error.message
+        ? error.message
+        : 'Failed to record payment.';
+      setErrorMessage(nextMessage);
+    } finally {
+      setIsSavingPayment(false);
+      savePipelineService.log(debugContext, 'loading_state_cleared');
     }
   };
 
@@ -452,8 +521,8 @@ export default function Billing() {
       </section>
 
       {isAddingBilling && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-gray-900/50 p-4">
-          <div className="bg-white rounded-[32px] w-full max-w-3xl max-h-[90vh] overflow-y-auto shadow-2xl">
+        <div className="fixed inset-0 z-[110] flex items-end sm:items-center justify-center bg-gray-900/50 p-0 sm:p-4">
+          <div className="bg-white rounded-t-[32px] sm:rounded-[32px] w-full max-w-3xl max-h-[calc(100dvh-0.5rem)] sm:max-h-[90vh] overflow-hidden shadow-2xl flex flex-col">
             <div className="flex items-center justify-between px-8 py-6 border-b border-gray-100 sticky top-0 bg-white z-10">
               <div>
                 <h3 className="text-xl font-black text-gray-900">New Billing</h3>
@@ -464,7 +533,7 @@ export default function Billing() {
               </button>
             </div>
 
-            <form onSubmit={handleCreateBilling} className="p-8 space-y-6">
+            <form onSubmit={handleCreateBilling} className="flex-1 overflow-y-auto p-8 pb-[calc(7rem+env(safe-area-inset-bottom))] space-y-6">
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <label className="block">
                   <span className="block text-[10px] font-black uppercase tracking-widest text-gray-400 mb-2">Customer</span>
@@ -617,10 +686,11 @@ export default function Billing() {
                 </button>
                 <button
                   type="submit"
-                  className="px-5 py-3 rounded-2xl bg-blue-600 text-white text-xs font-black uppercase tracking-widest hover:bg-blue-700 transition-all flex items-center gap-2"
+                  disabled={isSavingBilling}
+                  className="px-5 py-3 rounded-2xl bg-blue-600 text-white text-xs font-black uppercase tracking-widest hover:bg-blue-700 transition-all flex items-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed"
                 >
                   <Save className="h-4 w-4" />
-                  Save Billing
+                  {isSavingBilling ? 'Saving...' : 'Save Billing'}
                 </button>
               </div>
             </form>
@@ -629,8 +699,8 @@ export default function Billing() {
       )}
 
       {(paymentTarget || isManualPayment) && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-gray-900/50 p-4">
-          <div className="bg-white rounded-[32px] w-full max-w-xl shadow-2xl">
+        <div className="fixed inset-0 z-[110] flex items-end sm:items-center justify-center bg-gray-900/50 p-0 sm:p-4">
+          <div className="bg-white rounded-t-[32px] sm:rounded-[32px] w-full max-w-xl max-h-[calc(100dvh-0.5rem)] sm:max-h-[90vh] shadow-2xl overflow-hidden flex flex-col">
             <div className="flex items-center justify-between px-8 py-6 border-b border-gray-100">
               <div>
                 <h3 className="text-xl font-black text-gray-900">Record Payment</h3>
@@ -643,7 +713,7 @@ export default function Billing() {
               </button>
             </div>
 
-            <form onSubmit={handleRecordPayment} className="p-8 space-y-6">
+            <form onSubmit={handleRecordPayment} className="flex-1 overflow-y-auto p-8 pb-[calc(7rem+env(safe-area-inset-bottom))] space-y-6">
               {isManualPayment ? (
                 <div className="rounded-3xl bg-blue-50 border border-blue-100 px-5 py-4">
                   <p className="text-[10px] font-black uppercase tracking-widest text-blue-600">Manual Payment</p>
@@ -743,10 +813,11 @@ export default function Billing() {
                 </button>
                 <button
                   type="submit"
-                  className="px-5 py-3 rounded-2xl bg-blue-600 text-white text-xs font-black uppercase tracking-widest hover:bg-blue-700 transition-all flex items-center gap-2"
+                  disabled={isSavingPayment}
+                  className="px-5 py-3 rounded-2xl bg-blue-600 text-white text-xs font-black uppercase tracking-widest hover:bg-blue-700 transition-all flex items-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed"
                 >
                   <Save className="h-4 w-4" />
-                  Save Payment
+                  {isSavingPayment ? 'Saving...' : 'Save Payment'}
                 </button>
               </div>
             </form>

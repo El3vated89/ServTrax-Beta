@@ -2,6 +2,7 @@ import { collection, addDoc, updateDoc, deleteDoc, doc, getDocs, query, where, s
 import { db, auth } from '../firebase';
 import { waitForCurrentUser } from './authSessionService';
 import { localFallbackStore } from './localFallbackStore';
+import { savePipelineService } from './savePipelineService';
 
 export interface Customer {
   id?: string;
@@ -138,11 +139,16 @@ export const customerService = {
     if (!user) throw new Error('User not authenticated');
 
     try {
-      return await addDoc(collection(db, COLLECTION_NAME), {
-        ...customerData,
-        ownerId: user.uid,
-        created_at: serverTimestamp()
-      });
+      return await savePipelineService.withTimeout(
+        addDoc(collection(db, COLLECTION_NAME), {
+          ...customerData,
+          ownerId: user.uid,
+          created_at: serverTimestamp()
+        }),
+        {
+          timeoutMessage: 'Customer save timed out while writing to the database.',
+        }
+      );
     } catch (error) {
       console.error('Primary customer save failed, saving locally instead:', error);
       const localId = localFallbackStore.upsertRecord<LocalCustomer>(LOCAL_FALLBACK_NAMESPACE, user.uid, {
@@ -167,7 +173,9 @@ export const customerService = {
         });
         return;
       }
-      return await updateDoc(docRef, data);
+      return await savePipelineService.withTimeout(updateDoc(docRef, data), {
+        timeoutMessage: 'Customer update timed out while writing to the database.',
+      });
     } catch (error) {
       console.error('Primary customer update failed, updating local fallback instead:', error);
       const cachedCustomer = customerCache.get(id);
@@ -202,7 +210,9 @@ export const customerService = {
         customerCache.delete(id);
         return;
       }
-      return await deleteDoc(docRef);
+      return await savePipelineService.withTimeout(deleteDoc(docRef), {
+        timeoutMessage: 'Customer delete timed out while writing to the database.',
+      });
     } catch (error) {
       console.error('Primary customer delete failed, hiding it locally instead:', error);
       const cachedCustomer = customerCache.get(id);

@@ -4,6 +4,7 @@ import { compressImage } from '../utils/imageCompression';
 import { verificationService } from '../services/verificationService';
 import { jobService, Job } from '../services/jobService';
 import { customerService, Customer } from '../services/customerService';
+import { savePipelineService } from '../services/savePipelineService';
 
 interface PhotoCaptureFlowProps {
   onClose: () => void;
@@ -64,23 +65,49 @@ export default function PhotoCaptureFlow({ onClose }: PhotoCaptureFlowProps) {
   };
 
   const handleSave = async () => {
-    if (!photoUrl || !assignmentType || !selectedId) return;
+    const debugContext = {
+      flow: 'quick_action_photo_save',
+      traceId: savePipelineService.createTraceId('quick_action_photo_save'),
+    };
+
+    savePipelineService.log(debugContext, 'save_started');
+    if (!photoUrl || !assignmentType || !selectedId) {
+      savePipelineService.log(debugContext, 'validation_failed', 'Photo, assignment type, and target selection are required.');
+      setErrorMessage('Choose where this photo should be assigned before saving.');
+      return;
+    }
 
     setErrorMessage(null);
     setIsSaving(true);
     try {
-      await verificationService.addVerification({
-        jobId: assignmentType === 'job' ? selectedId : undefined,
-        customerId: assignmentType === 'customer' ? selectedId : undefined,
-        photo_url: photoUrl,
-        file_size_bytes: photoFileSizeBytes,
-        notes: notes
-      });
+      savePipelineService.log(debugContext, 'validation_passed');
+      const response = await savePipelineService.withTimeout(
+        verificationService.addVerification({
+          jobId: assignmentType === 'job' ? selectedId : undefined,
+          customerId: assignmentType === 'customer' ? selectedId : undefined,
+          photo_url: photoUrl,
+          file_size_bytes: photoFileSizeBytes,
+          notes: notes
+        }, debugContext),
+        {
+          timeoutMs: 25000,
+          timeoutMessage: 'Photo save took too long and was stopped. Please try again.',
+          debugContext,
+        }
+      );
+      savePipelineService.log(debugContext, 'response_received', response?.id || 'verification_saved');
+      savePipelineService.log(debugContext, 'ui_success_handler_fired');
       onClose();
     } catch (error) {
+      savePipelineService.logError(debugContext, 'db_write_failed', error);
       console.error('Error saving photo:', error);
-      setErrorMessage('Failed to save photo.');
+      const nextMessage = error instanceof Error && error.message
+        ? error.message
+        : 'Failed to save photo.';
+      setErrorMessage(nextMessage);
+    } finally {
       setIsSaving(false);
+      savePipelineService.log(debugContext, 'loading_state_cleared');
     }
   };
 
@@ -133,8 +160,8 @@ export default function PhotoCaptureFlow({ onClose }: PhotoCaptureFlowProps) {
   }
 
   return (
-    <div className="fixed inset-0 bg-gray-900/40 backdrop-blur-sm z-[200] flex justify-center items-center p-4">
-      <div className="bg-white w-full max-w-md rounded-[40px] p-6 shadow-2xl relative animate-in fade-in zoom-in duration-200 flex flex-col max-h-[90vh]">
+    <div className="fixed inset-0 bg-gray-900/40 backdrop-blur-sm z-[110] flex justify-center items-end sm:items-center p-0 sm:p-4">
+      <div className="bg-white w-full max-w-md rounded-t-[40px] sm:rounded-[40px] shadow-2xl relative animate-in fade-in zoom-in duration-200 flex flex-col overflow-hidden max-h-[calc(100dvh-0.5rem)] sm:max-h-[90vh]">
         <button 
           onClick={onClose}
           className="absolute top-6 right-6 p-2 bg-gray-100 text-gray-400 hover:text-gray-600 rounded-full transition-colors"
@@ -142,9 +169,11 @@ export default function PhotoCaptureFlow({ onClose }: PhotoCaptureFlowProps) {
           <X className="h-5 w-5" />
         </button>
 
-        <h3 className="text-xl font-black text-gray-900 mb-6">Assign Photo</h3>
+        <div className="px-6 pt-6">
+          <h3 className="text-xl font-black text-gray-900 mb-6">Assign Photo</h3>
+        </div>
 
-        <div className="flex-1 overflow-y-auto pr-2 space-y-6">
+        <div className="flex-1 overflow-y-auto px-6 pr-4 space-y-6 pb-6">
           {errorMessage && (
             <div className="rounded-2xl border border-red-100 bg-red-50 px-4 py-3">
               <p className="text-sm font-bold text-red-700">{errorMessage}</p>
@@ -227,7 +256,7 @@ export default function PhotoCaptureFlow({ onClose }: PhotoCaptureFlowProps) {
           </div>
         </div>
 
-        <div className="mt-6 pt-6 border-t border-gray-100">
+        <div className="mt-auto pt-6 px-6 pb-[max(1.5rem,env(safe-area-inset-bottom))] border-t border-gray-100 bg-white">
           <button 
             onClick={handleSave}
             disabled={!assignmentType || !selectedId || isSaving}

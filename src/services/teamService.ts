@@ -13,6 +13,7 @@ import { auth, db } from '../firebase';
 import { planConfigService } from './planConfigService';
 import { waitForCurrentUser } from './authSessionService';
 import { localFallbackStore } from './localFallbackStore';
+import { savePipelineService } from './savePipelineService';
 
 export type TeamMemberRole = 'crew_member' | 'crew_lead';
 export type TeamAccountStatus = 'pending' | 'active' | 'inactive';
@@ -52,7 +53,12 @@ const syncLinkedUserProfile = async (memberId: string, member: Partial<TeamMembe
   if (!member.email) return;
 
   try {
-    const userSnapshot = await getDocs(query(collection(db, 'users'), where('email', '==', member.email)));
+    const userSnapshot = await savePipelineService.withTimeout(
+      getDocs(query(collection(db, 'users'), where('email', '==', member.email))),
+      {
+        timeoutMessage: 'Team sync timed out while looking up the linked user profile.',
+      }
+    );
     if (userSnapshot.empty) return;
 
     const permissions = buildPermissionList(member);
@@ -64,12 +70,14 @@ const syncLinkedUserProfile = async (memberId: string, member: Partial<TeamMembe
           ? existingMemberships
           : [...existingMemberships, memberId];
 
-        return updateDoc(entry.ref, {
+        return savePipelineService.withTimeout(updateDoc(entry.ref, {
           role: 'staff',
           active: member.account_status !== 'inactive',
           permissions,
           team_memberships: nextMemberships,
           updated_at: serverTimestamp(),
+        }), {
+          timeoutMessage: 'Team sync timed out while updating the linked user profile.',
         });
       })
     );
@@ -179,12 +187,17 @@ export const teamService = {
     if (!user) throw new Error('User not authenticated');
 
     try {
-      const ref = await addDoc(collection(db, COLLECTION_NAME), {
-        ...member,
-        ownerId: user.uid,
-        created_at: serverTimestamp(),
-        updated_at: serverTimestamp(),
-      });
+      const ref = await savePipelineService.withTimeout(
+        addDoc(collection(db, COLLECTION_NAME), {
+          ...member,
+          ownerId: user.uid,
+          created_at: serverTimestamp(),
+          updated_at: serverTimestamp(),
+        }),
+        {
+          timeoutMessage: 'Team member save timed out while writing to the database.',
+        }
+      );
       await syncLinkedUserProfile(ref.id, member);
       return ref;
     } catch (error) {
@@ -214,10 +227,15 @@ export const teamService = {
         return;
       }
 
-      await updateDoc(doc(db, COLLECTION_NAME, id), {
-        ...updates,
-        updated_at: serverTimestamp(),
-      });
+      await savePipelineService.withTimeout(
+        updateDoc(doc(db, COLLECTION_NAME, id), {
+          ...updates,
+          updated_at: serverTimestamp(),
+        }),
+        {
+          timeoutMessage: 'Team member update timed out while writing to the database.',
+        }
+      );
       await syncLinkedUserProfile(id, updates);
     } catch (error) {
       console.error('Primary team member update failed, updating local fallback instead:', error);

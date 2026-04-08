@@ -4,6 +4,7 @@ import { auth, db } from '../firebase';
 import { userProfileService, UserProfile } from '../services/userProfileService';
 import { teamService, TeamMember } from '../services/teamService';
 import { doc, getDoc } from 'firebase/firestore';
+import { savePipelineService } from '../services/savePipelineService';
 
 const permissionLabels: Array<{
   key: keyof Pick<TeamMember, 'route_access' | 'customer_access' | 'expense_entry_access' | 'job_interaction_access'>;
@@ -26,6 +27,8 @@ export default function Profile() {
   const [teamMembers, setTeamMembers] = useState<TeamMember[]>([]);
   const [businessPlanName, setBusinessPlanName] = useState('Free');
   const [newMember, setNewMember] = useState<Omit<TeamMember, 'ownerId'>>(teamService.getDefaultMember());
+  const [isSavingProfile, setIsSavingProfile] = useState(false);
+  const [isSavingTeamMember, setIsSavingTeamMember] = useState(false);
 
   useEffect(() => {
     const unsubscribe = userProfileService.subscribeToCurrentUserProfile((nextProfile) => {
@@ -68,36 +71,78 @@ export default function Profile() {
 
   const handleSave = async (event: React.FormEvent) => {
     event.preventDefault();
+    const debugContext = {
+      flow: 'user_profile_save',
+      traceId: savePipelineService.createTraceId('user_profile_save'),
+    };
+
+    savePipelineService.log(debugContext, 'save_started');
     setErrorMessage(null);
+    setIsSavingProfile(true);
     try {
-      await userProfileService.updateCurrentUserProfile({
-        name: name.trim(),
-        phone: phone.trim(),
-      });
+      savePipelineService.log(debugContext, 'validation_passed');
+      await savePipelineService.withTimeout(
+        userProfileService.updateCurrentUserProfile({
+          name: name.trim(),
+          phone: phone.trim(),
+        }),
+        {
+          timeoutMs: 25000,
+          timeoutMessage: 'Profile save took too long and was stopped. Please try again.',
+          debugContext,
+        }
+      );
+      savePipelineService.log(debugContext, 'ui_success_handler_fired');
       setSuccessMessage('Profile saved');
       window.setTimeout(() => setSuccessMessage(null), 2500);
     } catch (error) {
+      savePipelineService.logError(debugContext, 'db_write_failed', error);
       console.error('Error saving profile:', error);
-      setErrorMessage('Failed to save profile.');
+      const nextMessage = error instanceof Error && error.message ? error.message : 'Failed to save profile.';
+      setErrorMessage(nextMessage);
+    } finally {
+      setIsSavingProfile(false);
+      savePipelineService.log(debugContext, 'loading_state_cleared');
     }
   };
 
   const handleAddTeamMember = async (event: React.FormEvent) => {
     event.preventDefault();
+    const debugContext = {
+      flow: 'team_member_save',
+      traceId: savePipelineService.createTraceId('team_member_save'),
+    };
+
+    savePipelineService.log(debugContext, 'save_started');
     setErrorMessage(null);
+    setIsSavingTeamMember(true);
 
     try {
-      await teamService.addTeamMember({
-        ...newMember,
-        name: newMember.name.trim(),
-        email: newMember.email.trim().toLowerCase(),
-      });
+      savePipelineService.log(debugContext, 'validation_passed');
+      await savePipelineService.withTimeout(
+        teamService.addTeamMember({
+          ...newMember,
+          name: newMember.name.trim(),
+          email: newMember.email.trim().toLowerCase(),
+        }),
+        {
+          timeoutMs: 25000,
+          timeoutMessage: 'Team member save took too long and was stopped. Please try again.',
+          debugContext,
+        }
+      );
       setNewMember(teamService.getDefaultMember());
+      savePipelineService.log(debugContext, 'ui_success_handler_fired');
       setSuccessMessage('Team member saved');
       window.setTimeout(() => setSuccessMessage(null), 2500);
     } catch (error) {
+      savePipelineService.logError(debugContext, 'db_write_failed', error);
       console.error('Error saving team member:', error);
-      setErrorMessage('Failed to save team member.');
+      const nextMessage = error instanceof Error && error.message ? error.message : 'Failed to save team member.';
+      setErrorMessage(nextMessage);
+    } finally {
+      setIsSavingTeamMember(false);
+      savePipelineService.log(debugContext, 'loading_state_cleared');
     }
   };
 
@@ -173,10 +218,11 @@ export default function Profile() {
           <div className="flex justify-end">
             <button
               type="submit"
-              className="px-5 py-3 bg-blue-600 text-white rounded-2xl text-xs font-black uppercase tracking-widest hover:bg-blue-700 transition-all flex items-center gap-2"
+              disabled={isSavingProfile}
+              className="px-5 py-3 bg-blue-600 text-white rounded-2xl text-xs font-black uppercase tracking-widest hover:bg-blue-700 transition-all flex items-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed"
             >
               <Save className="h-4 w-4" />
-              Save Profile
+              {isSavingProfile ? 'Saving...' : 'Save Profile'}
             </button>
           </div>
         </form>
@@ -293,10 +339,11 @@ export default function Profile() {
                     <div className="flex justify-end">
                       <button
                         type="submit"
-                        className="px-5 py-3 bg-blue-600 text-white rounded-2xl text-xs font-black uppercase tracking-widest hover:bg-blue-700 transition-all flex items-center gap-2"
+                        disabled={isSavingTeamMember}
+                        className="px-5 py-3 bg-blue-600 text-white rounded-2xl text-xs font-black uppercase tracking-widest hover:bg-blue-700 transition-all flex items-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed"
                       >
                         <Save className="h-4 w-4" />
-                        Save Team Member
+                        {isSavingTeamMember ? 'Saving...' : 'Save Team Member'}
                       </button>
                     </div>
                   </form>

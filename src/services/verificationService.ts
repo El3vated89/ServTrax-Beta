@@ -4,6 +4,7 @@ import { waitForCurrentUser } from './authSessionService';
 import { storagePolicyService } from './storagePolicyService';
 import { mediaUploadService } from './mediaUploadService';
 import { localFallbackStore } from './localFallbackStore';
+import { SaveDebugContext, savePipelineService } from './savePipelineService';
 
 export enum OperationType {
   CREATE = 'create',
@@ -80,7 +81,11 @@ const resolveVerificationFolder = (record: Partial<VerificationRecord>) => {
   return 'verification_records/unassigned';
 };
 
-const normalizeVerificationPhotos = async (userId: string, record: Partial<VerificationRecord>) => {
+const normalizeVerificationPhotos = async (
+  userId: string,
+  record: Partial<VerificationRecord>,
+  debugContext?: SaveDebugContext
+) => {
   const nextRecord: Partial<VerificationRecord> = { ...record };
   const folder = resolveVerificationFolder(record);
 
@@ -92,6 +97,7 @@ const normalizeVerificationPhotos = async (userId: string, record: Partial<Verif
       fileNamePrefix: 'proof',
       allowInlineFallback: true,
       maxInlineFallbackBytes: INLINE_VERIFICATION_FALLBACK_LIMIT_BYTES,
+      debugContext,
     });
     nextRecord.photo_urls = uploads.map((entry) => entry.downloadUrl);
 
@@ -106,6 +112,7 @@ const normalizeVerificationPhotos = async (userId: string, record: Partial<Verif
       fileNamePrefix: 'proof',
       allowInlineFallback: true,
       maxInlineFallbackBytes: INLINE_VERIFICATION_FALLBACK_LIMIT_BYTES,
+      debugContext,
     });
     nextRecord.photo_url = upload.downloadUrl;
   }
@@ -187,11 +194,23 @@ export const verificationService = {
     };
   },
 
-  addVerification: async (record: Omit<VerificationRecord, 'id' | 'ownerId' | 'created_at'>) => {
-    const user = await waitForCurrentUser();
+  addVerification: async (
+    record: Omit<VerificationRecord, 'id' | 'ownerId' | 'created_at'>,
+    debugContext?: SaveDebugContext
+  ) => {
+    if (debugContext) {
+      savePipelineService.log(debugContext, 'service_called', 'verificationService.addVerification');
+    }
+    const user = await waitForCurrentUser({ debugContext });
     if (!user) throw new Error('Must be logged in to add verification');
 
-    const businessProfileSnap = await getDoc(doc(db, 'business_profiles', user.uid));
+    const businessProfileSnap = await savePipelineService.withTimeout(
+      getDoc(doc(db, 'business_profiles', user.uid)),
+      {
+        timeoutMessage: 'Verification save timed out while loading the business profile.',
+        debugContext,
+      }
+    );
     const storagePolicy = storagePolicyService.resolvePolicy(
       businessProfileSnap.exists() ? businessProfileSnap.data() : null
     );
@@ -199,7 +218,7 @@ export const verificationService = {
       ? Timestamp.fromMillis(Date.now() + storagePolicy.retentionDays * 24 * 60 * 60 * 1000)
       : null;
 
-    const normalizedRecord = await normalizeVerificationPhotos(user.uid, record);
+    const normalizedRecord = await normalizeVerificationPhotos(user.uid, record, debugContext);
 
     const newRecord = {
       ...normalizedRecord,
@@ -209,9 +228,31 @@ export const verificationService = {
       created_at: serverTimestamp()
     };
 
+    if (debugContext) {
+      savePipelineService.log(debugContext, 'payload_built', {
+        jobId: newRecord.jobId || null,
+        customerId: newRecord.customerId || null,
+        hasPhoto: !!newRecord.photo_url || !!newRecord.photo_urls?.length,
+      });
+    }
+
     try {
-      return await addDoc(collection(db, COLLECTION_NAME), newRecord);
+      if (debugContext) {
+        savePipelineService.log(debugContext, 'db_write_attempted', COLLECTION_NAME);
+      }
+      const response = await savePipelineService.withTimeout(addDoc(collection(db, COLLECTION_NAME), newRecord), {
+        timeoutMessage: 'Verification save timed out while writing to the database.',
+        debugContext,
+      });
+      if (debugContext) {
+        savePipelineService.log(debugContext, 'db_write_succeeded', response.id);
+      }
+      return response;
     } catch (error) {
+      if (debugContext) {
+        savePipelineService.logError(debugContext, 'db_write_failed', error);
+        savePipelineService.log(debugContext, 'fallback_write_attempted', LOCAL_FALLBACK_NAMESPACE);
+      }
       console.error('Primary verification save failed, saving locally instead:', error);
       const localId = localFallbackStore.upsertRecord<VerificationRecord>(LOCAL_FALLBACK_NAMESPACE, user.uid, {
         id: localFallbackStore.createLocalId(LOCAL_FALLBACK_NAMESPACE),
@@ -220,29 +261,55 @@ export const verificationService = {
         expires_at: expiresAt ? expiresAt.toDate().toISOString() : null,
         created_at: new Date().toISOString(),
       });
+      if (debugContext) {
+        savePipelineService.log(debugContext, 'fallback_write_succeeded', localId);
+      }
       return { id: localId };
     }
   },
   
-  updateVerification: async (id: string, data: Partial<VerificationRecord>) => {
-    const user = await waitForCurrentUser();
+  updateVerification: async (id: string, data: Partial<VerificationRecord>, debugContext?: SaveDebugContext) => {
+    if (debugContext) {
+      savePipelineService.log(debugContext, 'service_called', 'verificationService.updateVerification');
+      savePipelineService.log(debugContext, 'payload_built', { id });
+    }
+    const user = await waitForCurrentUser({ debugContext });
     if (!user) throw new Error('Must be logged in to update verification');
     try {
-      const normalizedData = await normalizeVerificationPhotos(user.uid, data);
+      const normalizedData = await normalizeVerificationPhotos(user.uid, data, debugContext);
       if (localFallbackStore.isLocalId(id, LOCAL_FALLBACK_NAMESPACE)) {
         localFallbackStore.updateRecord<VerificationRecord>(LOCAL_FALLBACK_NAMESPACE, user.uid, id, {
           ...normalizedData,
           updated_at: new Date().toISOString(),
         } as Partial<VerificationRecord>);
+        if (debugContext) {
+          savePipelineService.log(debugContext, 'fallback_write_succeeded', id);
+        }
         return;
       }
-      await updateDoc(doc(db, COLLECTION_NAME, id), normalizedData);
+      if (debugContext) {
+        savePipelineService.log(debugContext, 'db_write_attempted', `${COLLECTION_NAME}/${id}`);
+      }
+      await savePipelineService.withTimeout(updateDoc(doc(db, COLLECTION_NAME, id), normalizedData), {
+        timeoutMessage: 'Verification update timed out while writing to the database.',
+        debugContext,
+      });
+      if (debugContext) {
+        savePipelineService.log(debugContext, 'db_write_succeeded', id);
+      }
     } catch (error) {
+      if (debugContext) {
+        savePipelineService.logError(debugContext, 'db_write_failed', error);
+        savePipelineService.log(debugContext, 'fallback_write_attempted', id);
+      }
       console.error('Primary verification update failed, updating local fallback instead:', error);
       localFallbackStore.updateRecord<VerificationRecord>(LOCAL_FALLBACK_NAMESPACE, user.uid, id, {
         ...data,
         updated_at: new Date().toISOString(),
       } as Partial<VerificationRecord>);
+      if (debugContext) {
+        savePipelineService.log(debugContext, 'fallback_write_succeeded', id);
+      }
     }
   },
 

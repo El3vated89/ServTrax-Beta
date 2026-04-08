@@ -12,6 +12,7 @@ import { alertService } from '../services/alertService';
 import { userProfileService } from '../services/userProfileService';
 import { quoteService, Quote } from '../services/quoteService';
 import { bugReportService, BugReportCategory } from '../services/bugReportService';
+import { savePipelineService } from '../services/savePipelineService';
 
 export default function Layout() {
   const location = useLocation();
@@ -189,7 +190,14 @@ export default function Layout() {
 
   const handleSubmitReport = async (event: React.FormEvent) => {
     event.preventDefault();
+    const debugContext = {
+      flow: 'top_bar_bug_report',
+      traceId: savePipelineService.createTraceId('top_bar_bug_report'),
+    };
+
+    savePipelineService.log(debugContext, 'save_started');
     if (!reportDetails.trim()) {
+      savePipelineService.log(debugContext, 'validation_failed', 'Report details are required.');
       setReportErrorMessage('Add the problem details before sending the report.');
       return;
     }
@@ -198,22 +206,38 @@ export default function Layout() {
     setReportErrorMessage(null);
 
     try {
-      await bugReportService.createBugReport({
-        reporter_name: profile?.name || auth.currentUser?.displayName || '',
-        category: reportCategory,
-        details: reportDetails,
-        page_path: `${location.pathname}${location.search || ''}`,
-        current_url: window.location.href,
-        screenshot_data_url: reportScreenshotDataUrl || undefined,
-        screenshot_content_type: reportScreenshotContentType || undefined,
-      });
+      savePipelineService.log(debugContext, 'validation_passed');
+      const response = await savePipelineService.withTimeout(
+        bugReportService.createBugReport({
+          reporter_name: profile?.name || auth.currentUser?.displayName || '',
+          category: reportCategory,
+          details: reportDetails,
+          page_path: `${location.pathname}${location.search || ''}`,
+          current_url: window.location.href,
+          screenshot_data_url: reportScreenshotDataUrl || undefined,
+          screenshot_content_type: reportScreenshotContentType || undefined,
+        }, debugContext),
+        {
+          timeoutMs: 25000,
+          timeoutMessage: 'Bug report save took too long and was stopped. Please try again.',
+          debugContext,
+        }
+      );
+      savePipelineService.log(debugContext, 'response_received', response?.id || 'bug_report_saved');
 
       resetReportForm();
+      savePipelineService.log(debugContext, 'ui_success_handler_fired');
       setReportSuccessMessage('Report saved to controller');
     } catch (error) {
+      savePipelineService.logError(debugContext, 'db_write_failed', error);
       console.error('Error submitting report:', error);
-      setReportErrorMessage('Failed to save report.');
+      const nextMessage = error instanceof Error && error.message
+        ? error.message
+        : 'Failed to save report.';
+      setReportErrorMessage(nextMessage);
+    } finally {
       setIsSubmittingReport(false);
+      savePipelineService.log(debugContext, 'loading_state_cleared');
     }
   };
 
@@ -382,8 +406,8 @@ export default function Layout() {
         )}
 
         {isReportModalOpen && (
-          <div className="fixed inset-0 z-[80] flex items-center justify-center bg-gray-900/50 p-4">
-            <div className="bg-white rounded-[32px] w-full max-w-xl max-h-[90vh] overflow-y-auto shadow-2xl">
+          <div className="fixed inset-0 z-[110] flex items-end sm:items-center justify-center bg-gray-900/50 p-0 sm:p-4">
+            <div className="bg-white rounded-t-[32px] sm:rounded-[32px] w-full max-w-xl max-h-[calc(100dvh-0.5rem)] sm:max-h-[90vh] overflow-hidden shadow-2xl flex flex-col">
               <div className="flex items-center justify-between px-8 py-6 border-b border-gray-100 sticky top-0 bg-white z-10">
                 <div>
                   <h3 className="text-xl font-black text-gray-900">Send Report</h3>
@@ -396,7 +420,7 @@ export default function Layout() {
                 </button>
               </div>
 
-              <form onSubmit={handleSubmitReport} className="p-8 space-y-6">
+              <form onSubmit={handleSubmitReport} className="flex-1 overflow-y-auto p-8 pb-[calc(7rem+env(safe-area-inset-bottom))] space-y-6">
                 {reportErrorMessage && (
                   <div className="rounded-2xl border border-red-100 bg-red-50 px-5 py-4 flex items-center gap-3">
                     <AlertCircle className="h-5 w-5 text-red-600 shrink-0" />
