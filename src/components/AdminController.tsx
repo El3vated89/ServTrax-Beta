@@ -17,6 +17,7 @@ export default function AdminController() {
   const [providerConfig, setProviderConfig] = useState<PlatformMessagingConfig>(platformMessagingService.getDefaultConfig());
   const [isSavingProviders, setIsSavingProviders] = useState(false);
   const [saveMessage, setSaveMessage] = useState<string | null>(null);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   useEffect(() => {
     const unsubscribe = userProfileService.subscribeToCurrentUserProfile((profile) => {
@@ -63,9 +64,13 @@ export default function AdminController() {
 
   const handleSaveProviders = async () => {
     setIsSavingProviders(true);
+    setErrorMessage(null);
     try {
       await platformMessagingService.saveConfig(providerConfig);
       setSaveMessage('Provider foundation saved');
+    } catch (error) {
+      console.error('Error saving provider foundation:', error);
+      setErrorMessage('Failed to save provider foundation.');
     } finally {
       setIsSavingProviders(false);
     }
@@ -89,6 +94,12 @@ export default function AdminController() {
           <p className="text-sm font-bold text-gray-400 uppercase tracking-widest">Internal platform operations dashboard</p>
         </div>
       </header>
+
+      {errorMessage && (
+        <div className="rounded-2xl border border-red-100 bg-red-50 px-5 py-4">
+          <p className="text-sm font-bold text-red-700">{errorMessage}</p>
+        </div>
+      )}
 
       <div className="grid grid-cols-2 xl:grid-cols-4 gap-4">
         <div className="bg-white rounded-3xl p-6 border border-gray-100 shadow-sm">

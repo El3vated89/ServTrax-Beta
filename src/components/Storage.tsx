@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { 
   HardDrive, Trash2, CheckSquare, Square, FileText, AlertCircle, 
   Download, Search, Filter, X, ChevronRight, Calendar, User, 
@@ -32,25 +32,31 @@ export default function Storage() {
   const [jobs, setJobs] = useState<Job[]>([]);
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [successMessage, setSuccessMessage] = useState<string | null>(null);
+
+  const loadData = useCallback(async () => {
+    setIsLoading(true);
+    try {
+      const [summaryData, assetsData] = await Promise.all([
+        storageService.getUsageSummary(),
+        storageService.getAssets()
+      ]);
+      setSummary(summaryData);
+      setAssets(assetsData);
+      return assetsData;
+    } catch (error) {
+      console.error("Error loading storage data:", error);
+      setErrorMessage('Failed to load storage data.');
+      return [];
+    } finally {
+      setIsLoading(false);
+    }
+  }, []);
 
   useEffect(() => {
-    const loadData = async () => {
-      setIsLoading(true);
-      try {
-        const [summaryData, assetsData] = await Promise.all([
-          storageService.getUsageSummary(),
-          storageService.getAssets()
-        ]);
-        setSummary(summaryData);
-        setAssets(assetsData);
-      } catch (error) {
-        console.error("Error loading storage data:", error);
-      } finally {
-        setIsLoading(false);
-      }
-    };
     loadData();
-  }, []);
+  }, [loadData]);
 
   useEffect(() => {
     const unsubscribeJobs = jobService.subscribeToJobs(setJobs);
@@ -60,6 +66,12 @@ export default function Storage() {
       unsubscribeCustomers();
     };
   }, []);
+
+  useEffect(() => {
+    if (!successMessage) return undefined;
+    const timeout = window.setTimeout(() => setSuccessMessage(null), 3000);
+    return () => window.clearTimeout(timeout);
+  }, [successMessage]);
 
   const filteredAssets = useMemo(() => {
     let result = assets.filter(asset => {
@@ -93,13 +105,17 @@ export default function Storage() {
 
   const handleDeleteAsset = async (id: string) => {
     setIsDeleting(true);
+    setErrorMessage(null);
+    setSuccessMessage(null);
     try {
       await storageService.deleteAsset(id);
-      setAssets(assets.filter(a => a.id !== id));
+      await loadData();
       setSelectedAsset(null);
       setShowDeleteConfirm(false);
+      setSuccessMessage('Asset deleted successfully.');
     } catch (error) {
       console.error('Error deleting asset:', error);
+      setErrorMessage('Failed to delete the asset.');
     } finally {
       setIsDeleting(false);
     }
@@ -108,15 +124,19 @@ export default function Storage() {
   const handleBulkDelete = async () => {
     if (selectedIds.size === 0) return;
     setIsBulkDeleting(true);
+    setErrorMessage(null);
+    setSuccessMessage(null);
     try {
       const idsToDelete = Array.from(selectedIds);
       await storageService.bulkDeleteAssets(idsToDelete);
-      setAssets(assets.filter(a => !selectedIds.has(a.id)));
+      await loadData();
       setSelectedIds(new Set());
       setIsBulkMode(false);
       setShowBulkDeleteConfirm(false);
+      setSuccessMessage('Selected assets deleted successfully.');
     } catch (error) {
       console.error('Error bulk deleting assets:', error);
+      setErrorMessage('Failed to delete the selected assets.');
     } finally {
       setIsBulkDeleting(false);
     }
@@ -124,27 +144,29 @@ export default function Storage() {
 
   const handleBulkReassign = async () => {
     if (selectedIds.size === 0) return;
+    setErrorMessage(null);
+    setSuccessMessage(null);
     try {
       const idsToUpdate = Array.from(selectedIds);
       await Promise.all(idsToUpdate.map(id => 
         storageService.updateAsset(id, { jobId: editJobId, customerId: editCustomerId })
       ));
       
-      // Refresh local state
-      const updatedAssets = assets.map(a => 
-        selectedIds.has(a.id) ? { ...a, jobId: editJobId, customerId: editCustomerId } : a
-      );
-      setAssets(updatedAssets);
+      await loadData();
       setIsReassigning(false);
       setSelectedIds(new Set());
       setIsBulkMode(false);
+      setSuccessMessage('Selected assets reassigned successfully.');
     } catch (error) {
       console.error('Error bulk reassigning assets:', error);
+      setErrorMessage('Failed to reassign the selected assets.');
     }
   };
 
   const handleBulkSetExpiration = async () => {
     if (selectedIds.size === 0) return;
+    setErrorMessage(null);
+    setSuccessMessage(null);
     try {
       const days = parseInt(editExpirationDays);
       const expirationDate = Timestamp.fromMillis(Date.now() + days * 24 * 60 * 60 * 1000);
@@ -154,15 +176,14 @@ export default function Storage() {
         storageService.updateAsset(id, { expires_at: expirationDate })
       ));
       
-      const updatedAssets = assets.map(a => 
-        selectedIds.has(a.id) ? { ...a, expires_at: expirationDate } : a
-      );
-      setAssets(updatedAssets);
+      await loadData();
       setIsSettingExpiration(false);
       setSelectedIds(new Set());
       setIsBulkMode(false);
+      setSuccessMessage('Expiration updated for the selected assets.');
     } catch (error) {
       console.error('Error bulk setting expiration:', error);
+      setErrorMessage('Failed to update expiration for the selected assets.');
     }
   };
 
@@ -172,41 +193,53 @@ export default function Storage() {
 
   const handleUpdateSingleAsset = async () => {
     if (!selectedAsset) return;
+    setErrorMessage(null);
+    setSuccessMessage(null);
     try {
       await storageService.updateAsset(selectedAsset.id, {
         jobId: editJobId,
         customerId: editCustomerId
       });
-      setAssets(assets.map(a => a.id === selectedAsset.id ? { ...a, jobId: editJobId, customerId: editCustomerId } : a));
+      const refreshedAssets = await loadData();
       setIsReassigning(false);
-      setSelectedAsset(prev => prev ? { ...prev, jobId: editJobId, customerId: editCustomerId } : null);
+      setSelectedAsset(refreshedAssets.find((asset) => asset.id === selectedAsset.id) || null);
+      setSuccessMessage('Asset assignment updated successfully.');
     } catch (error) {
       console.error('Error updating asset:', error);
+      setErrorMessage('Failed to update the asset assignment.');
     }
   };
 
   const handleSetSingleExpiration = async () => {
     if (!selectedAsset) return;
+    setErrorMessage(null);
+    setSuccessMessage(null);
     try {
       const days = parseInt(editExpirationDays);
       const expirationDate = Timestamp.fromMillis(Date.now() + days * 24 * 60 * 60 * 1000);
       await storageService.updateAsset(selectedAsset.id, { expires_at: expirationDate });
-      setAssets(assets.map(a => a.id === selectedAsset.id ? { ...a, expires_at: expirationDate } : a));
+      const refreshedAssets = await loadData();
       setIsSettingExpiration(false);
-      setSelectedAsset(prev => prev ? { ...prev, expires_at: expirationDate } : null);
+      setSelectedAsset(refreshedAssets.find((asset) => asset.id === selectedAsset.id) || null);
+      setSuccessMessage('Asset expiration updated successfully.');
     } catch (error) {
       console.error('Error setting expiration:', error);
+      setErrorMessage('Failed to update asset expiration.');
     }
   };
 
   const handleRemoveExpiration = async () => {
     if (!selectedAsset) return;
+    setErrorMessage(null);
+    setSuccessMessage(null);
     try {
       await storageService.updateAsset(selectedAsset.id, { expires_at: undefined });
-      setAssets(assets.map(a => a.id === selectedAsset.id ? { ...a, expires_at: undefined } : a));
-      setSelectedAsset(prev => prev ? { ...prev, expires_at: undefined } : null);
+      const refreshedAssets = await loadData();
+      setSelectedAsset(refreshedAssets.find((asset) => asset.id === selectedAsset.id) || null);
+      setSuccessMessage('Asset expiration removed successfully.');
     } catch (error) {
       console.error('Error removing expiration:', error);
+      setErrorMessage('Failed to remove asset expiration.');
     }
   };
 
@@ -287,6 +320,18 @@ export default function Storage() {
 
       {/* List Content */}
       <div className="max-w-xl mx-auto px-4 py-6">
+        {errorMessage && (
+          <div className="mb-4 rounded-2xl border border-red-100 bg-red-50 px-4 py-3">
+            <p className="text-sm font-bold text-red-700">{errorMessage}</p>
+          </div>
+        )}
+
+        {successMessage && (
+          <div className="mb-4 rounded-2xl border border-green-100 bg-green-50 px-4 py-3">
+            <p className="text-sm font-bold text-green-700">{successMessage}</p>
+          </div>
+        )}
+
         {isLoading ? (
           <div className="flex flex-col items-center justify-center py-20 space-y-4">
             <div className="w-12 h-12 border-4 border-blue-600 border-t-transparent rounded-full animate-spin" />
