@@ -585,6 +585,11 @@ export default function Customers() {
                               Portal access is persistent on {portalCapabilities.planLabel}. Temporary proof links stay separate and still expire by your storage settings.
                             </p>
                           </div>
+                          <div className="bg-amber-50 rounded-2xl p-4 border border-amber-100">
+                            <p className="text-xs font-bold text-amber-700">
+                              Temporary access mode: this portal currently opens with the portal link plus the customer phone number. This reduced-security placeholder is being logged in the portal record for later hardening.
+                            </p>
+                          </div>
                         </div>
                       )}
                     </div>

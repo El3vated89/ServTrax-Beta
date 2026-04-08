@@ -1,12 +1,13 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { collection, doc, getDoc, getDocs, query, where } from 'firebase/firestore';
-import { AlertCircle, Calendar, CheckCircle, FileText, Info, MapPin } from 'lucide-react';
+import { AlertCircle, Calendar, CheckCircle, FileText, Info, LockKeyhole, MapPin } from 'lucide-react';
 import { db } from '../firebase';
 import {
   CustomerPortalHistoryItem,
   CustomerPortalQuoteItem,
   CustomerPortalRecord,
+  customerPortalService,
 } from '../services/customerPortalService';
 
 const toDate = (value: any) => {
@@ -22,6 +23,12 @@ export default function PublicCustomerPortal() {
   const [quotes, setQuotes] = useState<CustomerPortalQuoteItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [accessLoading, setAccessLoading] = useState(false);
+  const [phoneInput, setPhoneInput] = useState('');
+  const [phoneError, setPhoneError] = useState('');
+  const [isPhoneVerified, setIsPhoneVerified] = useState(false);
+
+  const requiresPhoneGate = !!customerPortal && customerPortal.portal_access_mode === 'phone_only_temporary';
 
   useEffect(() => {
     const loadPortal = async () => {
@@ -47,7 +54,35 @@ export default function PublicCustomerPortal() {
         }
 
         setCustomerPortal(portalData);
+      } catch (err) {
+        console.error('Error loading customer portal:', err);
+        setError('Failed to load customer portal.');
+      } finally {
+        setLoading(false);
+      }
+    };
 
+    loadPortal();
+  }, [customerId, portalToken]);
+
+  useEffect(() => {
+    if (!portalToken) return;
+    try {
+      if (window.sessionStorage.getItem(`portal-phone-ok-${portalToken}`) === '1') {
+        setIsPhoneVerified(true);
+      }
+    } catch {
+      // Ignore sessionStorage errors
+    }
+  }, [portalToken]);
+
+  useEffect(() => {
+    const loadPortalContent = async () => {
+      if (!portalToken || !customerPortal) return;
+      if (requiresPhoneGate && !isPhoneVerified) return;
+
+      setLoading(true);
+      try {
         const [jobsSnap, quotesSnap] = await Promise.all([
           getDocs(
             query(
@@ -85,15 +120,15 @@ export default function PublicCustomerPortal() {
             })
         );
       } catch (err) {
-        console.error('Error loading customer portal:', err);
+        console.error('Error loading customer portal content:', err);
         setError('Failed to load customer portal.');
       } finally {
         setLoading(false);
       }
     };
 
-    loadPortal();
-  }, [customerId, portalToken]);
+    loadPortalContent();
+  }, [customerPortal, isPhoneVerified, portalToken, requiresPhoneGate]);
 
   const visibleJobs = useMemo(() => {
     if (!customerPortal?.portal_show_history) return [];
@@ -127,6 +162,103 @@ export default function PublicCustomerPortal() {
     );
   }
 
+  if (requiresPhoneGate && !isPhoneVerified) {
+    return (
+      <div className="min-h-screen flex flex-col items-center justify-center bg-gray-50 p-4">
+        <div className="bg-white p-8 rounded-3xl shadow-xl border border-gray-100 max-w-md w-full space-y-6">
+          <div className="text-amber-600 bg-amber-50 w-16 h-16 rounded-full flex items-center justify-center mx-auto">
+            <LockKeyhole className="h-8 w-8" />
+          </div>
+
+          <div className="text-center">
+            <h2 className="text-2xl font-black text-gray-900 tracking-tight">Open Customer Portal</h2>
+            <p className="text-sm font-bold text-gray-500 mt-2">
+              Temporary access placeholder: enter the customer phone number to open this portal.
+            </p>
+            {customerPortal.portal_phone_last4 && (
+              <p className="text-xs font-black uppercase tracking-widest text-gray-400 mt-3">
+                Phone ending in {customerPortal.portal_phone_last4}
+              </p>
+            )}
+          </div>
+
+          <div className="rounded-2xl border border-amber-100 bg-amber-50 px-4 py-3">
+            <p className="text-xs font-bold text-amber-700">
+              This reduced-security phone gate is temporary and has been logged for later hardening.
+            </p>
+          </div>
+
+          {phoneError && (
+            <div className="rounded-2xl border border-red-100 bg-red-50 px-4 py-3">
+              <p className="text-sm font-bold text-red-700">{phoneError}</p>
+            </div>
+          )}
+
+          <form
+            onSubmit={async (event) => {
+              event.preventDefault();
+              setPhoneError('');
+              setAccessLoading(true);
+              try {
+                const normalizedPhone = customerPortalService.normalizePhoneForPortal(phoneInput);
+                const hashedPhone = await customerPortalService.hashPhoneForPortal(normalizedPhone);
+
+                if (!normalizedPhone) {
+                  setPhoneError('Enter the customer phone number to continue.');
+                  return;
+                }
+
+                if (!customerPortal.portal_phone_hash) {
+                  setPhoneError('This customer portal needs a phone number saved before it can open.');
+                  return;
+                }
+
+                if (hashedPhone !== customerPortal.portal_phone_hash) {
+                  setPhoneError('That phone number does not match this customer portal.');
+                  return;
+                }
+
+                try {
+                  window.sessionStorage.setItem(`portal-phone-ok-${portalToken}`, '1');
+                } catch {
+                  // Ignore sessionStorage errors
+                }
+
+                setIsPhoneVerified(true);
+              } finally {
+                setAccessLoading(false);
+              }
+            }}
+            className="space-y-4"
+          >
+            <div>
+              <label className="block text-[10px] font-black uppercase tracking-widest text-gray-400 mb-2">
+                Customer Phone Number
+              </label>
+              <input
+                type="tel"
+                value={phoneInput}
+                onChange={(event) => setPhoneInput(event.target.value)}
+                placeholder="Enter phone number"
+                className="w-full px-5 py-4 bg-gray-50 rounded-2xl border-none text-sm font-bold text-gray-900 focus:ring-2 focus:ring-blue-500 outline-none"
+              />
+            </div>
+
+            <button
+              type="submit"
+              disabled={accessLoading}
+              className={`w-full px-5 py-4 rounded-2xl text-xs font-black uppercase tracking-widest transition-all ${
+                accessLoading ? 'bg-gray-200 text-gray-400' : 'bg-blue-600 text-white hover:bg-blue-700'
+              }`}
+            >
+              {accessLoading ? 'Checking...' : 'Open Portal'}
+            </button>
+          </form>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-gray-50 py-12 px-4 sm:px-6 lg:px-8">
       <div className="max-w-3xl mx-auto space-y-6">
@@ -139,6 +271,18 @@ export default function PublicCustomerPortal() {
             </p>
           </div>
         </div>
+
+        {customerPortal.portal_security_note && (
+          <div className="bg-amber-50 border border-amber-100 rounded-2xl p-4 flex items-start gap-3">
+            <AlertCircle className="h-5 w-5 text-amber-600 flex-shrink-0 mt-0.5" />
+            <div>
+              <h3 className="text-sm font-black text-amber-900 mb-1">Temporary Portal Access Mode</h3>
+              <p className="text-xs font-bold text-amber-700 leading-relaxed">
+                {customerPortal.portal_security_note}
+              </p>
+            </div>
+          </div>
+        )}
 
         <div className="bg-white rounded-[40px] shadow-2xl border border-gray-100 overflow-hidden">
           <div className="bg-blue-600 p-8 text-white">

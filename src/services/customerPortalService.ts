@@ -29,6 +29,11 @@ export interface CustomerPortalRecord {
   ownerId: string;
   portal_enabled: boolean;
   portal_token: string;
+  portal_access_mode?: 'direct_link' | 'phone_only_temporary';
+  portal_phone_hash?: string;
+  portal_phone_last4?: string;
+  portal_security_note?: string;
+  portal_security_logged_at?: any;
   portal_show_history: boolean;
   portal_show_payment_status: boolean;
   portal_show_quotes: boolean;
@@ -81,9 +86,38 @@ const INTERNAL_PORTAL_QUOTES_COLLECTION = 'customer_portal_quotes';
 const PUBLIC_PORTAL_COLLECTION = 'public_customer_portals';
 const PUBLIC_PORTAL_HISTORY_COLLECTION = 'public_customer_portal_job_history';
 const PUBLIC_PORTAL_QUOTES_COLLECTION = 'public_customer_portal_quotes';
+const TEMP_PORTAL_SECURITY_NOTE = 'Temporary placeholder: customer portal access is currently reduced to link plus phone-number verification and must be hardened later.';
 
 const buildAddress = (customer: Customer) =>
   [customer.street, customer.line2, customer.city, customer.state, customer.zip].filter(Boolean).join(', ');
+
+const normalizePhoneForPortal = (value?: string | null) => {
+  const digits = String(value || '').replace(/\D/g, '');
+  if (digits.length === 11 && digits.startsWith('1')) {
+    return digits.slice(1);
+  }
+  return digits;
+};
+
+const getPhoneLast4 = (value?: string | null) => {
+  const normalized = normalizePhoneForPortal(value);
+  return normalized.slice(-4);
+};
+
+const hashPhoneForPortal = async (value?: string | null) => {
+  const normalized = normalizePhoneForPortal(value);
+  if (!normalized) return '';
+
+  if (typeof crypto !== 'undefined' && crypto.subtle) {
+    const encoded = new TextEncoder().encode(normalized);
+    const digest = await crypto.subtle.digest('SHA-256', encoded);
+    return Array.from(new Uint8Array(digest))
+      .map((byte) => byte.toString(16).padStart(2, '0'))
+      .join('');
+  }
+
+  return normalized;
+};
 
 const quoteItemFromJob = (customer: Customer, job: Job): CustomerPortalQuoteItem => ({
   customerId: customer.id || '',
@@ -150,6 +184,10 @@ const deletePublicPortalSnapshots = async (portalToken?: string) => {
 };
 
 export const customerPortalService = {
+  normalizePhoneForPortal,
+  hashPhoneForPortal,
+  getPhoneLast4,
+
   getCapabilities: (
     profileOrPlan?: BusinessPlanProfile | string | null,
     framework?: BillingFramework | null
@@ -219,11 +257,18 @@ export const customerPortalService = {
       await deletePublicPortalSnapshots(previousPortalToken);
     }
 
+    const portalPhoneHash = await hashPhoneForPortal(customer.phone);
+
     const portalDoc: CustomerPortalRecord = {
       customerId: customer.id,
       ownerId: customer.ownerId,
       portal_enabled: true,
       portal_token: customer.portal_token,
+      portal_access_mode: 'phone_only_temporary',
+      portal_phone_hash: portalPhoneHash,
+      portal_phone_last4: getPhoneLast4(customer.phone),
+      portal_security_note: TEMP_PORTAL_SECURITY_NOTE,
+      portal_security_logged_at: serverTimestamp(),
       portal_show_history: !!customer.portal_show_history,
       portal_show_payment_status: !!customer.portal_show_payment_status,
       portal_show_quotes: !!customer.portal_show_quotes,
