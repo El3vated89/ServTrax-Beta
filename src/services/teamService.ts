@@ -10,9 +10,9 @@ import {
   where,
 } from 'firebase/firestore';
 import { auth, db } from '../firebase';
-import { handleFirestoreError, OperationType } from './verificationService';
 import { planConfigService } from './planConfigService';
 import { waitForCurrentUser } from './authSessionService';
+import { localFallbackStore } from './localFallbackStore';
 
 export type TeamMemberRole = 'crew_member' | 'crew_lead';
 export type TeamAccountStatus = 'pending' | 'active' | 'inactive';
@@ -34,6 +34,10 @@ export interface TeamMember {
 }
 
 const COLLECTION_NAME = 'team_members';
+const LOCAL_FALLBACK_NAMESPACE = 'team_members';
+type LocalTeamMember = TeamMember & { _local_deleted?: boolean };
+const teamCache = new Map<string, TeamMember>();
+const toClientTimestamp = () => new Date().toISOString();
 
 const buildPermissionList = (member: Partial<TeamMember>) => {
   const permissions: string[] = [];
@@ -92,11 +96,54 @@ export const teamService = {
 
   subscribeToTeamMembers: (callback: (members: TeamMember[]) => void) => {
     let unsubscribeMembers = () => {};
+    let unsubscribeLocal = () => {};
+    let primaryMembers: TeamMember[] = [];
+    let localMembers: LocalTeamMember[] = [];
+
+    const emit = () => {
+      const next = new Map<string, TeamMember>();
+      primaryMembers.forEach((entry) => {
+        if (!entry.id) return;
+        next.set(entry.id, entry);
+      });
+      localMembers.forEach((entry) => {
+        if (!entry.id) return;
+        if (entry._local_deleted) {
+          next.delete(entry.id);
+          return;
+        }
+        next.set(entry.id, {
+          id: entry.id,
+          ownerId: entry.ownerId,
+          name: entry.name || '',
+          email: entry.email || '',
+          role: entry.role || 'crew_member',
+          account_status: entry.account_status || 'pending',
+          linked_user_id: entry.linked_user_id || '',
+          route_access: entry.route_access ?? true,
+          customer_access: entry.customer_access ?? false,
+          expense_entry_access: entry.expense_entry_access ?? false,
+          job_interaction_access: entry.job_interaction_access ?? true,
+          created_at: entry.created_at as any,
+          updated_at: entry.updated_at as any,
+        });
+      });
+      const merged = Array.from(next.values()).sort((left, right) => left.name.localeCompare(right.name));
+      teamCache.clear();
+      merged.forEach((entry) => {
+        if (entry.id) teamCache.set(entry.id, entry);
+      });
+      callback(merged);
+    };
 
     const unsubscribeAuth = auth.onAuthStateChanged((user) => {
       unsubscribeMembers();
+      unsubscribeLocal();
+      primaryMembers = [];
+      localMembers = [];
 
       if (!user) {
+        teamCache.clear();
         callback([]);
         return;
       }
@@ -104,14 +151,25 @@ export const teamService = {
       unsubscribeMembers = onSnapshot(
         query(collection(db, COLLECTION_NAME), where('ownerId', '==', user.uid)),
         (snapshot) => {
-          callback(snapshot.docs.map((entry) => ({ id: entry.id, ...entry.data() } as TeamMember)));
+          primaryMembers = snapshot.docs.map((entry) => ({ id: entry.id, ...entry.data() } as TeamMember));
+          emit();
         },
-        (error) => handleFirestoreError(error, OperationType.GET, COLLECTION_NAME)
+        (error) => {
+          console.error('Primary team subscription failed, using local fallback only:', error);
+          primaryMembers = [];
+          emit();
+        }
       );
+
+      unsubscribeLocal = localFallbackStore.subscribeToRecords<LocalTeamMember>(LOCAL_FALLBACK_NAMESPACE, user.uid, (records) => {
+        localMembers = records;
+        emit();
+      });
     });
 
     return () => {
       unsubscribeMembers();
+      unsubscribeLocal();
       unsubscribeAuth();
     };
   },
@@ -130,7 +188,15 @@ export const teamService = {
       await syncLinkedUserProfile(ref.id, member);
       return ref;
     } catch (error) {
-      handleFirestoreError(error, OperationType.WRITE, COLLECTION_NAME);
+      console.error('Primary team member save failed, saving locally instead:', error);
+      const localId = localFallbackStore.upsertRecord<LocalTeamMember>(LOCAL_FALLBACK_NAMESPACE, user.uid, {
+        id: localFallbackStore.createLocalId(LOCAL_FALLBACK_NAMESPACE),
+        ...member,
+        ownerId: user.uid,
+        created_at: toClientTimestamp() as any,
+        updated_at: toClientTimestamp() as any,
+      });
+      return { id: localId };
     }
   },
 
@@ -139,13 +205,41 @@ export const teamService = {
     if (!user) throw new Error('User not authenticated');
 
     try {
+      if (localFallbackStore.isLocalId(id, LOCAL_FALLBACK_NAMESPACE)) {
+        localFallbackStore.updateRecord<LocalTeamMember>(LOCAL_FALLBACK_NAMESPACE, user.uid, id, {
+          ...updates,
+          updated_at: toClientTimestamp() as any,
+          _local_deleted: false,
+        });
+        return;
+      }
+
       await updateDoc(doc(db, COLLECTION_NAME, id), {
         ...updates,
         updated_at: serverTimestamp(),
       });
       await syncLinkedUserProfile(id, updates);
     } catch (error) {
-      handleFirestoreError(error, OperationType.UPDATE, `${COLLECTION_NAME}/${id}`);
+      console.error('Primary team member update failed, updating local fallback instead:', error);
+      const cachedMember = teamCache.get(id);
+      localFallbackStore.upsertRecord<LocalTeamMember>(LOCAL_FALLBACK_NAMESPACE, user.uid, {
+        ...(cachedMember || {
+          id,
+          ownerId: user.uid,
+          name: updates.name || '',
+          email: updates.email || '',
+          role: updates.role || 'crew_member',
+          account_status: updates.account_status || 'pending',
+          route_access: updates.route_access ?? true,
+          customer_access: updates.customer_access ?? false,
+          expense_entry_access: updates.expense_entry_access ?? false,
+          job_interaction_access: updates.job_interaction_access ?? true,
+          created_at: toClientTimestamp() as any,
+        }),
+        ...updates,
+        updated_at: toClientTimestamp() as any,
+        _local_deleted: false,
+      } as LocalTeamMember);
     }
   },
 };

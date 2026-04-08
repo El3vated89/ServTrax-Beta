@@ -1,7 +1,7 @@
 import { collection, addDoc, updateDoc, deleteDoc, doc, query, where, serverTimestamp, onSnapshot } from 'firebase/firestore';
 import { db, auth } from '../firebase';
 import { waitForCurrentUser } from './authSessionService';
-import { handleFirestoreError, OperationType } from './verificationService';
+import { localFallbackStore } from './localFallbackStore';
 
 export interface Job {
   id?: string;
@@ -38,33 +38,113 @@ export interface Job {
   portal_visible?: boolean;
 }
 
+const COLLECTION_NAME = 'jobs';
+const LOCAL_FALLBACK_NAMESPACE = 'jobs';
+type LocalJob = Job & { _local_deleted?: boolean };
+const jobCache = new Map<string, Job>();
+const toClientTimestamp = () => new Date().toISOString();
+
+const normalizeLocalJob = (ownerId: string, entry: Partial<LocalJob>): Job => ({
+  id: entry.id,
+  ownerId,
+  customerId: entry.customerId || '',
+  servicePlanId: entry.servicePlanId || '',
+  recurringPlanId: entry.recurringPlanId || '',
+  customer_name_snapshot: entry.customer_name_snapshot || '',
+  address_snapshot: entry.address_snapshot || '',
+  phone_snapshot: entry.phone_snapshot || '',
+  service_snapshot: entry.service_snapshot || '',
+  price_snapshot: entry.price_snapshot || 0,
+  billing_frequency: entry.billing_frequency,
+  scheduled_date: entry.scheduled_date as any,
+  completed_date: entry.completed_date as any,
+  last_completed_date: entry.last_completed_date as any,
+  next_due_date: entry.next_due_date as any,
+  status: entry.status || 'pending',
+  payment_status: entry.payment_status || 'unpaid',
+  visibility_mode: entry.visibility_mode || 'internal_only',
+  share_token: entry.share_token || '',
+  share_expires_at: entry.share_expires_at as any,
+  is_billable: entry.is_billable ?? true,
+  is_recurring: entry.is_recurring ?? false,
+  internal_notes: entry.internal_notes || '',
+  customer_notes: entry.customer_notes || '',
+  created_at: entry.created_at as any,
+  approved_at: entry.approved_at as any,
+  service_setup_type: entry.service_setup_type,
+  interval_days: entry.interval_days,
+  override_enabled: entry.override_enabled,
+  seasonal_enabled: entry.seasonal_enabled,
+  seasonal_rules: entry.seasonal_rules,
+  portal_visible: entry.portal_visible,
+});
+
+const mergeJobs = (primaryJobs: Job[], localJobs: LocalJob[]) => {
+  const next = new Map<string, Job>();
+  primaryJobs.forEach((job) => {
+    if (!job.id) return;
+    next.set(job.id, job);
+  });
+  localJobs.forEach((job) => {
+    if (!job.id) return;
+    if (job._local_deleted) {
+      next.delete(job.id);
+      return;
+    }
+    next.set(job.id, normalizeLocalJob(job.ownerId, job));
+  });
+  const merged = Array.from(next.values());
+  jobCache.clear();
+  merged.forEach((job) => {
+    if (job.id) jobCache.set(job.id, job);
+  });
+  return merged;
+};
+
 export const jobService = {
   subscribeToJobs: (callback: (jobs: Job[]) => void) => {
     let unsubscribeJobs = () => {};
+    let unsubscribeLocal = () => {};
+    let primaryJobs: Job[] = [];
+    let localJobs: LocalJob[] = [];
+
+    const emit = () => callback(mergeJobs(primaryJobs, localJobs));
 
     const unsubscribeAuth = auth.onAuthStateChanged((user) => {
       unsubscribeJobs();
+      unsubscribeLocal();
+      primaryJobs = [];
+      localJobs = [];
 
       if (!user) {
+        jobCache.clear();
         callback([]);
         return;
       }
 
-      const q = query(collection(db, 'jobs'), where('ownerId', '==', user.uid));
+      const q = query(collection(db, COLLECTION_NAME), where('ownerId', '==', user.uid));
 
       unsubscribeJobs = onSnapshot(q, (snapshot) => {
-        const jobs = snapshot.docs.map(doc => ({
+        primaryJobs = snapshot.docs.map(doc => ({
           id: doc.id,
           ...doc.data()
         })) as Job[];
-        callback(jobs);
+        emit();
       }, (error) => {
-        handleFirestoreError(error, OperationType.GET, 'jobs');
+        console.error('Primary jobs subscription failed, using local fallback only:', error);
+        primaryJobs = [];
+        emit();
+      });
+
+      unsubscribeLocal = localFallbackStore.subscribeToRecords<LocalJob>(LOCAL_FALLBACK_NAMESPACE, user.uid, (records) => {
+        localJobs = records;
+        emit();
       });
     });
 
     return () => {
       unsubscribeJobs();
+      unsubscribeLocal();
       unsubscribeAuth();
     };
   },
@@ -74,35 +154,99 @@ export const jobService = {
     if (!user) throw new Error('User not authenticated');
 
     try {
-      return await addDoc(collection(db, 'jobs'), {
+      return await addDoc(collection(db, COLLECTION_NAME), {
         ...jobData,
         ownerId: user.uid,
         created_at: serverTimestamp()
       });
     } catch (error) {
-      handleFirestoreError(error, OperationType.WRITE, 'jobs');
+      console.error('Primary job save failed, saving locally instead:', error);
+      const localId = localFallbackStore.upsertRecord<LocalJob>(LOCAL_FALLBACK_NAMESPACE, user.uid, {
+        id: localFallbackStore.createLocalId(LOCAL_FALLBACK_NAMESPACE),
+        ...jobData,
+        ownerId: user.uid,
+        created_at: toClientTimestamp() as any,
+      });
+      return { id: localId };
     }
   },
 
   updateJob: async (id: string, data: Partial<Job>) => {
     const user = await waitForCurrentUser();
     if (!user) throw new Error('User not authenticated');
-    const docRef = doc(db, 'jobs', id);
+    const docRef = doc(db, COLLECTION_NAME, id);
     try {
+      if (localFallbackStore.isLocalId(id, LOCAL_FALLBACK_NAMESPACE)) {
+        localFallbackStore.updateRecord<LocalJob>(LOCAL_FALLBACK_NAMESPACE, user.uid, id, {
+          ...data,
+          _local_deleted: false,
+        });
+        return;
+      }
       return await updateDoc(docRef, data);
     } catch (error) {
-      handleFirestoreError(error, OperationType.UPDATE, `jobs/${id}`);
+      console.error('Primary job update failed, updating local fallback instead:', error);
+      const cachedJob = jobCache.get(id);
+      localFallbackStore.upsertRecord<LocalJob>(LOCAL_FALLBACK_NAMESPACE, user.uid, {
+        ...(cachedJob || {
+          id,
+          ownerId: user.uid,
+          customerId: data.customerId || '',
+          customer_name_snapshot: data.customer_name_snapshot || '',
+          address_snapshot: data.address_snapshot || '',
+          phone_snapshot: data.phone_snapshot || '',
+          service_snapshot: data.service_snapshot || '',
+          price_snapshot: data.price_snapshot || 0,
+          status: data.status || 'pending',
+          payment_status: data.payment_status || 'unpaid',
+          visibility_mode: data.visibility_mode || 'internal_only',
+          is_billable: data.is_billable ?? true,
+          is_recurring: data.is_recurring ?? false,
+          internal_notes: data.internal_notes || '',
+          customer_notes: data.customer_notes || '',
+          created_at: toClientTimestamp() as any,
+        }),
+        ...data,
+        _local_deleted: false,
+      } as LocalJob);
     }
   },
 
   deleteJob: async (id: string) => {
     const user = await waitForCurrentUser();
     if (!user) throw new Error('User not authenticated');
-    const docRef = doc(db, 'jobs', id);
+    const docRef = doc(db, COLLECTION_NAME, id);
     try {
+      if (localFallbackStore.isLocalId(id, LOCAL_FALLBACK_NAMESPACE)) {
+        localFallbackStore.removeRecord<LocalJob>(LOCAL_FALLBACK_NAMESPACE, user.uid, id);
+        jobCache.delete(id);
+        return;
+      }
       return await deleteDoc(docRef);
     } catch (error) {
-      handleFirestoreError(error, OperationType.DELETE, `jobs/${id}`);
+      console.error('Primary job delete failed, hiding it locally instead:', error);
+      const cachedJob = jobCache.get(id);
+      localFallbackStore.upsertRecord<LocalJob>(LOCAL_FALLBACK_NAMESPACE, user.uid, {
+        ...(cachedJob || {
+          id,
+          ownerId: user.uid,
+          customerId: '',
+          customer_name_snapshot: '',
+          address_snapshot: '',
+          phone_snapshot: '',
+          service_snapshot: '',
+          price_snapshot: 0,
+          status: 'pending',
+          payment_status: 'unpaid',
+          visibility_mode: 'internal_only',
+          is_billable: true,
+          is_recurring: false,
+          internal_notes: '',
+          customer_notes: '',
+          created_at: toClientTimestamp() as any,
+        }),
+        _local_deleted: true,
+      } as LocalJob);
     }
   }
 };
