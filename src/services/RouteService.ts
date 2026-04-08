@@ -3,8 +3,150 @@ import { db, auth } from '../firebase';
 import { waitForCurrentUser } from './authSessionService';
 import { handleFirestoreError, OperationType } from './verificationService';
 import { Route, RouteStop, RouteTemplate } from '../modules/routes/types';
+import { localFallbackStore } from './localFallbackStore';
 
 const getActorNameSnapshot = () => auth.currentUser?.displayName || auth.currentUser?.email || auth.currentUser?.uid || 'Unknown User';
+const LOCAL_ROUTE_NAMESPACE = 'routes';
+const LOCAL_ROUTE_STOP_NAMESPACE = 'route_stops';
+
+type LocalRoute = Route & { _local_deleted?: boolean };
+type LocalRouteStop = RouteStop & { _local_deleted?: boolean };
+
+const routeCache = new Map<string, Route>();
+const routeStopCache = new Map<string, RouteStop>();
+
+const toClientTimestamp = () => new Date().toISOString();
+const toMillis = (value: any) => {
+  if (!value) return 0;
+  if (typeof value === 'string') return new Date(value).getTime();
+  if (value?.toMillis) return value.toMillis();
+  if (value?.toDate) return value.toDate().getTime();
+  if (value instanceof Date) return value.getTime();
+  return 0;
+};
+
+const toJsDate = (value: any) => {
+  if (!value) return new Date(0);
+  if (typeof value === 'string') return new Date(value);
+  if (value?.toDate) return value.toDate();
+  if (value instanceof Date) return value;
+  return new Date(value);
+};
+
+const normalizeLocalRoute = (ownerId: string, entry: Partial<LocalRoute>): Route => ({
+  id: entry.id,
+  ownerId,
+  name: entry.name || 'Route',
+  template_id: entry.template_id || '',
+  template_name: entry.template_name || '',
+  template_mode: entry.template_mode,
+  template_day: entry.template_day ?? null,
+  template_area: entry.template_area || '',
+  route_run_index: entry.route_run_index || 1,
+  route_run_total: entry.route_run_total || 1,
+  route_run_label: entry.route_run_label || '',
+  route_capacity: entry.route_capacity || 15,
+  route_date: entry.route_date || toClientTimestamp(),
+  status: entry.status || 'draft',
+  base_camp_label: entry.base_camp_label || 'Base Camp',
+  base_camp_address: entry.base_camp_address || '',
+  base_camp_lat: entry.base_camp_lat || 0,
+  base_camp_lng: entry.base_camp_lng || 0,
+  return_to_base: entry.return_to_base ?? true,
+  optimization_mode: entry.optimization_mode || 'none',
+  manual_override: entry.manual_override ?? false,
+  created_by: entry.created_by || ownerId,
+  created_by_name: entry.created_by_name || getActorNameSnapshot(),
+  assigned_team_id: entry.assigned_team_id || '',
+  assigned_team_name_snapshot: entry.assigned_team_name_snapshot || '',
+  assigned_user_ids: entry.assigned_user_ids || [],
+  assigned_user_names_snapshot: entry.assigned_user_names_snapshot || [],
+  started_at: entry.started_at as any,
+  started_by_user_id: entry.started_by_user_id || '',
+  started_by_name: entry.started_by_name || '',
+  completed_at: entry.completed_at as any,
+  completed_by_user_id: entry.completed_by_user_id || '',
+  completed_by_name: entry.completed_by_name || '',
+  created_at: entry.created_at as any,
+  updated_at: entry.updated_at as any,
+});
+
+const normalizeLocalRouteStop = (ownerId: string, entry: Partial<LocalRouteStop>): RouteStop => ({
+  id: entry.id,
+  ownerId,
+  route_id: entry.route_id || '',
+  customer_id: entry.customer_id || '',
+  job_id: entry.job_id || '',
+  stop_order: entry.stop_order || 0,
+  manual_order: entry.manual_order || 0,
+  optimized_order: entry.optimized_order || 0,
+  status: entry.status || 'pending',
+  due_state: entry.due_state || 'due',
+  city_snapshot: entry.city_snapshot || '',
+  address_snapshot: entry.address_snapshot || '',
+  lat_snapshot: entry.lat_snapshot || 0,
+  lng_snapshot: entry.lng_snapshot || 0,
+  service_type_snapshot: entry.service_type_snapshot || '',
+  customer_name_snapshot: entry.customer_name_snapshot || '',
+  price_snapshot: entry.price_snapshot || 0,
+  last_service_date_snapshot: entry.last_service_date_snapshot as any,
+  scheduled_date: entry.scheduled_date || toClientTimestamp(),
+  due_date: entry.due_date || toClientTimestamp(),
+  delayed_reason: entry.delayed_reason || '',
+  completed_at: entry.completed_at as any,
+  completed_by_user_id: entry.completed_by_user_id || '',
+  completed_by_name: entry.completed_by_name || '',
+  assigned_user_id: entry.assigned_user_id || '',
+  assigned_user_name_snapshot: entry.assigned_user_name_snapshot || '',
+  verification_id: entry.verification_id || '',
+  notes_internal: entry.notes_internal || '',
+  created_at: entry.created_at as any,
+  updated_at: entry.updated_at as any,
+});
+
+const mergeRoutes = (primaryRoutes: Route[], localRoutes: LocalRoute[]) => {
+  const next = new Map<string, Route>();
+  primaryRoutes.forEach((route) => {
+    if (!route.id) return;
+    next.set(route.id, route);
+  });
+  localRoutes.forEach((route) => {
+    if (!route.id) return;
+    if (route._local_deleted) {
+      next.delete(route.id);
+      return;
+    }
+    next.set(route.id, normalizeLocalRoute(route.ownerId, route));
+  });
+  const merged = Array.from(next.values()).sort((left, right) => toMillis(right.route_date) - toMillis(left.route_date));
+  routeCache.clear();
+  merged.forEach((route) => {
+    if (route.id) routeCache.set(route.id, route);
+  });
+  return merged;
+};
+
+const mergeRouteStops = (primaryStops: RouteStop[], localStops: LocalRouteStop[]) => {
+  const next = new Map<string, RouteStop>();
+  primaryStops.forEach((stop) => {
+    if (!stop.id) return;
+    next.set(stop.id, stop);
+  });
+  localStops.forEach((stop) => {
+    if (!stop.id) return;
+    if (stop._local_deleted) {
+      next.delete(stop.id);
+      return;
+    }
+    next.set(stop.id, normalizeLocalRouteStop(stop.ownerId || '', stop));
+  });
+  const merged = Array.from(next.values()).sort((left, right) => left.stop_order - right.stop_order);
+  routeStopCache.clear();
+  merged.forEach((stop) => {
+    if (stop.id) routeStopCache.set(stop.id, stop);
+  });
+  return merged;
+};
 
 export const routeService = {
   getCurrentActorSnapshot: () => ({
@@ -44,20 +186,20 @@ export const routeService = {
 
     try {
       const querySnapshot = await getDocs(q);
-      if (!querySnapshot.empty) {
-        // Sort in memory to avoid needing a composite index
-        const routes = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Route));
-        routes.sort((a, b) => {
-          const timeA = a.created_at?.toMillis?.() || 0;
-          const timeB = b.created_at?.toMillis?.() || 0;
-          return timeB - timeA; // Descending order
-        });
-        return routes[0];
-      }
-      return null;
+      const primaryRoutes = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Route));
+      const localRoutes = localFallbackStore.readRecords<LocalRoute>(LOCAL_ROUTE_NAMESPACE, user.uid);
+      const routes = mergeRoutes(primaryRoutes, localRoutes).filter((route) => {
+        const routeDate = toJsDate(route.route_date);
+        return routeDate >= start && routeDate <= end;
+      });
+      return routes[0] || null;
     } catch (error) {
-      handleFirestoreError(error, OperationType.GET, 'routes_by_date');
-      return null;
+      console.error('Primary route lookup failed, using local fallback only:', error);
+      const localRoutes = localFallbackStore.readRecords<LocalRoute>(LOCAL_ROUTE_NAMESPACE, user.uid);
+      return mergeRoutes([], localRoutes).find((route) => {
+        const routeDate = toJsDate(route.route_date);
+        return routeDate >= start && routeDate <= end;
+      }) || null;
     }
   },
 
@@ -79,18 +221,46 @@ export const routeService = {
 
     try {
       const querySnapshot = await getDocs(q);
-      return querySnapshot.docs.map((entry) => ({ id: entry.id, ...entry.data() } as Route));
+      const primaryRoutes = querySnapshot.docs.map((entry) => ({ id: entry.id, ...entry.data() } as Route));
+      const localRoutes = localFallbackStore.readRecords<LocalRoute>(LOCAL_ROUTE_NAMESPACE, user.uid);
+      return mergeRoutes(primaryRoutes, localRoutes).filter((route) => {
+        const routeDate = toJsDate(route.route_date);
+        return routeDate >= start && routeDate <= end;
+      });
     } catch (error) {
-      handleFirestoreError(error, OperationType.GET, 'routes_by_date');
-      return [];
+      console.error('Primary route list lookup failed, using local fallback only:', error);
+      const localRoutes = localFallbackStore.readRecords<LocalRoute>(LOCAL_ROUTE_NAMESPACE, user.uid);
+      return mergeRoutes([], localRoutes).filter((route) => {
+        const routeDate = toJsDate(route.route_date);
+        return routeDate >= start && routeDate <= end;
+      });
     }
   },
 
   subscribeToRoutesByDate: (date: Date, callback: (routes: Route[]) => void) => {
     let unsubscribeRoutes = () => {};
+    let unsubscribeLocal = () => {};
+    let primaryRoutes: Route[] = [];
+    let localRoutes: LocalRoute[] = [];
+
+    const emit = () => {
+      const start = new Date(date);
+      start.setHours(0, 0, 0, 0);
+      const end = new Date(date);
+      end.setHours(23, 59, 59, 999);
+      callback(
+        mergeRoutes(primaryRoutes, localRoutes).filter((route) => {
+          const routeDate = toJsDate(route.route_date);
+          return routeDate >= start && routeDate <= end;
+        })
+      );
+    };
 
     const unsubscribeAuth = auth.onAuthStateChanged((user) => {
       unsubscribeRoutes();
+      unsubscribeLocal();
+      primaryRoutes = [];
+      localRoutes = [];
 
       if (!user) {
         callback([]);
@@ -111,23 +281,40 @@ export const routeService = {
       );
 
       unsubscribeRoutes = onSnapshot(q, (snapshot) => {
-        callback(snapshot.docs.map((entry) => ({ id: entry.id, ...entry.data() } as Route)));
+        primaryRoutes = snapshot.docs.map((entry) => ({ id: entry.id, ...entry.data() } as Route));
+        emit();
       }, (error) => {
-        handleFirestoreError(error, OperationType.GET, 'routes_by_date');
+        console.error('Primary route-by-date subscription failed, using local fallback only:', error);
+        primaryRoutes = [];
+        emit();
+      });
+
+      unsubscribeLocal = localFallbackStore.subscribeToRecords<LocalRoute>(LOCAL_ROUTE_NAMESPACE, user.uid, (records) => {
+        localRoutes = records;
+        emit();
       });
     });
 
     return () => {
       unsubscribeRoutes();
+      unsubscribeLocal();
       unsubscribeAuth();
     };
   },
 
   subscribeToRoutes: (callback: (routes: Route[]) => void) => {
     let unsubscribeRoutes = () => {};
+    let unsubscribeLocal = () => {};
+    let primaryRoutes: Route[] = [];
+    let localRoutes: LocalRoute[] = [];
+
+    const emit = () => callback(mergeRoutes(primaryRoutes, localRoutes));
 
     const unsubscribeAuth = auth.onAuthStateChanged((user) => {
       unsubscribeRoutes();
+      unsubscribeLocal();
+      primaryRoutes = [];
+      localRoutes = [];
 
       if (!user) {
         callback([]);
@@ -141,45 +328,94 @@ export const routeService = {
       );
       
       unsubscribeRoutes = onSnapshot(q, (snapshot) => {
-        const routes = snapshot.docs.map(doc => ({
+        primaryRoutes = snapshot.docs.map(doc => ({
           id: doc.id,
           ...doc.data()
         })) as Route[];
-        callback(routes);
+        emit();
       }, (error) => {
-        handleFirestoreError(error, OperationType.GET, 'routes');
+        console.error('Primary routes subscription failed, using local fallback only:', error);
+        primaryRoutes = [];
+        emit();
+      });
+
+      unsubscribeLocal = localFallbackStore.subscribeToRecords<LocalRoute>(LOCAL_ROUTE_NAMESPACE, user.uid, (records) => {
+        localRoutes = records;
+        emit();
       });
     });
 
     return () => {
       unsubscribeRoutes();
+      unsubscribeLocal();
       unsubscribeAuth();
     };
   },
 
   subscribeToRouteStops: (routeId: string, callback: (stops: RouteStop[]) => void) => {
-    const q = query(
-      collection(db, 'route_stops'), 
-      where('route_id', '==', routeId),
-      orderBy('stop_order', 'asc')
-    );
-    
-    return onSnapshot(q, (snapshot) => {
-      const stops = snapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      })) as RouteStop[];
-      callback(stops);
-    }, (error) => {
-      handleFirestoreError(error, OperationType.GET, `route_stops/${routeId}`);
+    let unsubscribeStops = () => {};
+    let unsubscribeLocal = () => {};
+    let primaryStops: RouteStop[] = [];
+    let localStops: LocalRouteStop[] = [];
+
+    const emit = () =>
+      callback(mergeRouteStops(primaryStops, localStops).filter((stop) => stop.route_id === routeId));
+
+    const unsubscribeAuth = auth.onAuthStateChanged((user) => {
+      unsubscribeStops();
+      unsubscribeLocal();
+      primaryStops = [];
+      localStops = [];
+
+      if (!user) {
+        callback([]);
+        return;
+      }
+
+      const q = query(
+        collection(db, 'route_stops'),
+        where('route_id', '==', routeId),
+        orderBy('stop_order', 'asc')
+      );
+
+      unsubscribeStops = onSnapshot(q, (snapshot) => {
+        primaryStops = snapshot.docs.map(doc => ({
+          id: doc.id,
+          ...doc.data()
+        })) as RouteStop[];
+        emit();
+      }, (error) => {
+        console.error('Primary route stop subscription failed, using local fallback only:', error);
+        primaryStops = [];
+        emit();
+      });
+
+      unsubscribeLocal = localFallbackStore.subscribeToRecords<LocalRouteStop>(LOCAL_ROUTE_STOP_NAMESPACE, user.uid, (records) => {
+        localStops = records;
+        emit();
+      });
     });
+
+    return () => {
+      unsubscribeStops();
+      unsubscribeLocal();
+      unsubscribeAuth();
+    };
   },
 
   subscribeToAllRouteStops: (callback: (stops: RouteStop[]) => void) => {
     let unsubscribeStops = () => {};
+    let unsubscribeLocal = () => {};
+    let primaryStops: RouteStop[] = [];
+    let localStops: LocalRouteStop[] = [];
+
+    const emit = () => callback(mergeRouteStops(primaryStops, localStops));
 
     const unsubscribeAuth = auth.onAuthStateChanged((user) => {
       unsubscribeStops();
+      unsubscribeLocal();
+      primaryStops = [];
+      localStops = [];
 
       if (!user) {
         callback([]);
@@ -192,23 +428,34 @@ export const routeService = {
       );
 
       unsubscribeStops = onSnapshot(q, (snapshot) => {
-        const stops = snapshot.docs.map((entry) => ({
+        primaryStops = snapshot.docs.map((entry) => ({
           id: entry.id,
           ...entry.data()
         })) as RouteStop[];
-        callback(stops);
+        emit();
       }, (error) => {
-        handleFirestoreError(error, OperationType.GET, 'route_stops');
+        console.error('Primary route stops subscription failed, using local fallback only:', error);
+        primaryStops = [];
+        emit();
+      });
+
+      unsubscribeLocal = localFallbackStore.subscribeToRecords<LocalRouteStop>(LOCAL_ROUTE_STOP_NAMESPACE, user.uid, (records) => {
+        localStops = records;
+        emit();
       });
     });
 
     return () => {
       unsubscribeStops();
+      unsubscribeLocal();
       unsubscribeAuth();
     };
   },
 
   getRouteStops: async (routeId: string) => {
+    const user = await waitForCurrentUser();
+    if (!user) return [];
+
     const q = query(
       collection(db, 'route_stops'),
       where('route_id', '==', routeId),
@@ -217,10 +464,13 @@ export const routeService = {
 
     try {
       const querySnapshot = await getDocs(q);
-      return querySnapshot.docs.map((entry) => ({ id: entry.id, ...entry.data() } as RouteStop));
+      const primaryStops = querySnapshot.docs.map((entry) => ({ id: entry.id, ...entry.data() } as RouteStop));
+      const localStops = localFallbackStore.readRecords<LocalRouteStop>(LOCAL_ROUTE_STOP_NAMESPACE, user.uid);
+      return mergeRouteStops(primaryStops, localStops).filter((stop) => stop.route_id === routeId);
     } catch (error) {
-      handleFirestoreError(error, OperationType.GET, `route_stops/${routeId}`);
-      return [];
+      console.error('Primary route stop lookup failed, using local fallback only:', error);
+      const localStops = localFallbackStore.readRecords<LocalRouteStop>(LOCAL_ROUTE_STOP_NAMESPACE, user.uid);
+      return mergeRouteStops([], localStops).filter((stop) => stop.route_id === routeId);
     }
   },
 
@@ -246,7 +496,18 @@ export const routeService = {
         updated_at: serverTimestamp()
       });
     } catch (error) {
-      handleFirestoreError(error, OperationType.WRITE, 'routes');
+      console.error('Primary route save failed, saving locally instead:', error);
+      const timestamp = toClientTimestamp();
+      const localId = localFallbackStore.upsertRecord<LocalRoute>(LOCAL_ROUTE_NAMESPACE, user.uid, {
+        id: localFallbackStore.createLocalId(LOCAL_ROUTE_NAMESPACE),
+        ...routeData,
+        ownerId: user.uid,
+        created_by: user.uid,
+        created_by_name: getActorNameSnapshot(),
+        created_at: timestamp as any,
+        updated_at: timestamp as any,
+      });
+      return { id: localId };
     }
   },
 
@@ -255,12 +516,43 @@ export const routeService = {
     if (!user) throw new Error('User not authenticated');
     const docRef = doc(db, 'routes', id);
     try {
+      if (localFallbackStore.isLocalId(id, LOCAL_ROUTE_NAMESPACE)) {
+        localFallbackStore.updateRecord<LocalRoute>(LOCAL_ROUTE_NAMESPACE, user.uid, id, {
+          ...data,
+          updated_at: toClientTimestamp() as any,
+          _local_deleted: false,
+        });
+        return;
+      }
       return await updateDoc(docRef, {
         ...data,
         updated_at: serverTimestamp()
       });
     } catch (error) {
-      handleFirestoreError(error, OperationType.UPDATE, `routes/${id}`);
+      console.error('Primary route update failed, updating local fallback instead:', error);
+      const cachedRoute = routeCache.get(id);
+      localFallbackStore.upsertRecord<LocalRoute>(LOCAL_ROUTE_NAMESPACE, user.uid, {
+        ...(cachedRoute || {
+          id,
+          ownerId: user.uid,
+          name: data.name || 'Route',
+          route_date: data.route_date || toClientTimestamp(),
+          status: data.status || 'draft',
+          base_camp_label: data.base_camp_label || 'Base Camp',
+          base_camp_address: data.base_camp_address || '',
+          base_camp_lat: data.base_camp_lat || 0,
+          base_camp_lng: data.base_camp_lng || 0,
+          return_to_base: data.return_to_base ?? true,
+          optimization_mode: data.optimization_mode || 'none',
+          manual_override: data.manual_override ?? false,
+          created_by: user.uid,
+          created_by_name: getActorNameSnapshot(),
+          created_at: toClientTimestamp() as any,
+        }),
+        ...data,
+        updated_at: toClientTimestamp() as any,
+        _local_deleted: false,
+      } as LocalRoute);
     }
   },
 
@@ -275,7 +567,16 @@ export const routeService = {
         updated_at: serverTimestamp()
       });
     } catch (error) {
-      handleFirestoreError(error, OperationType.WRITE, 'route_stops');
+      console.error('Primary route stop save failed, saving locally instead:', error);
+      const timestamp = toClientTimestamp();
+      const localId = localFallbackStore.upsertRecord<LocalRouteStop>(LOCAL_ROUTE_STOP_NAMESPACE, user.uid, {
+        id: localFallbackStore.createLocalId(LOCAL_ROUTE_STOP_NAMESPACE),
+        ...stopData,
+        ownerId: stopData.ownerId || user.uid,
+        created_at: timestamp as any,
+        updated_at: timestamp as any,
+      });
+      return { id: localId };
     }
   },
 
@@ -284,12 +585,45 @@ export const routeService = {
     if (!user) throw new Error('User not authenticated');
     const docRef = doc(db, 'route_stops', id);
     try {
+      if (localFallbackStore.isLocalId(id, LOCAL_ROUTE_STOP_NAMESPACE)) {
+        localFallbackStore.updateRecord<LocalRouteStop>(LOCAL_ROUTE_STOP_NAMESPACE, user.uid, id, {
+          ...data,
+          updated_at: toClientTimestamp() as any,
+          _local_deleted: false,
+        });
+        return;
+      }
       return await updateDoc(docRef, {
         ...data,
         updated_at: serverTimestamp()
       });
     } catch (error) {
-      handleFirestoreError(error, OperationType.UPDATE, `route_stops/${id}`);
+      console.error('Primary route stop update failed, updating local fallback instead:', error);
+      const cachedStop = routeStopCache.get(id);
+      localFallbackStore.upsertRecord<LocalRouteStop>(LOCAL_ROUTE_STOP_NAMESPACE, user.uid, {
+        ...(cachedStop || {
+          id,
+          ownerId: user.uid,
+          route_id: data.route_id || '',
+          stop_order: data.stop_order || 0,
+          manual_order: data.manual_order || data.stop_order || 0,
+          optimized_order: data.optimized_order || data.stop_order || 0,
+          status: data.status || 'pending',
+          due_state: data.due_state || 'due',
+          city_snapshot: data.city_snapshot || '',
+          address_snapshot: data.address_snapshot || '',
+          lat_snapshot: data.lat_snapshot || 0,
+          lng_snapshot: data.lng_snapshot || 0,
+          service_type_snapshot: data.service_type_snapshot || '',
+          customer_name_snapshot: data.customer_name_snapshot || '',
+          scheduled_date: data.scheduled_date || toClientTimestamp(),
+          due_date: data.due_date || toClientTimestamp(),
+          created_at: toClientTimestamp() as any,
+        }),
+        ...data,
+        updated_at: toClientTimestamp() as any,
+        _local_deleted: false,
+      } as LocalRouteStop);
     }
   },
 
@@ -298,9 +632,38 @@ export const routeService = {
     if (!user) throw new Error('User not authenticated');
     const docRef = doc(db, 'route_stops', id);
     try {
+      if (localFallbackStore.isLocalId(id, LOCAL_ROUTE_STOP_NAMESPACE)) {
+        localFallbackStore.removeRecord<LocalRouteStop>(LOCAL_ROUTE_STOP_NAMESPACE, user.uid, id);
+        routeStopCache.delete(id);
+        return;
+      }
       return await deleteDoc(docRef);
     } catch (error) {
-      handleFirestoreError(error, OperationType.DELETE, `route_stops/${id}`);
+      console.error('Primary route stop delete failed, hiding it locally instead:', error);
+      const cachedStop = routeStopCache.get(id);
+      localFallbackStore.upsertRecord<LocalRouteStop>(LOCAL_ROUTE_STOP_NAMESPACE, user.uid, {
+        ...(cachedStop || {
+          id,
+          ownerId: user.uid,
+          route_id: '',
+          stop_order: 0,
+          manual_order: 0,
+          optimized_order: 0,
+          status: 'pending',
+          due_state: 'due',
+          city_snapshot: '',
+          address_snapshot: '',
+          lat_snapshot: 0,
+          lng_snapshot: 0,
+          service_type_snapshot: '',
+          customer_name_snapshot: '',
+          scheduled_date: toClientTimestamp(),
+          due_date: toClientTimestamp(),
+          created_at: toClientTimestamp() as any,
+        }),
+        updated_at: toClientTimestamp() as any,
+        _local_deleted: true,
+      } as LocalRouteStop);
     }
   },
 
@@ -309,9 +672,36 @@ export const routeService = {
     if (!user) throw new Error('User not authenticated');
     const docRef = doc(db, 'routes', id);
     try {
+      if (localFallbackStore.isLocalId(id, LOCAL_ROUTE_NAMESPACE)) {
+        localFallbackStore.removeRecord<LocalRoute>(LOCAL_ROUTE_NAMESPACE, user.uid, id);
+        routeCache.delete(id);
+        return;
+      }
       return await deleteDoc(docRef);
     } catch (error) {
-      handleFirestoreError(error, OperationType.DELETE, `routes/${id}`);
+      console.error('Primary route delete failed, hiding it locally instead:', error);
+      const cachedRoute = routeCache.get(id);
+      localFallbackStore.upsertRecord<LocalRoute>(LOCAL_ROUTE_NAMESPACE, user.uid, {
+        ...(cachedRoute || {
+          id,
+          ownerId: user.uid,
+          name: 'Route',
+          route_date: toClientTimestamp(),
+          status: 'draft',
+          base_camp_label: 'Base Camp',
+          base_camp_address: '',
+          base_camp_lat: 0,
+          base_camp_lng: 0,
+          return_to_base: true,
+          optimization_mode: 'none',
+          manual_override: false,
+          created_by: user.uid,
+          created_by_name: getActorNameSnapshot(),
+          created_at: toClientTimestamp() as any,
+        }),
+        updated_at: toClientTimestamp() as any,
+        _local_deleted: true,
+      } as LocalRoute);
     }
   },
 
@@ -415,17 +805,51 @@ export const routeService = {
     const user = await waitForCurrentUser();
     if (!user) throw new Error('User not authenticated');
 
-    // In a real app we might use a writeBatch, but for MVP we can do individual updates or a simple loop
-    // Firestore writeBatch is better for atomicity
     try {
-      const promises = stops.map(stop => 
-        updateDoc(doc(db, 'route_stops', stop.id), {
-          stop_order: stop.stop_order,
-          manual_order: stop.manual_order,
-          updated_at: serverTimestamp()
-        })
-      );
-      await Promise.all(promises);
+      await Promise.all(stops.map(async (stop) => {
+        if (localFallbackStore.isLocalId(stop.id, LOCAL_ROUTE_STOP_NAMESPACE)) {
+          localFallbackStore.updateRecord<LocalRouteStop>(LOCAL_ROUTE_STOP_NAMESPACE, user.uid, stop.id, {
+            stop_order: stop.stop_order,
+            manual_order: stop.manual_order,
+            updated_at: toClientTimestamp() as any,
+            _local_deleted: false,
+          });
+          return;
+        }
+
+        try {
+          await updateDoc(doc(db, 'route_stops', stop.id), {
+            stop_order: stop.stop_order,
+            manual_order: stop.manual_order,
+            updated_at: serverTimestamp()
+          });
+        } catch (error) {
+          const cachedStop = routeStopCache.get(stop.id);
+          localFallbackStore.upsertRecord<LocalRouteStop>(LOCAL_ROUTE_STOP_NAMESPACE, user.uid, {
+            ...(cachedStop || {
+              id: stop.id,
+              ownerId: user.uid,
+              route_id: '',
+              status: 'pending',
+              due_state: 'due',
+              city_snapshot: '',
+              address_snapshot: '',
+              lat_snapshot: 0,
+              lng_snapshot: 0,
+              service_type_snapshot: '',
+              customer_name_snapshot: '',
+              scheduled_date: toClientTimestamp(),
+              due_date: toClientTimestamp(),
+              created_at: toClientTimestamp() as any,
+            }),
+            stop_order: stop.stop_order,
+            manual_order: stop.manual_order,
+            optimized_order: stop.manual_order,
+            updated_at: toClientTimestamp() as any,
+            _local_deleted: false,
+          } as LocalRouteStop);
+        }
+      }));
     } catch (error) {
       handleFirestoreError(error, OperationType.UPDATE, 'route_stops_batch');
     }
