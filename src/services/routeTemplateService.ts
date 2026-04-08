@@ -4,11 +4,13 @@ import { RouteTemplate } from '../modules/routes/types';
 import { handleFirestoreError, OperationType } from './verificationService';
 
 const COLLECTION_NAME = 'route_templates';
+const DEFAULT_MAX_STOPS_PER_RUN = 15;
 
 const normalizeTemplate = (template: Omit<RouteTemplate, 'ownerId' | 'created_at' | 'updated_at'>) => ({
   ...template,
   preferred_day: template.preferred_day ?? null,
   service_area: template.service_area?.trim() || '',
+  max_stops_per_run: Math.min(30, Math.max(1, template.max_stops_per_run || DEFAULT_MAX_STOPS_PER_RUN)),
   include_overdue: template.include_overdue ?? true,
   include_skipped: template.include_skipped ?? true,
   include_delayed: template.include_delayed ?? true,
@@ -59,6 +61,7 @@ export const routeTemplateService = {
         ...updates,
         preferred_day: updates.preferred_day ?? null,
         service_area: updates.service_area?.trim() || '',
+        max_stops_per_run: Math.min(30, Math.max(1, updates.max_stops_per_run || DEFAULT_MAX_STOPS_PER_RUN)),
         updated_at: serverTimestamp(),
       };
       return await updateDoc(docRef, nextData);

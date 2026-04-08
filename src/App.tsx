@@ -6,8 +6,7 @@
 import { useState, useEffect } from 'react';
 import { HashRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { onAuthStateChanged, User } from 'firebase/auth';
-import { doc, setDoc, getDoc, serverTimestamp } from 'firebase/firestore';
-import { auth, db } from './firebase';
+import { auth } from './firebase';
 import { servicePlanService } from './services/servicePlanService';
 import Login from './components/Login';
 import Layout from './components/Layout';
@@ -21,7 +20,11 @@ import PublicJobProof from './components/PublicJobProof';
 import Messaging from './components/Messaging';
 import Storage from './components/Storage';
 import Settings from './components/Settings';
+import Alerts from './components/Alerts';
+import Profile from './components/Profile';
+import AdminController from './components/AdminController';
 import { ErrorBoundary } from './components/ErrorBoundary';
+import { userProfileService } from './services/userProfileService';
 
 export default function App() {
   const [user, setUser] = useState<User | null>(null);
@@ -32,19 +35,7 @@ export default function App() {
       setUser(currentUser);
       
       if (currentUser) {
-        // Create or update user profile in Firestore
-        const userRef = doc(db, 'users', currentUser.uid);
-        const userSnap = await getDoc(userRef);
-        
-        if (!userSnap.exists()) {
-          await setDoc(userRef, {
-            uid: currentUser.uid,
-            email: currentUser.email,
-            name: currentUser.displayName || '',
-            role: 'owner', // Default role for new signups
-            created_at: serverTimestamp()
-          });
-        }
+        await userProfileService.ensureCurrentUserProfile();
         await servicePlanService.initializeDefaultServices();
       }
       
@@ -82,6 +73,9 @@ export default function App() {
               <Route path="messaging" element={<Messaging />} />
               <Route path="storage" element={<Storage />} />
               <Route path="settings" element={<Settings />} />
+              <Route path="alerts" element={<Alerts />} />
+              <Route path="profile" element={<Profile />} />
+              <Route path="controller" element={<AdminController />} />
               <Route path="*" element={<Navigate to="/" replace />} />
             </Route>
           )}

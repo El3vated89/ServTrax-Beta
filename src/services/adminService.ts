@@ -1,0 +1,143 @@
+import { collection, getDocs } from 'firebase/firestore';
+import { db } from '../firebase';
+import { handleFirestoreError, OperationType } from './verificationService';
+import { UserProfile } from './userProfileService';
+
+interface AdminBusinessProfile {
+  id: string;
+  business_name?: string;
+  ownerId?: string;
+  plan_name?: string;
+  custom_storage_cap?: number;
+}
+
+interface AdminVerificationRecord {
+  id: string;
+  ownerId?: string;
+  photo_urls?: string[];
+  photo_url?: string;
+}
+
+interface AdminJobRecord {
+  id: string;
+  ownerId?: string;
+  customer_name_snapshot?: string;
+  created_at?: any;
+  completed_date?: any;
+  status?: string;
+}
+
+export interface AdminMetrics {
+  totalUsers: number;
+  activeBusinesses: number;
+  activePlans: Record<string, number>;
+  totalStorageBytes: number;
+  storageByBusiness: Array<{ ownerId: string; businessName: string; usedBytes: number }>;
+  recentActivityByBusiness: Array<{ ownerId: string; businessName: string; activityCount: number }>;
+  recentJobCount: number;
+  placeholders: {
+    stripeStatus: string;
+    platformRevenue: string;
+    overageMonitoring: string;
+    planAdjustments: string;
+  };
+}
+
+const toDate = (value: any) => {
+  if (!value) return null;
+  if (value?.toDate) return value.toDate();
+  return new Date(value);
+};
+
+export const adminService = {
+  getMetrics: async (): Promise<AdminMetrics> => {
+    try {
+      const [usersSnapshot, businessSnapshot, verificationSnapshot, jobsSnapshot] = await Promise.all([
+        getDocs(collection(db, 'users')),
+        getDocs(collection(db, 'business_profiles')),
+        getDocs(collection(db, 'verification_records')),
+        getDocs(collection(db, 'jobs')),
+      ]);
+
+      const users = usersSnapshot.docs.map((entry) => ({ uid: entry.id, ...entry.data() } as UserProfile));
+      const businesses = businessSnapshot.docs.map((entry) => ({ id: entry.id, ...entry.data() } as AdminBusinessProfile));
+      const records = verificationSnapshot.docs.map((entry) => ({ id: entry.id, ...entry.data() } as AdminVerificationRecord));
+      const jobs = jobsSnapshot.docs.map((entry) => ({ id: entry.id, ...entry.data() } as AdminJobRecord));
+
+      const planCounts = businesses.reduce<Record<string, number>>((counts, business) => {
+        const planName = business.plan_name || 'Free Tier';
+        counts[planName] = (counts[planName] || 0) + 1;
+        return counts;
+      }, {});
+
+      const storageByOwner = records.reduce<Record<string, number>>((totals, record) => {
+        const ownerId = record.ownerId || 'unknown';
+        const photoUrls = record.photo_urls || (record.photo_url ? [record.photo_url] : []);
+        const estimatedBytes = photoUrls.reduce((sum, url) => sum + (url?.length || 0), 0) * 0.75;
+        totals[ownerId] = (totals[ownerId] || 0) + estimatedBytes;
+        return totals;
+      }, {});
+
+      const businessNameByOwner = businesses.reduce<Record<string, string>>((lookup, business) => {
+        lookup[business.ownerId || business.id] = business.business_name || 'Unnamed Business';
+        return lookup;
+      }, {});
+
+      const activityThreshold = Date.now() - (7 * 24 * 60 * 60 * 1000);
+      const activityByOwner = jobs.reduce<Record<string, number>>((totals, job) => {
+        const activityDate = toDate(job.completed_date || job.created_at);
+        if (!activityDate || activityDate.getTime() < activityThreshold) return totals;
+        const ownerId = job.ownerId || 'unknown';
+        totals[ownerId] = (totals[ownerId] || 0) + 1;
+        return totals;
+      }, {});
+
+      return {
+        totalUsers: users.length,
+        activeBusinesses: businesses.length,
+        activePlans: planCounts,
+        totalStorageBytes: Object.values(storageByOwner).reduce((sum, size) => sum + size, 0),
+        storageByBusiness: Object.entries(storageByOwner)
+          .map(([ownerId, usedBytes]) => ({
+            ownerId,
+            businessName: businessNameByOwner[ownerId] || 'Unnamed Business',
+            usedBytes,
+          }))
+          .sort((left, right) => right.usedBytes - left.usedBytes)
+          .slice(0, 8),
+        recentActivityByBusiness: Object.entries(activityByOwner)
+          .map(([ownerId, activityCount]) => ({
+            ownerId,
+            businessName: businessNameByOwner[ownerId] || 'Unnamed Business',
+            activityCount,
+          }))
+          .sort((left, right) => right.activityCount - left.activityCount)
+          .slice(0, 8),
+        recentJobCount: Object.values(activityByOwner).reduce((sum, count) => sum + count, 0),
+        placeholders: {
+          stripeStatus: 'Placeholder until platform billing collections are connected.',
+          platformRevenue: 'Placeholder until ServTrax Stripe revenue data is stored.',
+          overageMonitoring: 'Placeholder until automated storage overage flags are written.',
+          planAdjustments: 'Placeholder until manual plan override records are tracked.',
+        },
+      };
+    } catch (error) {
+      handleFirestoreError(error, OperationType.GET, 'admin_metrics');
+      return {
+        totalUsers: 0,
+        activeBusinesses: 0,
+        activePlans: {},
+        totalStorageBytes: 0,
+        storageByBusiness: [],
+        recentActivityByBusiness: [],
+        recentJobCount: 0,
+        placeholders: {
+          stripeStatus: 'Unavailable',
+          platformRevenue: 'Unavailable',
+          overageMonitoring: 'Unavailable',
+          planAdjustments: 'Unavailable',
+        },
+      };
+    }
+  },
+};

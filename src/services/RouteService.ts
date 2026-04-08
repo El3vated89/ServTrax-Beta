@@ -164,9 +164,12 @@ export const routeService = {
     }
   },
 
-  getRouteByTemplateAndDate: async (templateId: string, date: Date) => {
+  getRouteByTemplateAndDate: async (templateId: string, date: Date, runIndex?: number) => {
     const routes = await routeService.getRoutesByDate(date);
-    return routes.find((route) => route.template_id === templateId) || null;
+    return routes.find((route) =>
+      route.template_id === templateId &&
+      (runIndex == null || (route.route_run_index || 1) === runIndex)
+    ) || null;
   },
 
   createRoute: async (routeData: Omit<Route, 'id' | 'ownerId' | 'created_by' | 'created_at' | 'updated_at'>) => {
@@ -243,6 +246,12 @@ export const routeService = {
     }
   },
 
+  deleteRouteWithStops: async (id: string) => {
+    const stops = await routeService.getRouteStops(id);
+    await Promise.all(stops.filter((stop) => stop.id).map((stop) => routeService.deleteRouteStop(stop.id!)));
+    await routeService.deleteRoute(id);
+  },
+
   ensureRouteForDate: async (date: Date, baseCamp: { label: string; address: string; lat: number; lng: number }) => {
     const existingRoute = await routeService.getRouteByDate(date);
     if (existingRoute) return existingRoute;
@@ -277,20 +286,31 @@ export const routeService = {
   ensureRouteRunForTemplate: async (
     template: RouteTemplate,
     date: Date,
-    baseCamp: { label: string; address: string; lat: number; lng: number }
+    baseCamp: { label: string; address: string; lat: number; lng: number },
+    runIndex: number = 1,
+    runTotal: number = 1
   ) => {
     if (!template.id) return null;
 
-    const existingRoute = await routeService.getRouteByTemplateAndDate(template.id, date);
+    const existingRoute = await routeService.getRouteByTemplateAndDate(template.id, date, runIndex);
     if (existingRoute) return existingRoute;
 
+    const routeLabel = runTotal > 1 ? `Run ${runIndex}` : 'Run 1';
+    const routeCapacity = template.max_stops_per_run || 15;
+
     const newRouteData = {
-      name: `${template.name} - ${date.toLocaleDateString()}`,
+      name: runTotal > 1
+        ? `${template.name} - ${routeLabel}`
+        : `${template.name} - ${date.toLocaleDateString()}`,
       template_id: template.id,
       template_name: template.name,
       template_mode: template.mode,
       template_day: template.preferred_day ?? null,
       template_area: template.service_area || '',
+      route_run_index: runIndex,
+      route_run_total: runTotal,
+      route_run_label: routeLabel,
+      route_capacity: routeCapacity,
       route_date: Timestamp.fromDate(date),
       status: 'draft' as const,
       base_camp_label: baseCamp.label,

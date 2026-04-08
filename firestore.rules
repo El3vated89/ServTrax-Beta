@@ -43,7 +43,13 @@ service cloud.firestore {
     function isValidUser(data) {
       return data.uid is string && 
              data.email is string && 
-             data.role in ['owner', 'admin', 'staff'];
+             data.role in ['owner', 'admin', 'staff'] &&
+             (!('name' in data) || data.name is string) &&
+             (!('phone' in data) || data.phone is string) &&
+             (!('permissions' in data) || data.permissions is list) &&
+             (!('team_memberships' in data) || data.team_memberships is list) &&
+             (!('active' in data) || data.active is bool) &&
+             (!('updated_at' in data) || data.updated_at is timestamp);
     }
 
     function isValidCustomer(data) {
@@ -148,6 +154,7 @@ service cloud.firestore {
              data.cadence in ['weekly', 'bi_weekly', 'monthly', 'manual'] &&
              (!('preferred_day' in data) || data.preferred_day is number || data.preferred_day == null) &&
              (!('service_area' in data) || data.service_area is string) &&
+             (!('max_stops_per_run' in data) || data.max_stops_per_run is number) &&
              (!('include_overdue' in data) || data.include_overdue is bool) &&
              (!('include_skipped' in data) || data.include_skipped is bool) &&
              (!('include_delayed' in data) || data.include_delayed is bool);
@@ -235,7 +242,7 @@ service cloud.firestore {
     }
 
     match /business_profiles/{profileId} {
-      allow read: if isOwner(profileId) || isDocOwner();
+      allow read: if isOwner(profileId) || isDocOwner() || isAdmin();
       allow create: if isOwner(profileId) && request.resource.data.ownerId == request.auth.uid && isValidBusinessProfile(request.resource.data);
       allow update: if isOwner(profileId) && ownerIdNotModified() && isValidBusinessProfile(request.resource.data);
       allow delete: if isOwner(profileId);

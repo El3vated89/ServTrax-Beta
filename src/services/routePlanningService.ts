@@ -3,6 +3,9 @@ import { Job } from './jobService';
 import { RouteTemplate, RouteStop } from '../modules/routes/types';
 import { routeService } from './RouteService';
 
+const DEFAULT_MAX_STOPS_PER_RUN = 15;
+const ABSOLUTE_MAX_STOPS_PER_RUN = 30;
+
 const startOfDay = (value: Date) => {
   const next = new Date(value);
   next.setHours(0, 0, 0, 0);
@@ -102,46 +105,81 @@ export const routePlanningService = {
       });
   },
 
-  syncTemplateRun: async (template: RouteTemplate, date: Date, jobs: Job[], baseCamp: { label: string; address: string; lat: number; lng: number }) => {
+  syncTemplateRuns: async (template: RouteTemplate, date: Date, jobs: Job[], baseCamp: { label: string; address: string; lat: number; lng: number }) => {
     if (!template.id) return null;
 
-    const run = await routeService.ensureRouteRunForTemplate(template, date, baseCamp);
-    if (!run?.id) return null;
-
     const eligibleJobs = routePlanningService.getEligibleJobsForTemplate(jobs, template, date);
-    const existingStops = await routeService.getRouteStops(run.id);
-    const existingByKey = new Map(existingStops.map((stop) => [stop.customer_id || stop.job_id || `${stop.customer_name_snapshot}-${stop.address_snapshot}`, stop]));
-
-    const desiredStops = eligibleJobs.map((job, index) => {
-      const existingStop = existingByKey.get(buildStableStopKey(job));
-      return {
-        existingStop,
-        stopData: buildStopFromJob(run.id!, job, index, existingStop, baseCamp),
-      };
-    });
-
-    const desiredJobIds = new Set(eligibleJobs.map((job) => job.id).filter(Boolean));
-
-    for (const stop of existingStops) {
-      if (stop.job_id && !desiredJobIds.has(stop.job_id)) {
-        await routeService.deleteRouteStop(stop.id!);
-      }
-    }
-
-    for (let index = 0; index < desiredStops.length; index += 1) {
-      const entry = desiredStops[index];
-      if (entry.existingStop?.id) {
-        await routeService.updateRouteStop(entry.existingStop.id, {
-          ...entry.stopData,
-          stop_order: index,
-          manual_order: index,
-          optimized_order: index,
-        });
+    const maxStops = Math.min(ABSOLUTE_MAX_STOPS_PER_RUN, Math.max(1, template.max_stops_per_run || DEFAULT_MAX_STOPS_PER_RUN));
+    const chunks = eligibleJobs.reduce<Job[][]>((groups, job) => {
+      const currentGroup = groups[groups.length - 1];
+      if (!currentGroup || currentGroup.length >= maxStops) {
+        groups.push([job]);
       } else {
-        await routeService.addRouteStop(entry.stopData);
+        currentGroup.push(job);
+      }
+      return groups;
+    }, []);
+
+    const runs = [];
+    const existingRuns = (await routeService.getRoutesByDate(date))
+      .filter((route) => route.template_id === template.id)
+      .sort((left, right) => (left.route_run_index || 1) - (right.route_run_index || 1));
+
+    for (let chunkIndex = 0; chunkIndex < chunks.length; chunkIndex += 1) {
+      const run = await routeService.ensureRouteRunForTemplate(template, date, baseCamp, chunkIndex + 1, chunks.length);
+      if (!run?.id) continue;
+
+      await routeService.updateRoute(run.id, {
+        route_run_total: chunks.length,
+        route_capacity: maxStops,
+      });
+
+      const runJobs = chunks[chunkIndex];
+      const existingStops = await routeService.getRouteStops(run.id);
+      const existingByKey = new Map(existingStops.map((stop) => [stop.customer_id || stop.job_id || `${stop.customer_name_snapshot}-${stop.address_snapshot}`, stop]));
+      const desiredStops = runJobs.map((job, index) => {
+        const existingStop = existingByKey.get(buildStableStopKey(job));
+        return {
+          existingStop,
+          stopData: buildStopFromJob(run.id!, job, index, existingStop, baseCamp),
+        };
+      });
+      const desiredJobIds = new Set(runJobs.map((job) => job.id).filter(Boolean));
+
+      for (const stop of existingStops) {
+        if (stop.job_id && !desiredJobIds.has(stop.job_id)) {
+          await routeService.deleteRouteStop(stop.id!);
+        }
+      }
+
+      for (let index = 0; index < desiredStops.length; index += 1) {
+        const entry = desiredStops[index];
+        if (entry.existingStop?.id) {
+          await routeService.updateRouteStop(entry.existingStop.id, {
+            ...entry.stopData,
+            stop_order: index,
+            manual_order: index,
+            optimized_order: index,
+          });
+        } else {
+          await routeService.addRouteStop(entry.stopData);
+        }
+      }
+
+      runs.push({ ...run, route_run_total: chunks.length, route_capacity: maxStops });
+    }
+
+    for (const staleRun of existingRuns) {
+      if ((staleRun.route_run_index || 1) > chunks.length && staleRun.id) {
+        await routeService.deleteRouteWithStops(staleRun.id);
       }
     }
 
-    return run;
+    return runs;
   },
+
+  syncTemplateRun: async (template: RouteTemplate, date: Date, jobs: Job[], baseCamp: { label: string; address: string; lat: number; lng: number }) => {
+    const runs = await routePlanningService.syncTemplateRuns(template, date, jobs, baseCamp);
+    return runs?.[0] || null;
+  }
 };

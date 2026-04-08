@@ -317,6 +317,12 @@ export default function ActiveRoutePage() {
   const handleAddJobToRoute = async (job: Job) => {
     if (!activeRoute?.id) return;
     setErrorMessage(null);
+
+    const routeCapacity = activeRoute.route_capacity || 15;
+    if (stops.length >= routeCapacity) {
+      setErrorMessage(`This run is full at ${routeCapacity} stops. Open another same-day run or refresh the planner.`);
+      return;
+    }
     
     try {
       // Generate some random coordinates around base camp if missing
@@ -353,6 +359,12 @@ export default function ActiveRoutePage() {
   const handleAddCustomerToRoute = async (customer: Customer) => {
     if (!activeRoute?.id) return;
     setErrorMessage(null);
+
+    const routeCapacity = activeRoute.route_capacity || 15;
+    if (stops.length >= routeCapacity) {
+      setErrorMessage(`This run is full at ${routeCapacity} stops. Open another same-day run or refresh the planner.`);
+      return;
+    }
 
     try {
       // Create a job for this customer first so we have a job ID for sharing
@@ -697,6 +709,11 @@ export default function ActiveRoutePage() {
               <span className="px-3 py-1 bg-blue-50 text-blue-600 text-[10px] font-black uppercase tracking-widest rounded-full">
                 {activeRoute?.status || 'Draft'}
               </span>
+              {activeRoute?.route_run_label && (
+                <span className="px-3 py-1 bg-gray-100 text-gray-500 text-[10px] font-black uppercase tracking-widest rounded-full">
+                  {activeRoute.route_run_label}
+                </span>
+              )}
             </div>
             <div className="flex items-center gap-4 mt-2">
               <p className="text-sm font-bold text-gray-400 uppercase tracking-widest flex items-center gap-2">
@@ -714,6 +731,11 @@ export default function ActiveRoutePage() {
                   <ChevronRight className="h-4 w-4" />
                 </button>
               </p>
+              {activeRoute?.route_capacity && (
+                <p className="text-sm font-bold text-gray-400 uppercase tracking-widest">
+                  Capacity {stops.length}/{activeRoute.route_capacity}
+                </p>
+              )}
             </div>
           </div>
 
@@ -762,12 +784,12 @@ export default function ActiveRoutePage() {
                 }`}
               >
                 <p className="text-xs font-black uppercase tracking-widest">
-                  {route.template_name || route.name}
+                  {route.assigned_team_name_snapshot || route.route_run_label || route.template_name || route.name}
                 </p>
                 <p className={`text-[10px] font-black uppercase tracking-widest mt-1 ${
                   activeRoute?.id === route.id ? 'text-blue-100' : 'text-gray-400'
                 }`}>
-                  {route.status.replace('_', ' ')}
+                  {route.status.replace('_', ' ')} {route.route_capacity ? `• ${route.route_capacity} max` : ''}
                 </p>
               </button>
             ))}

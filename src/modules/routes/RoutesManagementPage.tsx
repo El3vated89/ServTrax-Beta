@@ -85,6 +85,7 @@ const defaultTemplateForm = {
   cadence: 'weekly' as RouteTemplateCadence,
   preferred_day: new Date().getDay().toString(),
   service_area: '',
+  max_stops_per_run: '15',
   include_overdue: true,
   include_skipped: true,
   include_delayed: true,
@@ -100,7 +101,7 @@ export default function RoutesManagementPage() {
   const [jobs, setJobs] = useState<Job[]>([]);
   const [baseCamp, setBaseCamp] = useState<BaseCamp>(BASE_CAMP);
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
-  const [activeStops, setActiveStops] = useState<RouteStop[]>([]);
+  const [runStopsByRoute, setRunStopsByRoute] = useState<Record<string, RouteStop[]>>({});
   const [draftStops, setDraftStops] = useState<RouteStop[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [isSyncingRun, setIsSyncingRun] = useState(false);
@@ -181,25 +182,56 @@ export default function RoutesManagementPage() {
       .sort((left, right) => toDate(right.route_date).getTime() - toDate(left.route_date).getTime());
   }, [routes, selectedTemplate]);
 
-  const currentRun = useMemo(() => {
-    if (!selectedTemplate?.id) return null;
+  const currentRuns = useMemo(() => {
+    if (!selectedTemplate?.id) return [] as Route[];
 
-    return matchingRuns.find((route) => startOfDay(toDate(route.route_date)).getTime() === startOfDay(selectedDate).getTime()) || null;
+    return matchingRuns.filter((route) => startOfDay(toDate(route.route_date)).getTime() === startOfDay(selectedDate).getTime())
+      .sort((left, right) => (left.route_run_index || 1) - (right.route_run_index || 1));
   }, [matchingRuns, selectedDate, selectedTemplate]);
 
   useEffect(() => {
-    setActiveRunId(currentRun?.id || null);
-  }, [currentRun?.id]);
-
-  useEffect(() => {
-    if (!activeRunId) {
-      setActiveStops([]);
+    if (!currentRuns?.length) {
+      setActiveRunId(null);
       return;
     }
 
-    const unsubscribeStops = routeService.subscribeToRouteStops(activeRunId, setActiveStops);
-    return () => unsubscribeStops();
-  }, [activeRunId]);
+    if (!activeRunId || !currentRuns.some((route) => route.id === activeRunId)) {
+      setActiveRunId(currentRuns[0].id || null);
+    }
+  }, [activeRunId, currentRuns]);
+
+  useEffect(() => {
+    if (!currentRuns?.length) {
+      setRunStopsByRoute({});
+      return;
+    }
+
+    const nextRunIds = new Set(currentRuns.map((route) => route.id).filter(Boolean) as string[]);
+    const unsubscribes = currentRuns
+      .filter((route) => route.id)
+      .map((route) => routeService.subscribeToRouteStops(route.id!, (stops) => {
+        setRunStopsByRoute((previous) => ({ ...previous, [route.id!]: stops }));
+      }));
+
+    setRunStopsByRoute((previous) => {
+      const nextEntries = Object.entries(previous).filter(([routeId]) => nextRunIds.has(routeId));
+      return Object.fromEntries(nextEntries);
+    });
+
+    return () => {
+      unsubscribes.forEach((unsubscribe) => unsubscribe());
+    };
+  }, [currentRuns]);
+
+  const activeRun = useMemo(
+    () => currentRuns?.find((route) => route.id === activeRunId) || currentRuns?.[0] || null,
+    [activeRunId, currentRuns]
+  );
+
+  const activeStops = useMemo(
+    () => (activeRun?.id ? runStopsByRoute[activeRun.id] || [] : []),
+    [activeRun?.id, runStopsByRoute]
+  );
 
   useEffect(() => {
     setDraftStops(activeStops);
@@ -212,8 +244,13 @@ export default function RoutesManagementPage() {
   }, [jobs, selectedDate, selectedTemplate]);
 
   const assignedJobIds = useMemo(
-    () => new Set(draftStops.map((stop) => stop.job_id).filter(Boolean)),
-    [draftStops]
+    () => new Set(
+      Object.values(runStopsByRoute)
+        .flat()
+        .map((stop) => stop.job_id)
+        .filter(Boolean)
+    ),
+    [runStopsByRoute]
   );
 
   const filteredJobs = useMemo(() => {
@@ -253,6 +290,7 @@ export default function RoutesManagementPage() {
     setTemplateForm({
       ...defaultTemplateForm,
       preferred_day: selectedDate.getDay().toString(),
+      max_stops_per_run: '15',
     });
     setIsTemplateModalOpen(true);
   };
@@ -265,6 +303,7 @@ export default function RoutesManagementPage() {
       cadence: template.cadence,
       preferred_day: template.preferred_day == null ? '' : String(template.preferred_day),
       service_area: template.service_area || '',
+      max_stops_per_run: String(template.max_stops_per_run || 15),
       include_overdue: template.include_overdue,
       include_skipped: template.include_skipped,
       include_delayed: template.include_delayed,
@@ -288,6 +327,7 @@ export default function RoutesManagementPage() {
       cadence: templateForm.cadence,
       preferred_day: templateForm.preferred_day === '' ? null : Number(templateForm.preferred_day),
       service_area: templateForm.service_area,
+      max_stops_per_run: Number(templateForm.max_stops_per_run || 15),
       include_overdue: templateForm.include_overdue,
       include_skipped: templateForm.include_skipped,
       include_delayed: templateForm.include_delayed,
@@ -332,11 +372,11 @@ export default function RoutesManagementPage() {
     setErrorMessage(null);
 
     try {
-      const run = await routePlanningService.syncTemplateRun(selectedTemplate, selectedDate, jobs, baseCamp);
-      if (run?.id) {
-        setActiveRunId(run.id);
+      const runs = await routePlanningService.syncTemplateRuns(selectedTemplate, selectedDate, jobs, baseCamp);
+      if (runs?.[0]?.id) {
+        setActiveRunId(runs[0].id);
       }
-      setSaveMessage(currentRun ? 'Route run refreshed' : 'Route run generated');
+      setSaveMessage(currentRuns?.length ? 'Route runs refreshed' : 'Route runs generated');
     } catch (error) {
       console.error('Error syncing route run:', error);
       setErrorMessage('Failed to generate this route run.');
@@ -360,7 +400,7 @@ export default function RoutesManagementPage() {
   };
 
   const handleSaveRouteOrder = async () => {
-    if (!currentRun?.id || draftStops.length === 0) return;
+    if (!activeRun?.id || draftStops.length === 0) return;
     setIsSavingOrder(true);
     setErrorMessage(null);
 
@@ -374,7 +414,7 @@ export default function RoutesManagementPage() {
             manual_order: index,
           }))
       );
-      await routeService.updateRoute(currentRun.id, { manual_override: true });
+      await routeService.updateRoute(activeRun.id, { manual_override: true });
       setHasUnsavedOrder(false);
       setSaveMessage('Route order saved');
     } catch (error) {
@@ -400,10 +440,10 @@ export default function RoutesManagementPage() {
   };
 
   const handleOpenDailyRoute = () => {
-    if (!currentRun?.id) return;
+    if (!activeRun?.id) return;
     navigate('/map', {
       state: {
-        selectedRouteId: currentRun.id,
+        selectedRouteId: activeRun.id,
         selectedRouteDate: selectedDate.toISOString(),
       },
     });
@@ -596,8 +636,12 @@ export default function RoutesManagementPage() {
                         </div>
                       )}
                       <div className="flex items-center gap-2">
+                        <GripVertical className="h-4 w-4 text-blue-600" />
+                        {selectedTemplate.max_stops_per_run || 15} stops max per run
+                      </div>
+                      <div className="flex items-center gap-2">
                         <Users className="h-4 w-4 text-blue-600" />
-                        Crew assignment ready later
+                        Same-day runs can split across future crews
                       </div>
                     </div>
 
@@ -642,9 +686,9 @@ export default function RoutesManagementPage() {
                     <div className="flex items-center gap-3">
                       <RefreshCw className={`h-5 w-5 ${isSyncingRun ? 'animate-spin' : ''}`} />
                       <div>
-                        <p className="text-sm font-black">{currentRun ? 'Refresh Route Run' : 'Generate Route Run'}</p>
+                        <p className="text-sm font-black">{currentRuns?.length ? 'Refresh Route Runs' : 'Generate Route Runs'}</p>
                         <p className={`text-[10px] font-black uppercase tracking-widest ${isSyncingRun ? 'text-gray-400' : 'text-blue-100'}`}>
-                          {currentRun ? 'Pull current due work back into this run' : 'Create this run from due work'}
+                          {currentRuns?.length ? 'Re-balance same-day route runs from what is due' : 'Create same-day route runs from due work'}
                         </p>
                       </div>
                     </div>
@@ -652,9 +696,9 @@ export default function RoutesManagementPage() {
 
                   <button
                     onClick={handleSaveRouteOrder}
-                    disabled={!currentRun || !hasUnsavedOrder || isSavingOrder}
+                    disabled={!activeRun || !hasUnsavedOrder || isSavingOrder}
                     className={`rounded-3xl px-5 py-4 text-left transition-all border ${
-                      !currentRun || !hasUnsavedOrder || isSavingOrder
+                      !activeRun || !hasUnsavedOrder || isSavingOrder
                         ? 'bg-gray-100 border-gray-100 text-gray-400'
                         : 'bg-white border-gray-200 text-gray-900 hover:border-blue-300 hover:bg-blue-50'
                     }`}
@@ -672,9 +716,9 @@ export default function RoutesManagementPage() {
 
                   <button
                     onClick={handleOpenDailyRoute}
-                    disabled={!currentRun}
+                    disabled={!activeRun}
                     className={`rounded-3xl px-5 py-4 text-left transition-all border ${
-                      !currentRun
+                      !activeRun
                         ? 'bg-gray-100 border-gray-100 text-gray-400'
                         : 'bg-white border-gray-200 text-gray-900 hover:border-blue-300 hover:bg-blue-50'
                     }`}
@@ -812,7 +856,7 @@ export default function RoutesManagementPage() {
                             setActiveRunId(route.id || null);
                           }}
                           className={`w-full text-left rounded-3xl border p-4 transition-all ${
-                            route.id === currentRun?.id
+                            route.id === activeRun?.id
                               ? 'border-blue-600 bg-blue-50 shadow-lg shadow-blue-50'
                               : 'border-gray-100 hover:border-blue-200 hover:bg-blue-50/40'
                           }`}
@@ -821,7 +865,7 @@ export default function RoutesManagementPage() {
                             <div>
                               <p className="text-sm font-black text-gray-900">{formatRouteDate(route.route_date)}</p>
                               <p className="text-[10px] font-black uppercase tracking-widest text-gray-400 mt-2">
-                                {route.status.replace('_', ' ')}
+                                {(route.route_run_label || 'Run 1')} • {route.status.replace('_', ' ')}
                               </p>
                             </div>
                             <ChevronRight className="h-4 w-4 text-gray-300" />
@@ -837,7 +881,7 @@ export default function RoutesManagementPage() {
                     <div>
                       <h4 className="text-lg font-black text-gray-900">Current Run Draft</h4>
                       <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mt-2">
-                        {currentRun ? formatRouteDate(currentRun.route_date) : 'Generate a run to start ordering stops'}
+                        {activeRun ? `${formatRouteDate(activeRun.route_date)} • ${activeRun.route_run_label || 'Run 1'}` : 'Generate runs to start ordering stops'}
                       </p>
                     </div>
 
@@ -848,16 +892,41 @@ export default function RoutesManagementPage() {
                     )}
                   </div>
 
-                  {!currentRun && (
+                  {currentRuns.length > 1 && (
+                    <div className="flex flex-wrap gap-3">
+                      {currentRuns.map((route) => (
+                        <button
+                          key={route.id}
+                          onClick={() => setActiveRunId(route.id || null)}
+                          className={`px-4 py-3 rounded-2xl border text-left transition-all ${
+                            route.id === activeRun?.id
+                              ? 'bg-blue-600 text-white border-blue-600 shadow-lg shadow-blue-100'
+                              : 'bg-white text-gray-700 border-gray-100 hover:border-blue-200 hover:bg-blue-50'
+                          }`}
+                        >
+                          <p className="text-xs font-black uppercase tracking-widest">
+                            {route.assigned_team_name_snapshot || route.route_run_label || 'Run'}
+                          </p>
+                          <p className={`text-[10px] font-black uppercase tracking-widest mt-1 ${
+                            route.id === activeRun?.id ? 'text-blue-100' : 'text-gray-400'
+                          }`}>
+                            Capacity {route.route_capacity || selectedTemplate.max_stops_per_run || 15}
+                          </p>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+
+                  {!activeRun && (
                     <div className="rounded-3xl border-2 border-dashed border-gray-200 p-10 text-center">
-                      <p className="text-base font-black text-gray-900">No route run for this date yet</p>
+                      <p className="text-base font-black text-gray-900">No route runs for this date yet</p>
                       <p className="text-sm font-bold text-gray-400 mt-2">
-                        Generate the route run to pull in the work due for this template.
+                        Generate route runs to pull in the work due for this template.
                       </p>
                     </div>
                   )}
 
-                  {currentRun && draftStops.length === 0 && (
+                  {activeRun && draftStops.length === 0 && (
                     <div className="rounded-3xl border-2 border-dashed border-gray-200 p-10 text-center">
                       <p className="text-base font-black text-gray-900">No stops on this run</p>
                       <p className="text-sm font-bold text-gray-400 mt-2">
@@ -866,7 +935,7 @@ export default function RoutesManagementPage() {
                     </div>
                   )}
 
-                  {currentRun && draftStops.length > 0 && (
+                  {activeRun && draftStops.length > 0 && (
                     <div className="space-y-4">
                       <div className="rounded-3xl bg-gray-50 border border-gray-100 p-4 flex items-center gap-3">
                         <GripVertical className="h-5 w-5 text-gray-400" />
@@ -1007,6 +1076,20 @@ export default function RoutesManagementPage() {
                     value={templateForm.service_area}
                     onChange={(event) => setTemplateForm((prev) => ({ ...prev, service_area: event.target.value }))}
                     placeholder="Oldsmar, Tampa, North..."
+                    className="w-full px-5 py-4 bg-gray-50 rounded-2xl border-none text-sm font-bold text-gray-900 placeholder:text-gray-300 focus:ring-2 focus:ring-blue-500 outline-none"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest mb-2">
+                    Max Stops Per Run
+                  </label>
+                  <input
+                    type="number"
+                    min="1"
+                    max="30"
+                    value={templateForm.max_stops_per_run}
+                    onChange={(event) => setTemplateForm((prev) => ({ ...prev, max_stops_per_run: event.target.value }))}
                     className="w-full px-5 py-4 bg-gray-50 rounded-2xl border-none text-sm font-bold text-gray-900 placeholder:text-gray-300 focus:ring-2 focus:ring-blue-500 outline-none"
                   />
                 </div>

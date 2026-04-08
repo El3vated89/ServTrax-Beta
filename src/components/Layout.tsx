@@ -1,15 +1,23 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Outlet, Link, useLocation } from 'react-router-dom';
-import { Home, Users, ClipboardList, Wrench, Menu, Bell, LogOut, Settings as SettingsIcon, X, Search, Map, Plus, Camera, MessageSquare, HardDrive, Route as RouteIcon } from 'lucide-react';
+import { Home, Users, ClipboardList, Wrench, Menu, Bell, LogOut, Settings as SettingsIcon, X, Search, Map, Plus, Camera, MessageSquare, HardDrive, Route as RouteIcon, User as UserIcon, Shield } from 'lucide-react';
 import { auth } from '../firebase';
 import { signOut } from 'firebase/auth';
 import PhotoCaptureFlow from './PhotoCaptureFlow';
+import { jobService, Job } from '../services/jobService';
+import { routeService } from '../services/RouteService';
+import { Route } from '../modules/routes/types';
+import { storageService } from '../services/StorageService';
+import { alertService } from '../services/alertService';
+import { userProfileService } from '../services/userProfileService';
 
 export default function Layout() {
   const location = useLocation();
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [isAddMenuOpen, setIsAddMenuOpen] = useState(false);
   const [isPhotoCaptureOpen, setIsPhotoCaptureOpen] = useState(false);
+  const [alertCount, setAlertCount] = useState(0);
+  const [isPlatformAdmin, setIsPlatformAdmin] = useState(false);
   
   const bottomNavItems = [
     { path: '/', icon: Home, label: 'Home' },
@@ -20,11 +28,54 @@ export default function Layout() {
 
   const menuItems = [
     { path: '/map', icon: Map, label: 'Daily Route' },
+    { path: '/profile', icon: UserIcon, label: 'Profile' },
     { path: '/equip', icon: Wrench, label: 'Equipment' },
     { path: '/messaging', icon: MessageSquare, label: 'Messaging' },
     { path: '/storage', icon: HardDrive, label: 'Storage' },
     { path: '/settings', icon: SettingsIcon, label: 'Settings' },
   ];
+
+  useEffect(() => {
+    let latestJobs: Job[] = [];
+    let latestRoutes: Route[] = [];
+    let latestStorage = { used_bytes: 0, limit_bytes: 0 };
+
+    const recomputeAlerts = () => {
+      setAlertCount(alertService.buildOperationalAlerts(latestJobs, latestRoutes, latestStorage).length);
+    };
+
+    const unsubscribeJobs = jobService.subscribeToJobs((jobs) => {
+      latestJobs = jobs;
+      recomputeAlerts();
+    });
+
+    const unsubscribeRoutes = routeService.subscribeToRoutes((routes) => {
+      latestRoutes = routes;
+      recomputeAlerts();
+    });
+
+    const unsubscribeProfile = userProfileService.subscribeToCurrentUserProfile((profile) => {
+      setIsPlatformAdmin(userProfileService.isPlatformAdmin(profile));
+    });
+
+    const loadStorageSummary = async () => {
+      const summary = await storageService.getUsageSummary();
+      latestStorage = { used_bytes: summary.used_bytes, limit_bytes: summary.limit_bytes };
+      recomputeAlerts();
+    };
+
+    loadStorageSummary();
+
+    return () => {
+      unsubscribeJobs();
+      unsubscribeRoutes();
+      unsubscribeProfile();
+    };
+  }, []);
+
+  const allMenuItems = isPlatformAdmin
+    ? [...menuItems, { path: '/controller', icon: Shield, label: 'Controller' }]
+    : menuItems;
 
   const handleSignOut = () => {
     signOut(auth);
@@ -50,7 +101,7 @@ export default function Layout() {
           </div>
 
           <nav className="space-y-2">
-            {[...bottomNavItems, ...menuItems].map((item) => {
+            {[...bottomNavItems, ...allMenuItems].map((item) => {
               const Icon = item.icon;
               const isActive = location.pathname === item.path;
               return (
@@ -107,13 +158,17 @@ export default function Layout() {
               </div>
               
               <div className="flex items-center gap-2">
-                <button className="p-3 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-2xl transition-all relative">
+                <Link to="/alerts" className="p-3 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-2xl transition-all relative">
                   <Bell className="h-6 w-6" />
-                  <span className="absolute top-3 right-3 w-2 h-2 bg-red-500 rounded-full border-2 border-white"></span>
-                </button>
-                <div className="h-10 w-10 rounded-2xl bg-gradient-to-br from-blue-500 to-blue-700 shadow-lg shadow-blue-200 flex items-center justify-center text-white font-black text-sm">
+                  {alertCount > 0 && (
+                    <span className="absolute top-2 right-2 min-w-5 h-5 px-1 bg-red-500 rounded-full border-2 border-white text-[10px] text-white font-black flex items-center justify-center">
+                      {alertCount}
+                    </span>
+                  )}
+                </Link>
+                <Link to="/profile" className="h-10 w-10 rounded-2xl bg-gradient-to-br from-blue-500 to-blue-700 shadow-lg shadow-blue-200 flex items-center justify-center text-white font-black text-sm">
                   TM
-                </div>
+                </Link>
               </div>
             </div>
           </div>
@@ -137,7 +192,7 @@ export default function Layout() {
               </div>
               <div className="flex-1 overflow-y-auto py-6 px-4">
                 <nav className="space-y-2">
-                  {[...bottomNavItems, ...menuItems].map((item) => {
+                  {[...bottomNavItems, ...allMenuItems].map((item) => {
                     const Icon = item.icon;
                     const isActive = location.pathname === item.path;
                     return (

@@ -21,6 +21,7 @@ export interface RouteTemplate {
   cadence: RouteTemplateCadence;
   preferred_day?: number | null;
   service_area?: string;
+  max_stops_per_run?: number;
   include_overdue: boolean;
   include_skipped: boolean;
   include_delayed: boolean;
@@ -37,6 +38,10 @@ export interface Route {
   template_mode?: RouteTemplateMode;
   template_day?: number | null;
   template_area?: string;
+  route_run_index?: number;
+  route_run_total?: number;
+  route_run_label?: string;
+  route_capacity?: number;
   route_date: Timestamp | string;
   status: RouteStatus;
   base_camp_label: string;
