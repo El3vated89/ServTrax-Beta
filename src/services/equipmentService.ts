@@ -19,20 +19,33 @@ export interface Equipment {
 
 export const equipmentService = {
   subscribeToEquipment: (callback: (equipment: Equipment[]) => void) => {
-    const user = auth.currentUser;
-    if (!user) return () => {};
+    let unsubscribeEquipment = () => {};
 
-    const q = query(collection(db, 'equipment'), where('ownerId', '==', user.uid));
-    
-    return onSnapshot(q, (snapshot) => {
-      const equipment = snapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      })) as Equipment[];
-      callback(equipment);
-    }, (error) => {
-      console.error("Error fetching equipment:", error);
+    const unsubscribeAuth = auth.onAuthStateChanged((user) => {
+      unsubscribeEquipment();
+
+      if (!user) {
+        callback([]);
+        return;
+      }
+
+      const q = query(collection(db, 'equipment'), where('ownerId', '==', user.uid));
+      
+      unsubscribeEquipment = onSnapshot(q, (snapshot) => {
+        const equipment = snapshot.docs.map(doc => ({
+          id: doc.id,
+          ...doc.data()
+        })) as Equipment[];
+        callback(equipment);
+      }, (error) => {
+        console.error("Error fetching equipment:", error);
+      });
     });
+
+    return () => {
+      unsubscribeEquipment();
+      unsubscribeAuth();
+    };
   },
 
   addEquipment: async (equipmentData: Omit<Equipment, 'ownerId' | 'created_at'>) => {

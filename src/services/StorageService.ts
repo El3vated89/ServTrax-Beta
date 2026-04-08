@@ -15,9 +15,20 @@ export interface StorageAsset {
   ownerId: string;
 }
 
+const waitForCurrentUser = async () => {
+  if (auth.currentUser) return auth.currentUser;
+
+  return new Promise<typeof auth.currentUser>((resolve) => {
+    const unsubscribe = auth.onAuthStateChanged((user) => {
+      unsubscribe();
+      resolve(user);
+    });
+  });
+};
+
 export const storageService = {
   getUsageSummary: async () => {
-    const user = auth.currentUser;
+    const user = await waitForCurrentUser();
     if (!user) return { used_bytes: 0, limit_bytes: 300 * 1024 * 1024, asset_count: 0, plan_name: 'Free Tier', storage_cap: 300 * 1024 * 1024 };
 
     const q = query(collection(db, 'verification_records'), where('ownerId', '==', user.uid));
@@ -39,7 +50,7 @@ export const storageService = {
     };
   },
   getAssets: async () => {
-    const user = auth.currentUser;
+    const user = await waitForCurrentUser();
     if (!user) return [];
 
     const q = query(

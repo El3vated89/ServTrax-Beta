@@ -24,20 +24,33 @@ export interface Customer {
 
 export const customerService = {
   subscribeToCustomers: (callback: (customers: Customer[]) => void) => {
-    const user = auth.currentUser;
-    if (!user) return () => {};
+    let unsubscribeCustomers = () => {};
 
-    const q = query(collection(db, 'customers'), where('ownerId', '==', user.uid));
-    
-    return onSnapshot(q, (snapshot) => {
-      const customers = snapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      })) as Customer[];
-      callback(customers);
-    }, (error) => {
-      handleFirestoreError(error, OperationType.GET, 'customers');
+    const unsubscribeAuth = auth.onAuthStateChanged((user) => {
+      unsubscribeCustomers();
+
+      if (!user) {
+        callback([]);
+        return;
+      }
+
+      const q = query(collection(db, 'customers'), where('ownerId', '==', user.uid));
+      
+      unsubscribeCustomers = onSnapshot(q, (snapshot) => {
+        const customers = snapshot.docs.map(doc => ({
+          id: doc.id,
+          ...doc.data()
+        })) as Customer[];
+        callback(customers);
+      }, (error) => {
+        handleFirestoreError(error, OperationType.GET, 'customers');
+      });
     });
+
+    return () => {
+      unsubscribeCustomers();
+      unsubscribeAuth();
+    };
   },
 
   addCustomer: async (customerData: Omit<Customer, 'ownerId' | 'created_at'>) => {

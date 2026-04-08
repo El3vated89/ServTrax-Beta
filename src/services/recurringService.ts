@@ -75,20 +75,33 @@ const isMonthDayInRange = (currentMonthDay: string, startDate?: string, endDate?
 
 export const recurringService = {
   subscribeToPlans: (callback: (plans: RecurringPlan[]) => void) => {
-    const user = auth.currentUser;
-    if (!user) return () => {};
+    let unsubscribePlans = () => {};
 
-    const q = query(collection(db, COLLECTION_NAME), where('ownerId', '==', user.uid));
-    
-    return onSnapshot(q, (snapshot) => {
-      const plans = snapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      })) as RecurringPlan[];
-      callback(plans);
-    }, (error) => {
-      handleFirestoreError(error, OperationType.GET, COLLECTION_NAME);
+    const unsubscribeAuth = auth.onAuthStateChanged((user) => {
+      unsubscribePlans();
+
+      if (!user) {
+        callback([]);
+        return;
+      }
+
+      const q = query(collection(db, COLLECTION_NAME), where('ownerId', '==', user.uid));
+      
+      unsubscribePlans = onSnapshot(q, (snapshot) => {
+        const plans = snapshot.docs.map(doc => ({
+          id: doc.id,
+          ...doc.data()
+        })) as RecurringPlan[];
+        callback(plans);
+      }, (error) => {
+        handleFirestoreError(error, OperationType.GET, COLLECTION_NAME);
+      });
     });
+
+    return () => {
+      unsubscribePlans();
+      unsubscribeAuth();
+    };
   },
 
   addPlan: async (planData: Omit<RecurringPlan, 'ownerId' | 'created_at'>) => {

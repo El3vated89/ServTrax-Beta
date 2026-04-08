@@ -68,24 +68,37 @@ const COLLECTION_NAME = 'verification_records';
 
 export const verificationService = {
   subscribeToJobVerifications: (jobId: string, callback: (records: VerificationRecord[]) => void) => {
-    const user = auth.currentUser;
-    if (!user) return () => {};
+    let unsubscribeRecords = () => {};
 
-    const q = query(
-      collection(db, COLLECTION_NAME),
-      where('ownerId', '==', user.uid),
-      where('jobId', '==', jobId)
-    );
+    const unsubscribeAuth = auth.onAuthStateChanged((user) => {
+      unsubscribeRecords();
 
-    return onSnapshot(q, (snapshot) => {
-      const records = snapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      })) as VerificationRecord[];
-      callback(records);
-    }, (error) => {
-      handleFirestoreError(error, OperationType.GET, COLLECTION_NAME);
+      if (!user) {
+        callback([]);
+        return;
+      }
+
+      const q = query(
+        collection(db, COLLECTION_NAME),
+        where('ownerId', '==', user.uid),
+        where('jobId', '==', jobId)
+      );
+
+      unsubscribeRecords = onSnapshot(q, (snapshot) => {
+        const records = snapshot.docs.map(doc => ({
+          id: doc.id,
+          ...doc.data()
+        })) as VerificationRecord[];
+        callback(records);
+      }, (error) => {
+        handleFirestoreError(error, OperationType.GET, COLLECTION_NAME);
+      });
     });
+
+    return () => {
+      unsubscribeRecords();
+      unsubscribeAuth();
+    };
   },
 
   addVerification: async (record: Omit<VerificationRecord, 'id' | 'ownerId' | 'created_at'>) => {
@@ -115,22 +128,35 @@ export const verificationService = {
   },
 
   subscribeToAllVerifications: (callback: (records: VerificationRecord[]) => void) => {
-    const user = auth.currentUser;
-    if (!user) return () => {};
+    let unsubscribeRecords = () => {};
 
-    const q = query(
-      collection(db, COLLECTION_NAME),
-      where('ownerId', '==', user.uid)
-    );
+    const unsubscribeAuth = auth.onAuthStateChanged((user) => {
+      unsubscribeRecords();
 
-    return onSnapshot(q, (snapshot) => {
-      const records = snapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      })) as VerificationRecord[];
-      callback(records);
-    }, (error) => {
-      handleFirestoreError(error, OperationType.GET, COLLECTION_NAME);
+      if (!user) {
+        callback([]);
+        return;
+      }
+
+      const q = query(
+        collection(db, COLLECTION_NAME),
+        where('ownerId', '==', user.uid)
+      );
+
+      unsubscribeRecords = onSnapshot(q, (snapshot) => {
+        const records = snapshot.docs.map(doc => ({
+          id: doc.id,
+          ...doc.data()
+        })) as VerificationRecord[];
+        callback(records);
+      }, (error) => {
+        handleFirestoreError(error, OperationType.GET, COLLECTION_NAME);
+      });
     });
+
+    return () => {
+      unsubscribeRecords();
+      unsubscribeAuth();
+    };
   }
 };

@@ -47,23 +47,36 @@ const normalizeSeasonalRules = (rules?: any[]) => (rules || []).slice(0, 1).map(
 
 export const servicePlanService = {
   subscribeToServicePlans: (callback: (plans: ServicePlan[]) => void) => {
-    const user = auth.currentUser;
-    if (!user) return () => {};
+    let unsubscribePlans = () => {};
 
-    const q = query(
-      collection(db, COLLECTION_NAME),
-      where('ownerId', '==', user.uid)
-    );
+    const unsubscribeAuth = auth.onAuthStateChanged((user) => {
+      unsubscribePlans();
 
-    return onSnapshot(q, (snapshot) => {
-      const plans = snapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      })) as ServicePlan[];
-      callback(plans);
-    }, (error) => {
-      console.error("Error fetching service plans:", error);
+      if (!user) {
+        callback([]);
+        return;
+      }
+
+      const q = query(
+        collection(db, COLLECTION_NAME),
+        where('ownerId', '==', user.uid)
+      );
+
+      unsubscribePlans = onSnapshot(q, (snapshot) => {
+        const plans = snapshot.docs.map(doc => ({
+          id: doc.id,
+          ...doc.data()
+        })) as ServicePlan[];
+        callback(plans);
+      }, (error) => {
+        console.error("Error fetching service plans:", error);
+      });
     });
+
+    return () => {
+      unsubscribePlans();
+      unsubscribeAuth();
+    };
   },
 
   addServicePlan: async (plan: Omit<ServicePlan, 'id' | 'ownerId' | 'created_at'>) => {

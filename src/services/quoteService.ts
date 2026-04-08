@@ -23,20 +23,33 @@ const COLLECTION_NAME = 'quotes';
 
 export const quoteService = {
   subscribeToQuotes: (callback: (quotes: Quote[]) => void) => {
-    const user = auth.currentUser;
-    if (!user) return () => {};
+    let unsubscribeQuotes = () => {};
 
-    const q = query(collection(db, COLLECTION_NAME), where('ownerId', '==', user.uid));
-    
-    return onSnapshot(q, (snapshot) => {
-      const quotes = snapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      })) as Quote[];
-      callback(quotes);
-    }, (error) => {
-      handleFirestoreError(error, OperationType.GET, COLLECTION_NAME);
+    const unsubscribeAuth = auth.onAuthStateChanged((user) => {
+      unsubscribeQuotes();
+
+      if (!user) {
+        callback([]);
+        return;
+      }
+
+      const q = query(collection(db, COLLECTION_NAME), where('ownerId', '==', user.uid));
+      
+      unsubscribeQuotes = onSnapshot(q, (snapshot) => {
+        const quotes = snapshot.docs.map(doc => ({
+          id: doc.id,
+          ...doc.data()
+        })) as Quote[];
+        callback(quotes);
+      }, (error) => {
+        handleFirestoreError(error, OperationType.GET, COLLECTION_NAME);
+      });
     });
+
+    return () => {
+      unsubscribeQuotes();
+      unsubscribeAuth();
+    };
   },
 
   addQuote: async (quoteData: Omit<Quote, 'ownerId' | 'created_at'>) => {

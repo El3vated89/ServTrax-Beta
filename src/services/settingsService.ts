@@ -83,9 +83,20 @@ export const DEFAULT_SETTINGS: BusinessSettings = {
   }
 };
 
+const waitForCurrentUser = async () => {
+  if (auth.currentUser) return auth.currentUser;
+
+  return new Promise<typeof auth.currentUser>((resolve) => {
+    const unsubscribe = auth.onAuthStateChanged((user) => {
+      unsubscribe();
+      resolve(user);
+    });
+  });
+};
+
 export const settingsService = {
   getSettings: async (): Promise<BusinessSettings> => {
-    const user = auth.currentUser;
+    const user = await waitForCurrentUser();
     if (!user) return DEFAULT_SETTINGS;
 
     try {

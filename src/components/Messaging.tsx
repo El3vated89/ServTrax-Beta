@@ -1,9 +1,11 @@
 import React, { useState, useEffect } from 'react';
-import { MessageSquare, Plus, Trash2, Edit2, Save, X, ChevronRight, Info } from 'lucide-react';
+import { MessageSquare, Plus, Trash2, Edit2, Save, X, ChevronRight, Info, Smartphone, Mail, BellRing } from 'lucide-react';
 import { templateService, MessageTemplate } from '../services/templateService';
+import { platformMessagingService, PlatformMessagingConfig } from '../services/platformMessagingService';
 
 export default function Messaging() {
   const [templates, setTemplates] = useState<MessageTemplate[]>([]);
+  const [providerConfig, setProviderConfig] = useState<PlatformMessagingConfig>(platformMessagingService.getDefaultConfig());
   const [isAdding, setIsAdding] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [formData, setFormData] = useState({ name: '', content: '' });
@@ -12,6 +14,11 @@ export default function Messaging() {
 
   useEffect(() => {
     const unsubscribe = templateService.subscribeToTemplates(setTemplates);
+    return () => unsubscribe();
+  }, []);
+
+  useEffect(() => {
+    const unsubscribe = platformMessagingService.subscribeToConfig(setProviderConfig);
     return () => unsubscribe();
   }, []);
 
@@ -89,6 +96,58 @@ export default function Messaging() {
           <p className="text-sm font-bold">{errorMessage}</p>
         </div>
       )}
+
+      <div className="bg-white rounded-[32px] p-6 shadow-sm border border-gray-100 mb-8">
+        <div className="flex items-center justify-between gap-4 mb-6">
+          <div>
+            <h3 className="text-xl font-black text-gray-900">Messaging Foundation</h3>
+            <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mt-2">
+              In-app notifications plus provider-ready SMS and email
+            </p>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div className="rounded-3xl bg-gray-50 border border-gray-100 p-5">
+            <div className="flex items-center gap-3">
+              <Smartphone className="h-5 w-5 text-blue-600" />
+              <div>
+                <p className="text-sm font-black text-gray-900">SMS</p>
+                <p className="text-[10px] font-black uppercase tracking-widest text-gray-400 mt-1">Twilio</p>
+              </div>
+            </div>
+            <p className="text-sm font-bold text-gray-500 mt-4">
+              {providerConfig.sms_enabled ? 'SMS foundation is enabled and ready for secure API hookup.' : 'SMS foundation is laid out and waiting for secure API hookup.'}
+            </p>
+          </div>
+
+          <div className="rounded-3xl bg-gray-50 border border-gray-100 p-5">
+            <div className="flex items-center gap-3">
+              <Mail className="h-5 w-5 text-blue-600" />
+              <div>
+                <p className="text-sm font-black text-gray-900">Email</p>
+                <p className="text-[10px] font-black uppercase tracking-widest text-gray-400 mt-1">SendGrid</p>
+              </div>
+            </div>
+            <p className="text-sm font-bold text-gray-500 mt-4">
+              {providerConfig.email_enabled ? 'Email foundation is enabled and ready for secure API hookup.' : 'Email foundation is laid out and waiting for secure API hookup.'}
+            </p>
+          </div>
+
+          <div className="rounded-3xl bg-gray-50 border border-gray-100 p-5">
+            <div className="flex items-center gap-3">
+              <BellRing className="h-5 w-5 text-blue-600" />
+              <div>
+                <p className="text-sm font-black text-gray-900">Notifications</p>
+                <p className="text-[10px] font-black uppercase tracking-widest text-gray-400 mt-1">In-App</p>
+              </div>
+            </div>
+            <p className="text-sm font-bold text-gray-500 mt-4">
+              {providerConfig.in_app_notifications_enabled ? 'In-app notifications are active as the shared alert foundation.' : 'In-app notification foundation is available and can be re-enabled.'}
+            </p>
+          </div>
+        </div>
+      </div>
 
       {isAdding && (
         <div className="bg-white rounded-[32px] p-8 shadow-xl border border-gray-100 mb-8 animate-in fade-in slide-in-from-top-4 duration-200">
