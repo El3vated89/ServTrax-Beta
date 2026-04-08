@@ -1,728 +1,481 @@
-# SERVTRAX — FINAL MASTER SPECIFICATION
-
-## 1. CORE BRAND
-
-**Primary Tagline:**  
-Track. Verify. Get Paid.
-
-**Supporting Brand Line:**  
-Elevating the customer connection.
-
-**Hero Hook:**  
-Complete the job. Copy the message. Send it. Done.
-
-**Core Positioning:**  
-ServTrax is a mobile-first field-service operations platform for small service businesses such as lawn care, pressure washing, and contractors.
-
-It is built to remove the friction that happens after the work is done by making it easy to:
-
-- track work
-- verify work
-- communicate clearly
-- get paid faster
-
-ServTrax is **not** intended to be a bloated CRM.  
-It is a lightweight operational platform built for real field work.
+# ServTrax Product Specification
 
 ---
 
-## 2. CORE PRODUCT GOAL
+## 1. Core Vision
 
-ServTrax must function as:
+ServTrax is a lightweight operational system that helps small service businesses complete jobs faster, verify work, communicate clearly, and get paid with less friction.
 
-A lightweight operational system that can launch early, evolve safely, scale over time, and grow into a full business management platform without being rebuilt.
+ServTrax is not a bloated CRM. It is a mobile-first field-service platform built for real work in the field.
 
-The system must be:
+Core promise:
 
-- modular
-- upgradeable
-- backward compatible
-- mobile-first
-- simple for the user
-- powerful under the hood
+**Track. Verify. Get Paid.**
 
----
+Supporting workflow:
 
-## 3. CORE WORKFLOW
-
-### Public Brand Workflow
-Track → Verify → Get Paid
-
-### Internal Operational Workflow
-Track → Verify → Communicate → Get Paid
-
-ServTrax exists to support this real-world flow:
-
-1. A job is scheduled or due
-2. The work is completed
-3. Proof is captured
-4. A ready-to-send customer message is generated
-5. A proof page or portal view can be shared
-6. The customer pays
-7. The business owner has a clean record of what happened
+Track -> Verify -> Communicate -> Get Paid
 
 ---
 
-## 4. PRODUCT PRINCIPLES
+## 2. Product Goals
 
-ServTrax must always follow these rules:
+ServTrax must:
 
-- mobile-first from day one
-- camera-first workflow
-- minimal typing in the field
-- fast tap-based actions
-- simple UI for core daily use
-- historical records must remain accurate
-- internal notes must never be exposed to customers
-- customer-facing data must always be controlled
-- future features must be addable without rebuilding the system
-
-ServTrax is built for speed in the field, not office complexity.
+- Launch early without requiring a future rebuild.
+- Stay modular and upgradeable.
+- Remain backward compatible.
+- Support plan-based feature expansion.
+- Keep mobile field workflows fast.
+- Preserve historical job records accurately.
+- Keep internal notes private.
+- Control all customer-facing data intentionally.
 
 ---
 
-## 5. TARGET USERS
+## 3. Target Users
 
 ServTrax is primarily for:
 
-- lawn care businesses
-- pressure washing businesses
-- small contractors
-- recurring service businesses
-- owner-operators
-- small crews that need proof, messaging, and payment workflow
+- Lawn care businesses.
+- Pressure washing businesses.
+- Small contractors.
+- Recurring service businesses.
+- Owner-operators.
+- Small crews that need proof, messaging, and payment workflow.
 
 ---
 
-## 6. CORE MVP FEATURES
+## 4. Core Workflow
 
-The MVP foundation includes:
-
-- Customers
-- Service Plans
-- Job Tracking
-- Verification Records
-- Photos
-- Notes
-- GPS capture
-- Timestamp capture
-- Smart Messaging
-- Shareable Job Proof Pages
-- Search and Filtering
-
-This is the minimum version that still delivers the full core value of the platform.
+1. A job is scheduled or due.
+2. The work is completed.
+3. Proof is captured.
+4. A ready-to-send customer message is generated.
+5. A proof page or portal view can be shared.
+6. The customer pays.
+7. The business owner has a clean record of what happened.
 
 ---
 
-## 7. CORE DATA MODEL
+## 5. Product Principles
 
-ServTrax is built on four primary data layers:
-
-### 7.1 Customers
-Master customer profile data.
-
-Examples:
-- customer name
-- phone
-- email
-- billing notes
-- payment preferences
-- multiple service locations if needed
-- status
-- internal notes
-
-### 7.2 Service Plans
-The recurring or one-time service agreement structure.
-
-Examples:
-- service type
-- pricing
-- recurrence
-- next due date
-- start date
-- active/paused/inactive
-- route grouping
-- notes
-
-### 7.3 Job Occurrences
-Actual visits/jobs performed.
-
-Examples:
-- linked customer
-- linked service plan
-- scheduled date
-- completed date
-- payment status
-- visibility mode
-- share token
-- billable status
-- job notes
-- customer-facing notes
-- internal notes
-
-### 7.4 Verification Records
-Proof that the work was completed.
-
-Examples:
-- photos
-- timestamp
-- GPS location
-- notes
-- proof metadata
-- public/shareable visibility control
+- Mobile-first from day one.
+- Camera-first verification workflow.
+- Minimal typing in the field.
+- Fast tap-based actions.
+- Simple UI for daily use.
+- Historical records must remain accurate.
+- Internal notes must never be exposed to customers.
+- Customer-facing data must always be controlled.
+- Future features must be addable without rebuilding the system.
 
 ---
 
-## 8. SNAPSHOT DATA MODEL (CRITICAL)
+## 6. Core Features
 
-ServTrax must separate:
+### Customers
 
-- master data
-- historical job data
+- Contact information.
+- Billing notes.
+- Payment preferences.
+- Multiple service locations where needed.
+- Status tracking.
+- Internal notes.
+
+### Service Plans
+
+- Recurring or one-time service structure.
+- Pricing.
+- Billing frequency.
+- Recurrence.
+- Next due date.
+- Start date.
+- Active, paused, or inactive status.
+- Route grouping.
+
+### Jobs
+
+- Manual or generated from recurring plans.
+- Linked customer.
+- Linked service plan where applicable.
+- Scheduled and completed dates.
+- Payment status.
+- Visibility mode.
+- Share token.
+- Billable status.
+- Customer-facing notes.
+- Internal notes.
+- Snapshot-based historical fields.
+
+### Verification
+
+- Photos.
+- GPS coordinates.
+- Timestamp.
+- Service notes.
+- Proof notes.
+- Customer-visible notes.
+- Internal-only notes.
+
+### Messaging
+
+All tiers with messaging support:
+
+- Templates.
+- Ready-to-copy messages.
+- Variable insertion for customer name, service, date, amount due, payment instructions, and proof links.
+
+Pro support:
+
+- AI-assisted messaging that uses correct job variables while improving tone and personalization.
+
+### Quotes
+
+Starter Lite and above:
+
+- Create quote.
+- Send quote.
+- Customer approves quote.
+- Convert quote to job.
+
+### Customer Access
+
+Free and Starter Lite:
+
+- Temporary links only.
+
+Starter and Pro:
+
+- Permanent job links.
+- Customer portal.
+- Customer job history where enabled.
+
+### Routes
+
+All supported core plans:
+
+- Manual routes.
+- Assign jobs/customers to routes.
+- City or zip grouping where enabled.
+
+Pro:
+
+- Smart route generation.
+- Route optimization.
+
+### Search
+
+All plans:
+
+- Search and filtering for customers, jobs, addresses, notes, service types, routes, cities, zip codes, and equipment.
+
+Pro:
+
+- AI search.
+
+### Equipment
+
+Starter Lite and above:
+
+- Equipment tracking.
+- Maintenance logs.
+- Maintenance dates.
+- Status.
+- Assigned notes.
+
+---
+
+## 7. Snapshot Data Model
+
+ServTrax must separate master data from historical job data.
 
 Jobs must store snapshot values such as:
 
-- customer_name_snapshot
-- address_snapshot
-- phone_snapshot
-- service_snapshot
-- price_snapshot
+- `customer_name_snapshot`
+- `address_snapshot`
+- `phone_snapshot`
+- `service_snapshot`
+- `price_snapshot`
 
 Purpose:
 
-- preserve historical accuracy
-- prevent old jobs from changing when customer records are updated
-- keep records stable for proof, invoices, and audits
+- Preserve historical accuracy.
+- Prevent old jobs from changing when customer records are updated.
+- Keep records stable for proof, invoices, and audits.
 
 Historical jobs must never be rewritten by later edits to the customer record.
 
 ---
 
-## 9. CUSTOMER / JOB RELATIONSHIP RULES
+## 8. Visibility Rules
 
-ServTrax must support:
-
-- one customer with multiple job locations
-- service location not always matching customer master address
-- multiple jobs tied to one customer
-- multiple service plans tied to one customer
-- quote-to-job conversion for applicable plans
-
-This is important for real service businesses where billing person and service address are not always the same.
+- Jobs and proof support `internal_only` and `shareable` visibility modes.
+- Photos should support per-photo visibility controls.
+- Internal notes must never be shown to customers.
+- Customer-facing data must be intentionally selected.
 
 ---
 
-## 10. VERIFICATION SYSTEM
+## 9. Payment System
 
-Verification is a core ServTrax differentiator.
+ServTrax supports:
 
-Each completed job can include:
+- Amount due tracking.
+- Paid/unpaid visibility.
+- Payment status tracking.
+- Payment instructions in messages.
+- Stripe where enabled.
+- User-supplied payment instructions for off-platform payments.
 
-- before/after or completion photos
-- GPS coordinates
-- timestamp
-- service notes
-- proof notes
-- customer-visible notes
-- internal-only notes
+Plan rules:
 
-### Visibility Rules
-Jobs and proof must support visibility modes such as:
-
-- internal_only
-- shareable
-
-Photos should also support per-photo visibility controls.
-
-Internal notes must never be shown to customers.
+- Free and Starter Lite: Stripe plus 0.5% ServTrax fee.
+- Starter and Pro: Stripe with no ServTrax fee.
 
 ---
 
-## 11. SMART MESSAGING
+## 10. Monetization
 
-ServTrax includes smart messaging as a core workflow tool.
-
-### Base Messaging
-All tiers that include messaging must support:
-
-- ready-to-copy templates
-- variable-based field insertion
-- customer name
-- service type
-- date
-- amount due
-- payment instructions
-- proof page link if available
-
-### AI Messaging
-Pro includes AI-assisted messaging to make the message sound more natural and more personalized while still pulling the correct job variables.
-
-ServTrax messaging supports the workflow after the job, not a bulky CRM-style communication system.
+- Quotes -> Starter Lite and above.
+- Portal -> Starter and above.
+- Branding -> Starter and above.
+- AI -> Pro.
+- Smart routes -> Pro.
+- Fees -> Free and Starter Lite.
+- Storage -> Add-on.
 
 ---
 
-## 12. SHAREABLE PROOF PAGES AND PORTAL
+## 11. Pricing
 
-ServTrax supports customer-facing proof sharing in two forms:
+- Free - $0.
+- Starter Lite - $4 launch / $5 standard.
+- Starter - $8 launch / $10 standard.
+- Pro - $12 launch / $20 standard.
+- Biz - future plan.
 
-### 12.1 Shareable Job Proof Pages
-A clean page showing job completion proof such as:
+Plan positioning:
 
-- service completed
-- date/time
-- selected photos
-- notes
-- payment status or amount due where enabled
-
-### 12.2 Customer Portal
-Higher plans include a persistent portal experience where customers can review service history, proof, and relevant payment information.
-
-### Link Rules
-- Free and Starter Lite use temporary links only
-- Starter and Pro include permanent job links
-- Starter and Pro include customer portal access
+- Free -> Track.
+- Starter Lite -> Win work.
+- Starter -> Show work.
+- Pro -> Optimize.
 
 ---
 
-## 13. QUOTING SYSTEM
-
-ServTrax includes quoting starting at Starter Lite.
-
-Quote workflow:
-
-Create quote → Send quote → Customer approves → Convert to job
-
-This allows the system to support both lead-to-job flow and recurring service operations without becoming a full sales CRM.
-
----
-
-## 14. PAYMENT SYSTEM
-
-ServTrax supports payment collection and payment visibility.
-
-### Payment Features
-- amount due tracking
-- paid/unpaid visibility
-- payment status tracking
-- payment instructions in messages
-- support for Stripe where enabled
-- support for user-supplied payment instructions such as custom directions or off-platform payment methods
-
-### Plan Rules
-- Free and Starter Lite: Stripe + 0.5% ServTrax fee
-- Starter and Pro: Stripe with no ServTrax fee
-
-Payment collection is important, but ServTrax is still positioned first as an operations and proof platform.
-
----
-
-## 15. ROUTES
-
-Routes are an important expansion feature and must be designed into the foundation early.
-
-### Route Support Must Allow:
-- route grouping
-- assigning customers/jobs to routes
-- sorting by city or zip
-- manual route management in lower tiers
-- smart route generation in Pro
-- future Google-based routing support
-
-Route structure should exist early even if advanced UI is enabled later.
-
----
-
-## 16. EQUIPMENT TRACKING
-
-Starter Lite and above include equipment support.
-
-Equipment records can include:
-
-- equipment name
-- category
-- serial/model
-- purchase notes
-- maintenance logs
-- maintenance dates
-- status
-- assigned notes
-
-Future expansion may include vehicle tracking and service reminders.
-
----
-
-## 17. SEARCH AND FILTERING
-
-Search must be available platform-wide.
-
-Users must be able to search stored data such as:
-
-- customer names
-- addresses
-- notes
-- service types
-- jobs
-- routes
-- cities
-- zip codes
-- equipment records
-
-### Search Rules
-- full search and filtering available in all current core plans
-- AI search available in Pro
-- standard filtering is not restricted to only premium tiers
-- premium differentiator is AI assistance, not basic usability
-
----
-
-## 18. PHOTO STORAGE, COMPRESSION, AND RETENTION
+## 12. Storage
 
 ServTrax must use a compressed, storage-controlled photo system.
 
-### Core Rule
-Raw images must never be the primary working asset.
+Core rules:
 
-### Image Pipeline
-Capture → Compress → Generate Thumbnail → Upload → Store Metadata
+- Raw images must never be the primary working asset.
+- Capture -> Compress -> Generate Thumbnail -> Upload -> Store Metadata.
+- Store file references in Firestore.
+- Store files in Firebase Cloud Storage.
+- Support retention limits by plan.
+- Support paid storage add-ons.
+- Compress images before upload.
 
-### Standard Image Rules
-- max width: 1600px
-- maintain aspect ratio
-- WebP preferred, JPEG fallback
-- quality target around 75–80
-- unnecessary metadata stripped when appropriate
+Storage add-ons:
 
-### Thumbnail Rules
-- smaller thumbnail version generated for list and portal views
-
-### Storage Rules
-- store file references in database
-- do not store files directly in app folders
-- use external storage architecture
-- support retention limits by plan
-- support paid storage add-ons
-- compress images on upload to reduce cost and bandwidth
-
-This keeps uploads fast, storage predictable, and scaling manageable.
+- +5GB.
+- +10GB.
+- +25GB.
+- +50GB.
 
 ---
 
-## 19. PRICING AND PLAN STRUCTURE
+## 13. Architecture
 
-ServTrax uses launch pricing to accelerate adoption, then transitions to standard pricing.
+ServTrax uses:
 
-### 19.1 Free — $0
-Best for basic tracking and proof of work.
+- Frontend: React and Vite.
+- Backend and database: Firebase.
+- Database: Firestore.
+- Auth: Firebase Auth.
+- File storage: Firebase Cloud Storage.
 
-Includes:
-- job tracking
-- verification with photos, notes, GPS, and timestamp
-- template messaging (copy/paste)
-- manual routes
-- full search and filtering
+Required architecture rules:
 
-Limitations:
-- no quotes
-- no customer portal
-- temporary links only
-- Stripe + 0.5% ServTrax fee
-- “via ServTrax” branding
+- Modules must not be tightly coupled.
+- Modules communicate through defined services or APIs.
+- Business logic must be separated from UI.
+- UI should not directly manipulate database records.
+- Services handle validation and logic.
+- New features should be feature-gated.
 
-### 19.2 Starter Lite — $4 launch / $5 standard
-Best for small operators who want to win work and manage equipment.
+Core module examples:
 
-Includes everything in Free, plus:
-- quotes
-- quote approval workflow
-- equipment tracking
-- maintenance logs
-
-Limitations:
-- Stripe + 0.5% ServTrax fee
-- no customer portal
-- no branding control
-- temporary links only
-
-### 19.3 Starter — $8 launch / $10 standard
-Best for businesses that want a more professional customer-facing experience.
-
-Includes everything in Starter Lite, plus:
-- customer portal
-- permanent job links
-- payment visibility
-- custom branding
-
-Payments:
-- Stripe only
-- no ServTrax transaction fee
-
-### 19.4 Pro — $12 launch / $20 standard
-Best for businesses that want smarter automation and operational efficiency.
-
-Includes everything in Starter, plus:
-- AI messaging
-- smart routes
-- AI search
-
-### 19.5 Biz — Future Plan
-For larger operations and more advanced control.
-
-Planned features:
-- bulk messaging
-- automation
-- API access
+- `auth`
+- `customers`
+- `service_plans`
+- `jobs`
+- `verification`
+- `messaging`
+- `payments`
+- `routes`
+- `equipment`
+- `quotes`
+- `search`
+- `storage`
+- `tasks`
+- `notes`
 
 ---
 
-## 20. STORAGE ADD-ONS
-
-Users must be able to purchase more storage separately.
-
-Planned add-ons:
-
-- +5GB
-- +10GB
-- +25GB
-- +50GB
-
-Storage and retention limits should exist from day one, even if exact caps are adjustable later.
-
----
-
-## 21. SYSTEM POSITIONING BY PLAN
-
-- Free → Track
-- Starter Lite → Win work
-- Starter → Show work
-- Pro → Optimize
-
-This keeps the plan ladder simple and easy to understand.
-
----
-
-## 22. ARCHITECTURE REQUIREMENTS
-
-ServTrax must be built as a modular, upgradeable system from day one.
-
-### Module Examples
-/modules
-- auth
-- customers
-- service_plans
-- jobs
-- verification
-- messaging
-- payments
-- routes
-- equipment
-- notes
-- tasks
-- search
-
-### Architecture Rules
-- modules must not be tightly coupled
-- modules communicate through defined services or APIs
-- new features must be addable without breaking old functionality
-- foundation first, enable later
-
----
-
-## 23. SERVICE LAYER REQUIREMENTS
-
-Business logic must be separated from UI and direct database access.
-
-Example services:
-- CustomerService
-- JobService
-- PaymentService
-- MessagingService
-- TaskService
-- RouteService
-- VerificationService
-
-Rules:
-- UI should not directly manipulate database records
-- services handle validation and logic
-- this supports scaling and clean upgrades
-
----
-
-## 24. DATABASE DESIGN RULES
-
-The database must be designed for expansion.
-
-Rules:
-- do not design tables only for current features
-- include future-safe nullable fields where useful
-- never remove columns once in production
-- avoid destructive schema changes
-- support version-safe updates only
-
-Examples of future-safe fields on jobs:
-- payment_status
-- visibility_mode
-- share_token
-- is_billable
-- internal_notes
-- customer_notes
-
----
-
-## 25. FEATURE FLAGS
+## 14. Feature Flags
 
 ServTrax must include a feature flag system.
 
 Purpose:
-- enable or disable features without rebuilding core logic
-- allow phased rollout
-- support plan-based access
+
+- Enable or disable features without rebuilding core logic.
+- Allow phased rollout.
+- Support plan-based access.
 
 Examples:
-- smart_messaging → Pro
-- smart_routes → Pro
-- bulk_messaging → Biz
-- api_access → Biz
 
-This allows the app to be built forward without exposing unfinished features.
-
----
-
-## 26. VERSION-SAFE UPDATES AND MIGRATIONS
-
-All updates must be backward compatible.
-
-Rules:
-- never break existing functionality
-- never remove existing fields in production
-- only add fields, tables, or feature-gated logic
-
-All schema changes must use versioned migrations.
-
-Example style:
-- v1_create_customers
-- v2_create_service_plans
-- v3_create_jobs
-- v4_create_verification
-- v5_add_payment_fields
-- v6_add_visibility
-- v7_add_share_links
+- `quotes` -> Starter Lite and above.
+- `portal` -> Starter and above.
+- `branding` -> Starter and above.
+- `ai` -> Pro.
+- `smart_messaging` -> Pro.
+- `smart_routes` -> Pro.
+- `bulk_messaging` -> Biz.
+- `api_access` -> Biz.
 
 ---
 
-## 27. UI STRUCTURE
+## 15. Database Rules
 
-The UI must be mobile-first and expandable.
+- Do not design only for current features.
+- Include future-safe nullable fields where useful.
+- Never remove production fields.
+- Avoid destructive schema changes.
+- Support version-safe updates only.
+- All schema changes should use versioned migrations.
 
-### Core Navigation
-- Dashboard
-- Jobs
-- Customers
-- Tasks
-- Equipment
+Example migration style:
 
-### Future Additions
-- Routes
-- Reports
-- Settings
-- AI Tools
-
-### UI Rules
-- minimal clicks for core actions
-- new sections must be addable without redesign
-- fast list views
-- photo-first workflow where needed
-- clean customer-facing pages
+- `v1_create_customers`
+- `v2_create_service_plans`
+- `v3_create_jobs`
+- `v4_create_verification`
+- `v5_add_payment_fields`
+- `v6_add_visibility`
+- `v7_add_share_links`
 
 ---
 
-## 28. DEVELOPMENT PHASES
+## 16. UI Structure
 
-### Phase 1 — MVP
-- customers
-- service plans
-- job tracking
-- verification
-- smart messaging
-- shareable proof pages
-- full search/filtering foundation
+Core navigation:
 
-### Phase 2
-- routes
-- payment tracking
-- quoting system
-- email support
-- customer timeline
-- customer portal foundation
+- Dashboard.
+- Jobs.
+- Customers.
+- Tasks.
+- Equipment.
 
-### Phase 3
-- equipment tracking
-- maintenance logs
-- stronger payment visibility
-- expanded route tools
+Future additions:
 
-### Phase 4
-- Stripe payment processing
-- payment links
-- more polished portal/payment flow
+- Routes.
+- Reports.
+- Settings.
+- AI tools.
 
-### Phase 5
-- smart lookup
-- AI search
-- smart notes
-- smart tasks
-- AI messaging improvements
-- automation groundwork
+UI rules:
 
-### Phase 6 / Future Expansion
-- Biz plan features
-- bulk messaging
-- automation
-- API access
-- advanced reporting
-- external integrations
-
-Routes are important enough that the data foundation should exist early, even if full route UI appears later.
+- Minimal clicks for core actions.
+- New sections must be addable without redesign.
+- Fast list views.
+- Photo-first workflows where needed.
+- Clean customer-facing pages.
 
 ---
 
-## 29. PLANNED TECH STACK
+## 17. Development Phases
 
-- Frontend: React
-- Backend & Database: Firebase (Firestore, Firebase Auth, Cloud Storage) & Google Cloud
+### Phase 1 - MVP
 
-This stack supports modern web development, mobile-first UI, and scalable structured data within a unified Google ecosystem.
+- Customers.
+- Service plans.
+- Job tracking.
+- Verification.
+- Smart messaging.
+- Shareable proof pages.
+- Search/filtering foundation.
+
+### Phase 2 - Routes And Expansion
+
+- Routes.
+- Payment tracking.
+- Quoting system.
+- Email support.
+- Customer timeline.
+- Customer portal foundation.
+
+### Phase 3 - Equipment
+
+- Equipment tracking.
+- Maintenance logs.
+- Stronger payment visibility.
+- Expanded route tools.
+
+### Phase 4 - Payments And Portal Polish
+
+- Stripe payment processing.
+- Payment links.
+- More polished portal/payment flow.
+- Custom branding.
+
+### Phase 5 - AI
+
+- Smart lookup.
+- AI search.
+- Smart notes.
+- Smart tasks.
+- AI messaging improvements.
+- Route optimization.
+- Automation groundwork.
+
+### Phase 6 - Future Expansion
+
+- Biz plan features.
+- Bulk messaging.
+- Automation.
+- API access.
+- Advanced reporting.
+- External integrations.
+- Multi-user support.
 
 ---
 
-## 30. NON-NEGOTIABLE SAFETY AND DATA RULES
+## 18. Non-Negotiable Rules
 
-- never overwrite historical records
-- never expose internal notes to customers
-- always validate data before saving
-- all customer-facing data must be intentionally controlled
-- support backward compatibility for data
-- use externalized storage architecture
-- optimize for mobile performance
-- use pagination for lists
-- lazy load heavy content such as photos and long history
+- Never overwrite historical records.
+- Never expose internal notes to customers.
+- Always validate data before saving.
+- All customer-facing data must be intentionally controlled.
+- Support backward compatibility for data.
+- Use externalized storage architecture.
+- Optimize for mobile performance.
+- Use pagination for lists.
+- Lazy load heavy content such as photos and long history.
 
 ---
 
-## 31. FINAL PRODUCT SUMMARY
-
-ServTrax is a mobile-first field-service operations platform built for small service businesses.
-
-It is designed around one core promise:
-
-**Track. Verify. Get Paid.**
+## 19. Final Product Summary
 
 ServTrax helps service businesses:
 
-- track recurring and one-time jobs
-- verify work with proof
-- generate customer-ready communication
-- share proof professionally
-- collect payment faster
-- grow into a more advanced operating system over time
+- Track recurring and one-time jobs.
+- Verify work with proof.
+- Generate customer-ready communication.
+- Share proof professionally.
+- Collect payment faster.
+- Grow into a more advanced operating system over time.
 
 It is intentionally designed to launch simple, expand safely, and scale without being rebuilt.

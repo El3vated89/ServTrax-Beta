@@ -1,5 +1,5 @@
 import { db, auth } from '../firebase';
-import { collection, addDoc, onSnapshot, query, where, serverTimestamp, updateDoc, doc, deleteDoc, getDocs } from 'firebase/firestore';
+import { collection, addDoc, onSnapshot, query, where, serverTimestamp, updateDoc, doc, deleteDoc, getDocs, getDoc } from 'firebase/firestore';
 
 export interface ServicePlan {
   id?: string;
@@ -15,6 +15,14 @@ export interface ServicePlan {
 }
 
 const COLLECTION_NAME = 'service_plans';
+
+const normalizeBillingFrequency = (frequency?: string) => {
+  if (frequency === 'one-time') return 'one_time';
+  if (frequency === 'bi-weekly') return 'bi_weekly';
+  return frequency || 'one_time';
+};
+
+const normalizeSeasonalRules = (rules?: any[]) => (rules || []).slice(0, 1);
 
 export const servicePlanService = {
   subscribeToServicePlans: (callback: (plans: ServicePlan[]) => void) => {
@@ -43,6 +51,8 @@ export const servicePlanService = {
 
     const newPlan = {
       ...plan,
+      billing_frequency: normalizeBillingFrequency(plan.billing_frequency),
+      seasonal_rules: normalizeSeasonalRules(plan.seasonal_rules),
       ownerId: user.uid,
       created_at: serverTimestamp()
     };
@@ -52,7 +62,18 @@ export const servicePlanService = {
 
   updateServicePlan: async (id: string, updates: Partial<ServicePlan>) => {
     const docRef = doc(db, COLLECTION_NAME, id);
-    return await updateDoc(docRef, updates);
+    const docSnap = await getDoc(docRef);
+    const currentPlan: Partial<ServicePlan> = docSnap.exists() ? docSnap.data() as ServicePlan : {};
+    const safeUpdates: Partial<ServicePlan> = {
+      ...updates,
+      billing_frequency: normalizeBillingFrequency(updates.billing_frequency || currentPlan.billing_frequency)
+    };
+
+    if ('seasonal_rules' in updates) {
+      safeUpdates.seasonal_rules = normalizeSeasonalRules(updates.seasonal_rules);
+    }
+
+    return await updateDoc(docRef, safeUpdates);
   },
 
   deleteServicePlan: async (id: string) => {

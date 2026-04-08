@@ -1,9 +1,17 @@
 import React, { useState, useEffect } from 'react';
-import { Settings as SettingsIcon, Plus, X, Save, AlertCircle, CheckCircle, Trash2, Briefcase, Upload, Snowflake } from 'lucide-react';
+import { Settings as SettingsIcon, Plus, X, Save, AlertCircle, CheckCircle, Trash2, Briefcase, Upload, Snowflake, MessageSquare, HardDrive } from 'lucide-react';
 import { servicePlanService, ServicePlan } from '../services/servicePlanService';
 import { settingsService, BusinessSettings, DEFAULT_SETTINGS } from '../services/settingsService';
 import { db, auth } from '../firebase';
 import { doc, getDoc, setDoc, updateDoc } from 'firebase/firestore';
+
+const createDefaultOffSeasonRule = () => ({
+  start_date: '',
+  end_date: '',
+  interval_days: 7,
+  label: 'Off-season',
+  off_season_frequency: 'monthly'
+});
 
 export default function Settings() {
   const [servicePlans, setServicePlans] = useState<ServicePlan[]>([]);
@@ -21,6 +29,7 @@ export default function Settings() {
   const [planRequiresPhotos, setPlanRequiresPhotos] = useState(true);
   const [planSeasonalEnabled, setPlanSeasonalEnabled] = useState(false);
   const [planSeasonalRules, setPlanSeasonalRules] = useState<any[]>([]);
+  const [confirmSeasonalRuleDelete, setConfirmSeasonalRuleDelete] = useState<{ planId?: string; draft?: boolean } | null>(null);
 
   // Business Profile Form
   const [businessName, setBusinessName] = useState('');
@@ -42,6 +51,7 @@ export default function Settings() {
   const [tempLinkDuration, setTempLinkDuration] = useState('14');
   const [allowNoExpiration, setAllowNoExpiration] = useState(false);
   const [isSavingSettings, setIsSavingSettings] = useState(false);
+  const [isSavingStorageSettings, setIsSavingStorageSettings] = useState(false);
   const [settings, setSettings] = useState<BusinessSettings>(DEFAULT_SETTINGS);
 
   useEffect(() => {
@@ -95,10 +105,6 @@ export default function Settings() {
           due_grace_days: Number(dueGraceDays),
           overdue_grace_days: Number(overdueGraceDays),
           critical_overdue_days: Number(criticalOverdueDays)
-        },
-        storage_settings: {
-          temporary_link_duration_days: Number(tempLinkDuration),
-          allow_no_expiration: allowNoExpiration
         }
       });
       setSuccessMessage('System settings saved successfully!');
@@ -108,6 +114,28 @@ export default function Settings() {
       setErrorMessage('Failed to save system settings.');
     } finally {
       setIsSavingSettings(false);
+    }
+  };
+
+  const handleSaveStorageSettings = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setIsSavingStorageSettings(true);
+    setErrorMessage(null);
+    setSuccessMessage(null);
+    try {
+      await settingsService.updateSettings({
+        storage_settings: {
+          temporary_link_duration_days: Number(tempLinkDuration),
+          allow_no_expiration: allowNoExpiration
+        }
+      });
+      setSuccessMessage('Storage settings saved successfully!');
+      setTimeout(() => setSuccessMessage(null), 3000);
+    } catch (error) {
+      console.error('Error saving storage settings:', error);
+      setErrorMessage('Failed to save storage settings.');
+    } finally {
+      setIsSavingStorageSettings(false);
     }
   };
 
@@ -124,7 +152,7 @@ export default function Settings() {
           billing_frequency: planFrequency,
           requires_photos: planRequiresPhotos,
           seasonal_enabled: planSeasonalEnabled,
-          seasonal_rules: planSeasonalRules
+          seasonal_rules: planSeasonalRules.slice(0, 1)
         });
         setSuccessMessage('Service plan updated successfully!');
       } else {
@@ -135,7 +163,7 @@ export default function Settings() {
           billing_frequency: planFrequency,
           requires_photos: planRequiresPhotos,
           seasonal_enabled: planSeasonalEnabled,
-          seasonal_rules: planSeasonalRules
+          seasonal_rules: planSeasonalRules.slice(0, 1)
         });
         setSuccessMessage('Service plan added successfully!');
       }
@@ -179,6 +207,25 @@ export default function Settings() {
       setConfirmDeleteId(null);
     } catch (error) {
       console.error('Error deleting plan:', error);
+    }
+  };
+
+  const confirmDeleteSeasonalRule = async () => {
+    if (!confirmSeasonalRuleDelete) return;
+
+    try {
+      if (confirmSeasonalRuleDelete.draft) {
+        setPlanSeasonalRules([]);
+      } else if (confirmSeasonalRuleDelete.planId) {
+        await servicePlanService.updateServicePlan(confirmSeasonalRuleDelete.planId, {
+          seasonal_enabled: false,
+          seasonal_rules: []
+        });
+      }
+      setConfirmSeasonalRuleDelete(null);
+    } catch (error) {
+      console.error('Error deleting seasonal rule:', error);
+      setErrorMessage('Failed to delete seasonal rule. Please check your permissions.');
     }
   };
 
@@ -384,7 +431,7 @@ export default function Settings() {
                   <div className="flex items-center justify-between pt-4 border-t border-gray-50">
                     <div className="flex gap-2">
                       <button 
-                        onClick={() => { setEditingPlanId(plan.id!); setPlanName(plan.name); setPlanDescription(plan.description); setPlanPrice(plan.price.toString()); setPlanFrequency(plan.billing_frequency as 'one_time' | 'weekly' | 'bi_weekly' | 'monthly'); setPlanRequiresPhotos(plan.requires_photos); setPlanSeasonalEnabled(plan.seasonal_enabled); setPlanSeasonalRules(plan.seasonal_rules || []); setIsAddingPlan(true); }}
+                        onClick={() => { setEditingPlanId(plan.id!); setPlanName(plan.name); setPlanDescription(plan.description); setPlanPrice(plan.price.toString()); setPlanFrequency(plan.billing_frequency as 'one_time' | 'weekly' | 'bi_weekly' | 'monthly'); setPlanRequiresPhotos(plan.requires_photos); setPlanSeasonalEnabled(plan.seasonal_enabled); setPlanSeasonalRules((plan.seasonal_rules || []).slice(0, 1)); setIsAddingPlan(true); }}
                         className="text-[10px] font-black text-gray-600 uppercase tracking-widest bg-gray-100 px-3 py-1 rounded-lg hover:bg-gray-200"
                       >
                         Edit
@@ -450,37 +497,6 @@ export default function Settings() {
               </div>
             </div>
 
-            <div className="pt-8 border-t border-gray-50 space-y-6">
-              <h4 className="text-sm font-black text-gray-900 uppercase tracking-widest">Storage Settings</h4>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
-                <div>
-                  <label className="block text-xs font-black text-gray-400 uppercase tracking-widest mb-2 ml-1">Temporary Link Duration</label>
-                  <select 
-                    value={tempLinkDuration} 
-                    onChange={e => setTempLinkDuration(e.target.value)} 
-                    className="w-full bg-gray-50 border-gray-100 rounded-2xl py-4 px-5 text-sm font-bold text-gray-900 focus:ring-2 focus:ring-purple-500 transition-all outline-none"
-                  >
-                    <option value="14">14 Days (Free Tier)</option>
-                    <option value="30">30 Days</option>
-                  </select>
-                </div>
-                <div className="flex items-center justify-between p-5 bg-gray-50 rounded-2xl border border-gray-100">
-                  <div>
-                    <label className="block text-xs font-black text-gray-900 uppercase tracking-widest mb-1">No Expiration</label>
-                    <p className="text-[10px] font-bold text-gray-400 uppercase">Only available for Starter/Pro</p>
-                  </div>
-                  <button
-                    type="button"
-                    disabled={true}
-                    className="w-12 h-6 rounded-full relative transition-all duration-300 bg-gray-200 cursor-not-allowed"
-                  >
-                    <div className="absolute top-1 w-4 h-4 rounded-full bg-white shadow-sm transition-all duration-300 left-1" />
-                  </button>
-                </div>
-              </div>
-            </div>
-
-
             <div className="pt-4">
               <button 
                 disabled={isSavingSettings} 
@@ -488,6 +504,83 @@ export default function Settings() {
                 className="bg-purple-600 text-white py-4 px-8 rounded-2xl text-xs font-black uppercase tracking-widest hover:bg-purple-700 shadow-xl shadow-purple-100 transition-all active:scale-95 disabled:opacity-50 flex items-center gap-2"
               >
                 {isSavingSettings ? 'Saving...' : 'Save System Preferences'}
+                <Save className="h-4 w-4" />
+              </button>
+            </div>
+          </form>
+        </section>
+
+        {/* Messaging Settings */}
+        <section className="bg-white p-8 rounded-3xl border border-gray-100 shadow-sm">
+          <div className="flex items-center gap-3 mb-8">
+            <div className="w-10 h-10 rounded-xl bg-blue-50 flex items-center justify-center">
+              <MessageSquare className="h-5 w-5 text-blue-600" />
+            </div>
+            <div>
+              <h3 className="text-xl font-black text-gray-900 tracking-tight">Messaging Settings</h3>
+              <p className="text-sm font-bold text-gray-400 uppercase tracking-widest">Templates and message behavior live here</p>
+            </div>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            <div className="p-5 bg-gray-50 rounded-2xl border border-gray-100">
+              <p className="text-xs font-black text-gray-900 uppercase tracking-widest mb-1">Templates</p>
+              <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Managed in Messaging</p>
+            </div>
+            <div className="p-5 bg-gray-50 rounded-2xl border border-gray-100">
+              <p className="text-xs font-black text-gray-900 uppercase tracking-widest mb-1">Payment Instructions</p>
+              <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Coming soon</p>
+            </div>
+            <div className="p-5 bg-gray-50 rounded-2xl border border-gray-100">
+              <p className="text-xs font-black text-gray-900 uppercase tracking-widest mb-1">AI / SMS</p>
+              <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Disabled placeholder</p>
+            </div>
+          </div>
+        </section>
+
+        {/* Storage Settings */}
+        <section className="bg-white p-8 rounded-3xl border border-gray-100 shadow-sm">
+          <div className="flex items-center gap-3 mb-8">
+            <div className="w-10 h-10 rounded-xl bg-purple-50 flex items-center justify-center">
+              <HardDrive className="h-5 w-5 text-purple-600" />
+            </div>
+            <h3 className="text-xl font-black text-gray-900 tracking-tight">Storage Settings</h3>
+          </div>
+
+          <form onSubmit={handleSaveStorageSettings} className="space-y-8">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
+              <div>
+                <label className="block text-xs font-black text-gray-400 uppercase tracking-widest mb-2 ml-1">Temporary Link Duration</label>
+                <select 
+                  value={tempLinkDuration} 
+                  onChange={e => setTempLinkDuration(e.target.value)} 
+                  className="w-full bg-gray-50 border-gray-100 rounded-2xl py-4 px-5 text-sm font-bold text-gray-900 focus:ring-2 focus:ring-purple-500 transition-all outline-none"
+                >
+                  <option value="14">14 Days (Free Tier)</option>
+                  <option value="30">30 Days</option>
+                </select>
+              </div>
+              <div className="flex items-center justify-between p-5 bg-gray-50 rounded-2xl border border-gray-100">
+                <div>
+                  <label className="block text-xs font-black text-gray-900 uppercase tracking-widest mb-1">No Expiration</label>
+                  <p className="text-[10px] font-bold text-gray-400 uppercase">Only available for Starter/Pro</p>
+                </div>
+                <button
+                  type="button"
+                  disabled={true}
+                  className="w-12 h-6 rounded-full relative transition-all duration-300 bg-gray-200 cursor-not-allowed"
+                >
+                  <div className="absolute top-1 w-4 h-4 rounded-full bg-white shadow-sm transition-all duration-300 left-1" />
+                </button>
+              </div>
+            </div>
+
+            <div className="pt-4">
+              <button 
+                disabled={isSavingStorageSettings} 
+                type="submit" 
+                className="bg-purple-600 text-white py-4 px-8 rounded-2xl text-xs font-black uppercase tracking-widest hover:bg-purple-700 shadow-xl shadow-purple-100 transition-all active:scale-95 disabled:opacity-50 flex items-center gap-2"
+              >
+                {isSavingStorageSettings ? 'Saving...' : 'Save Storage Settings'}
                 <Save className="h-4 w-4" />
               </button>
             </div>
@@ -557,7 +650,7 @@ export default function Settings() {
                   <div className="flex items-center justify-between">
                     <div className="flex flex-col">
                       <span className="text-sm font-black text-gray-900 uppercase tracking-tight">Seasonal Frequency</span>
-                      <span className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Enable seasonal rules for this service</span>
+                      <span className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Enable one off-season rule for this service</span>
                     </div>
                     <button
                       type="button"
@@ -571,74 +664,68 @@ export default function Settings() {
                   {planSeasonalEnabled && (
                     <div className="space-y-3">
                       <div className="flex justify-between items-center">
-                        <h5 className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Seasonal Rules</h5>
-                        <button
-                          type="button"
-                          onClick={() => setPlanSeasonalRules([...planSeasonalRules, { start_date: '', end_date: '', interval_days: 7, label: '' }])}
-                          className="text-[10px] font-black text-blue-600 uppercase tracking-widest hover:text-blue-700"
-                        >
-                          + Add Rule
-                        </button>
+                        <h5 className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Off-Season Rule</h5>
+                        {planSeasonalRules.length === 0 && (
+                          <button
+                            type="button"
+                            onClick={() => setPlanSeasonalRules([createDefaultOffSeasonRule()])}
+                            className="text-[10px] font-black text-blue-600 uppercase tracking-widest hover:text-blue-700"
+                          >
+                            + Add Off-Season Rule
+                          </button>
+                        )}
                       </div>
-                      {planSeasonalRules.map((rule, idx) => (
-                        <div key={idx} className="bg-white p-3 rounded-xl border border-gray-100 space-y-2">
+                      {planSeasonalRules[0] && (
+                        <div className="bg-white p-3 rounded-xl border border-gray-100 space-y-2">
                           <div className="flex justify-between items-center">
                             <input 
                               type="text" 
                               placeholder="Label (e.g. Winter)" 
-                              value={rule.label}
+                              value={planSeasonalRules[0].label}
                               onChange={e => {
-                                const newRules = [...planSeasonalRules];
-                                newRules[idx].label = e.target.value;
-                                setPlanSeasonalRules(newRules);
+                                setPlanSeasonalRules([{ ...planSeasonalRules[0], label: e.target.value }]);
                               }}
                               className="text-xs font-bold text-gray-900 bg-transparent border-none p-0 focus:ring-0 w-full"
                             />
                             <button 
                               type="button" 
-                              onClick={() => setPlanSeasonalRules(planSeasonalRules.filter((_, i) => i !== idx))}
+                              onClick={() => setConfirmSeasonalRuleDelete({ draft: true })}
                               className="text-gray-400 hover:text-red-500"
                             >
-                              <X className="h-3 w-3" />
+                              <Trash2 className="h-3 w-3" />
                             </button>
                           </div>
                           <div className="grid grid-cols-3 gap-2">
                             <input 
                               type="text" 
                               placeholder="Start (MM-DD)"
-                              value={rule.start_date}
+                              value={planSeasonalRules[0].start_date}
                               onChange={e => {
-                                const newRules = [...planSeasonalRules];
-                                newRules[idx].start_date = e.target.value;
-                                setPlanSeasonalRules(newRules);
+                                setPlanSeasonalRules([{ ...planSeasonalRules[0], start_date: e.target.value }]);
                               }}
                               className="w-full bg-gray-50 border-none rounded-lg py-1.5 px-2 text-[10px] font-bold"
                             />
                             <input 
                               type="text" 
                               placeholder="End (MM-DD)"
-                              value={rule.end_date}
+                              value={planSeasonalRules[0].end_date}
                               onChange={e => {
-                                const newRules = [...planSeasonalRules];
-                                newRules[idx].end_date = e.target.value;
-                                setPlanSeasonalRules(newRules);
+                                setPlanSeasonalRules([{ ...planSeasonalRules[0], end_date: e.target.value }]);
                               }}
                               className="w-full bg-gray-50 border-none rounded-lg py-1.5 px-2 text-[10px] font-bold"
                             />
                             <input 
                               type="number" 
                               placeholder="Interval"
-                              value={rule.interval_days}
+                              value={planSeasonalRules[0].interval_days}
                               onChange={e => {
-                                const newRules = [...planSeasonalRules];
-                                newRules[idx].interval_days = Number(e.target.value);
-                                setPlanSeasonalRules(newRules);
+                                setPlanSeasonalRules([{ ...planSeasonalRules[0], interval_days: Number(e.target.value) }]);
                               }}
                               className="w-full bg-gray-50 border-none rounded-lg py-1.5 px-2 text-[10px] font-bold"
                             />
                           </div>
                         </div>
-                      ))}
+                      )}
                     </div>
                   )}
                 </div>
@@ -674,11 +761,11 @@ export default function Settings() {
                   <div className="flex items-center justify-between p-5 bg-gray-50 rounded-2xl">
                     <div className="flex flex-col">
                       <span className="text-sm font-black text-gray-900 uppercase tracking-tight">Seasonal Frequency</span>
-                      <span className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Enable seasonal rules for this service</span>
+                      <span className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Enable one off-season rule for this service</span>
                     </div>
                     <button
                       type="button"
-                      onClick={() => servicePlanService.updateServicePlan(plan.id!, { seasonal_enabled: !plan.seasonal_enabled })}
+                      onClick={() => servicePlanService.updateServicePlan(plan.id!, { seasonal_enabled: !plan.seasonal_enabled, seasonal_rules: (plan.seasonal_rules || []).slice(0, 1) })}
                       className={`w-12 h-6 rounded-full relative transition-all duration-300 ${plan.seasonal_enabled ? 'bg-blue-600' : 'bg-gray-200'}`}
                     >
                       <div className={`absolute top-1 w-4 h-4 rounded-full bg-white shadow-sm transition-all duration-300 ${plan.seasonal_enabled ? 'left-7' : 'left-1'}`} />
@@ -688,74 +775,68 @@ export default function Settings() {
                   {plan.seasonal_enabled && (
                     <div className="space-y-3">
                       <div className="flex justify-between items-center">
-                        <h5 className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Seasonal Rules</h5>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            const currentRules = plan.seasonal_rules || [];
-                            servicePlanService.updateServicePlan(plan.id!, {
-                              seasonal_rules: [...currentRules, { start_date: '', end_date: '', interval_days: 7, label: '', off_season_frequency: 'monthly' }]
-                            });
-                          }}
-                          className="text-[10px] font-black text-blue-600 uppercase tracking-widest hover:text-blue-700"
-                        >
-                          + Add Rule
-                        </button>
+                        <h5 className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Off-Season Rule</h5>
+                        {(plan.seasonal_rules || []).length === 0 && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              servicePlanService.updateServicePlan(plan.id!, {
+                                seasonal_rules: [createDefaultOffSeasonRule()]
+                              });
+                            }}
+                            className="text-[10px] font-black text-blue-600 uppercase tracking-widest hover:text-blue-700"
+                          >
+                            + Add Off-Season Rule
+                          </button>
+                        )}
                       </div>
-                      {(plan.seasonal_rules || []).map((rule, idx) => (
-                        <div key={idx} className="bg-white p-3 rounded-xl border border-gray-100 space-y-2">
+                      {(plan.seasonal_rules || [])[0] && (
+                        <div className="bg-white p-3 rounded-xl border border-gray-100 space-y-2">
                           <div className="flex justify-between items-center">
                             <input 
                               type="text" 
                               placeholder="Label (e.g. Winter)" 
-                              value={rule.label}
+                              value={(plan.seasonal_rules || [])[0].label}
                               onChange={e => {
-                                const newRules = [...(plan.seasonal_rules || [])];
-                                newRules[idx].label = e.target.value;
-                                servicePlanService.updateServicePlan(plan.id!, { seasonal_rules: newRules });
+                                const rule = (plan.seasonal_rules || [])[0];
+                                servicePlanService.updateServicePlan(plan.id!, { seasonal_rules: [{ ...rule, label: e.target.value }] });
                               }}
                               className="text-xs font-bold text-gray-900 bg-transparent border-none p-0 focus:ring-0 w-full"
                             />
                             <button 
                               type="button" 
-                              onClick={() => {
-                                const newRules = (plan.seasonal_rules || []).filter((_, i) => i !== idx);
-                                servicePlanService.updateServicePlan(plan.id!, { seasonal_rules: newRules });
-                              }}
+                              onClick={() => setConfirmSeasonalRuleDelete({ planId: plan.id! })}
                               className="text-gray-400 hover:text-red-500"
                             >
-                              <X className="h-3 w-3" />
+                              <Trash2 className="h-3 w-3" />
                             </button>
                           </div>
                           <div className="grid grid-cols-3 gap-2">
                             <input 
                               type="text" 
                               placeholder="Start (MM-DD)"
-                              value={rule.start_date}
+                              value={(plan.seasonal_rules || [])[0].start_date}
                               onChange={e => {
-                                const newRules = [...(plan.seasonal_rules || [])];
-                                newRules[idx].start_date = e.target.value;
-                                servicePlanService.updateServicePlan(plan.id!, { seasonal_rules: newRules });
+                                const rule = (plan.seasonal_rules || [])[0];
+                                servicePlanService.updateServicePlan(plan.id!, { seasonal_rules: [{ ...rule, start_date: e.target.value }] });
                               }}
                               className="w-full bg-gray-50 border-none rounded-lg py-1.5 px-2 text-[10px] font-bold"
                             />
                             <input 
                               type="text" 
                               placeholder="End (MM-DD)"
-                              value={rule.end_date}
+                              value={(plan.seasonal_rules || [])[0].end_date}
                               onChange={e => {
-                                const newRules = [...(plan.seasonal_rules || [])];
-                                newRules[idx].end_date = e.target.value;
-                                servicePlanService.updateServicePlan(plan.id!, { seasonal_rules: newRules });
+                                const rule = (plan.seasonal_rules || [])[0];
+                                servicePlanService.updateServicePlan(plan.id!, { seasonal_rules: [{ ...rule, end_date: e.target.value }] });
                               }}
                               className="w-full bg-gray-50 border-none rounded-lg py-1.5 px-2 text-[10px] font-bold"
                             />
                             <select 
-                              value={rule.off_season_frequency || 'monthly'}
+                              value={(plan.seasonal_rules || [])[0].off_season_frequency || 'monthly'}
                               onChange={e => {
-                                const newRules = [...(plan.seasonal_rules || [])];
-                                newRules[idx].off_season_frequency = e.target.value;
-                                servicePlanService.updateServicePlan(plan.id!, { seasonal_rules: newRules });
+                                const rule = (plan.seasonal_rules || [])[0];
+                                servicePlanService.updateServicePlan(plan.id!, { seasonal_rules: [{ ...rule, off_season_frequency: e.target.value }] });
                               }}
                               className="w-full bg-gray-50 border-none rounded-lg py-1.5 px-2 text-[10px] font-bold"
                             >
@@ -765,7 +846,7 @@ export default function Settings() {
                             </select>
                           </div>
                         </div>
-                      ))}
+                      )}
                     </div>
                   )}
                 </div>
@@ -794,6 +875,33 @@ export default function Settings() {
               </button>
               <button 
                 onClick={confirmDelete}
+                className="flex-1 py-4 bg-red-600 text-white rounded-2xl text-sm font-black uppercase tracking-widest hover:bg-red-700 shadow-xl shadow-red-100 transition-all"
+              >
+                Delete
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {confirmSeasonalRuleDelete && (
+        <div className="fixed inset-0 bg-gray-900/40 backdrop-blur-sm z-[300] flex justify-center items-center p-4">
+          <div className="bg-white w-full max-w-sm rounded-[40px] p-8 text-center shadow-2xl animate-in fade-in zoom-in duration-200">
+            <div className="w-20 h-20 bg-red-50 text-red-600 rounded-3xl flex items-center justify-center mx-auto mb-6">
+              <Trash2 className="h-10 w-10" />
+            </div>
+            <h3 className="text-2xl font-black text-gray-900 mb-2 tracking-tight">Delete Off-Season Rule?</h3>
+            <p className="text-sm font-bold text-gray-500 mb-8 uppercase tracking-widest leading-relaxed">
+              This action cannot be undone. Are you sure you want to delete this off-season rule?
+            </p>
+            <div className="flex gap-3">
+              <button 
+                onClick={() => setConfirmSeasonalRuleDelete(null)}
+                className="flex-1 py-4 bg-gray-100 text-gray-900 rounded-2xl text-sm font-black uppercase tracking-widest hover:bg-gray-200 transition-all"
+              >
+                Cancel
+              </button>
+              <button 
+                onClick={confirmDeleteSeasonalRule}
                 className="flex-1 py-4 bg-red-600 text-white rounded-2xl text-sm font-black uppercase tracking-widest hover:bg-red-700 shadow-xl shadow-red-100 transition-all"
               >
                 Delete
