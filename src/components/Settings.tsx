@@ -50,9 +50,57 @@ const getPlanFrequencyLabel = (frequency?: string) => {
   }
 };
 
+type SettingsTabId = 'profile' | 'services' | 'system' | 'messaging' | 'storage';
+
+const settingsTabs = [
+  {
+    id: 'services' as SettingsTabId,
+    label: 'Services',
+    icon: Snowflake,
+    title: 'Service Offerings',
+    description: 'Pricing, frequency, and seasonal service rules',
+  },
+  {
+    id: 'system' as SettingsTabId,
+    label: 'System',
+    icon: SettingsIcon,
+    title: 'System Preferences',
+    description: 'Grace ranges and operational defaults',
+  },
+  {
+    id: 'messaging' as SettingsTabId,
+    label: 'Messaging',
+    icon: MessageSquare,
+    title: 'Messaging Settings',
+    description: 'Templates, payment instructions, and delivery setup',
+  },
+  {
+    id: 'storage' as SettingsTabId,
+    label: 'Storage',
+    icon: HardDrive,
+    title: 'Storage Settings',
+    description: 'Temporary links and storage behavior',
+  },
+  {
+    id: 'profile' as SettingsTabId,
+    label: 'Profile',
+    icon: Briefcase,
+    title: 'Business Profile',
+    description: 'Business identity, contact info, and base camp',
+  },
+];
+
 export default function Settings() {
   const [servicePlans, setServicePlans] = useState<ServicePlan[]>([]);
-  const [activeTab, setActiveTab] = useState<'profile' | 'services' | 'system' | 'messaging' | 'storage'>('profile');
+  const [activeTab, setActiveTab] = useState<SettingsTabId>(() => {
+    if (typeof window !== 'undefined') {
+      const storedTab = window.localStorage.getItem('servtrax_settings_active_tab') as SettingsTabId | null;
+      if (storedTab && settingsTabs.some((tab) => tab.id === storedTab)) {
+        return storedTab;
+      }
+    }
+    return 'services';
+  });
   const [isAddingPlan, setIsAddingPlan] = useState(false);
   const [editingPlanId, setEditingPlanId] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -135,6 +183,12 @@ export default function Settings() {
       unsubscribeAuth();
     };
   }, []);
+
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      window.localStorage.setItem('servtrax_settings_active_tab', activeTab);
+    }
+  }, [activeTab]);
 
   const handleSaveSettings = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -333,12 +387,14 @@ export default function Settings() {
     }
   };
 
+  const activeTabMeta = settingsTabs.find((tab) => tab.id === activeTab) || settingsTabs[0];
+
   return (
     <div className="space-y-8 pb-24">
       <header className="flex justify-between items-end px-2">
         <div>
           <h2 className="text-3xl font-black text-gray-900 tracking-tight">Settings</h2>
-          <p className="text-sm font-bold text-gray-400 uppercase tracking-widest">Manage your business profile and services</p>
+          <p className="text-sm font-bold text-gray-400 uppercase tracking-widest">Choose a settings section below</p>
         </div>
       </header>
 
@@ -363,31 +419,50 @@ export default function Settings() {
       )}
 
       <div className="space-y-6">
-        <div className="bg-white p-3 rounded-3xl border border-gray-100 shadow-sm">
-          <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
-            {[
-              { id: 'profile', label: 'Profile', icon: Briefcase },
-              { id: 'services', label: 'Services', icon: Snowflake },
-              { id: 'system', label: 'System', icon: SettingsIcon },
-              { id: 'messaging', label: 'Messaging', icon: MessageSquare },
-              { id: 'storage', label: 'Storage', icon: HardDrive },
-            ].map((tab) => {
-              const Icon = tab.icon;
-              const isActive = activeTab === tab.id;
-              return (
-                <button
-                  key={tab.id}
-                  type="button"
-                  onClick={() => setActiveTab(tab.id as typeof activeTab)}
-                  className={`flex items-center justify-center gap-2 px-4 py-4 rounded-2xl text-xs font-black uppercase tracking-widest transition-all ${
-                    isActive ? 'bg-blue-600 text-white shadow-lg shadow-blue-100' : 'bg-gray-50 text-gray-500 hover:bg-blue-50 hover:text-blue-600'
-                  }`}
-                >
-                  <Icon className="h-4 w-4" />
-                  {tab.label}
-                </button>
-              );
-            })}
+        <div className="sticky top-24 z-20 space-y-3">
+          <div className="bg-white p-4 rounded-3xl border border-gray-100 shadow-sm">
+            <div className="flex items-center justify-between gap-4 mb-4">
+              <div>
+                <p className="text-[10px] font-black text-blue-600 uppercase tracking-[0.2em]">Settings Sections</p>
+                <p className="text-sm font-bold text-gray-500 mt-2">Settings now live in clear sections instead of one long screen.</p>
+              </div>
+              <span className="px-3 py-1 rounded-full bg-blue-50 text-blue-700 text-[10px] font-black uppercase tracking-widest">
+                {settingsTabs.findIndex((tab) => tab.id === activeTab) + 1} of {settingsTabs.length}
+              </span>
+            </div>
+
+            <div className="flex gap-2 overflow-x-auto pb-1 sm:grid sm:grid-cols-5 sm:overflow-visible">
+              {settingsTabs.map((tab) => {
+                const Icon = tab.icon;
+                const isActive = activeTab === tab.id;
+                return (
+                  <button
+                    key={tab.id}
+                    type="button"
+                    onClick={() => setActiveTab(tab.id)}
+                    className={`min-w-[150px] sm:min-w-0 flex items-center justify-center gap-2 px-4 py-4 rounded-2xl text-xs font-black uppercase tracking-widest transition-all ${
+                      isActive ? 'bg-blue-600 text-white shadow-lg shadow-blue-100' : 'bg-gray-50 text-gray-500 hover:bg-blue-50 hover:text-blue-600'
+                    }`}
+                  >
+                    <Icon className="h-4 w-4" />
+                    {tab.label}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          <div className="bg-blue-50 border border-blue-100 rounded-3xl px-5 py-4">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-2xl bg-white border border-blue-100 flex items-center justify-center">
+                <activeTabMeta.icon className="h-5 w-5 text-blue-600" />
+              </div>
+              <div>
+                <p className="text-[10px] font-black text-blue-600 uppercase tracking-[0.2em]">Current Section</p>
+                <h3 className="text-lg font-black text-gray-900">{activeTabMeta.title}</h3>
+                <p className="text-xs font-bold text-gray-500">{activeTabMeta.description}</p>
+              </div>
+            </div>
           </div>
         </div>
 
