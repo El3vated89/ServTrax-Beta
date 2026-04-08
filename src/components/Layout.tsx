@@ -10,6 +10,7 @@ import { Route } from '../modules/routes/types';
 import { storageService } from '../services/StorageService';
 import { alertService } from '../services/alertService';
 import { userProfileService } from '../services/userProfileService';
+import { quoteService, Quote } from '../services/quoteService';
 
 export default function Layout() {
   const location = useLocation();
@@ -38,10 +39,11 @@ export default function Layout() {
   useEffect(() => {
     let latestJobs: Job[] = [];
     let latestRoutes: Route[] = [];
+    let latestQuotes: Quote[] = [];
     let latestStorage = { used_bytes: 0, limit_bytes: 0 };
 
     const recomputeAlerts = () => {
-      setAlertCount(alertService.buildOperationalAlerts(latestJobs, latestRoutes, latestStorage).length);
+      setAlertCount(alertService.buildOperationalAlerts(latestJobs, latestRoutes, latestQuotes, latestStorage).length);
     };
 
     const unsubscribeJobs = jobService.subscribeToJobs((jobs) => {
@@ -51,6 +53,11 @@ export default function Layout() {
 
     const unsubscribeRoutes = routeService.subscribeToRoutes((routes) => {
       latestRoutes = routes;
+      recomputeAlerts();
+    });
+
+    const unsubscribeQuotes = quoteService.subscribeToQuotes((quotes) => {
+      latestQuotes = quotes;
       recomputeAlerts();
     });
 
@@ -69,6 +76,7 @@ export default function Layout() {
     return () => {
       unsubscribeJobs();
       unsubscribeRoutes();
+      unsubscribeQuotes();
       unsubscribeProfile();
     };
   }, []);

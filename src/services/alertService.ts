@@ -1,6 +1,7 @@
 import { Timestamp } from 'firebase/firestore';
 import { Job } from './jobService';
 import { Route } from '../modules/routes/types';
+import { Quote } from './quoteService';
 
 export interface OperationalAlert {
   id: string;
@@ -31,7 +32,7 @@ const startOfDay = (value: Date) => {
 };
 
 export const alertService = {
-  buildOperationalAlerts: (jobs: Job[], routes: Route[], storageSummary?: StorageAlertSummary): OperationalAlert[] => {
+  buildOperationalAlerts: (jobs: Job[], routes: Route[], quotes: Quote[] = [], storageSummary?: StorageAlertSummary): OperationalAlert[] => {
     const today = startOfDay(new Date());
 
     const overdueJobs = jobs.filter((job) => {
@@ -49,6 +50,7 @@ export const alertService = {
 
     const draftRoutes = todayRoutes.filter((route) => route.status === 'draft');
     const inProgressRoutes = todayRoutes.filter((route) => route.status === 'in_progress');
+    const sentQuotes = quotes.filter((quote) => quote.status === 'sent');
 
     const alerts: OperationalAlert[] = [];
 
@@ -97,6 +99,18 @@ export const alertService = {
         link: '/map',
         linkState: { selectedRouteDate: new Date().toISOString() },
         count: inProgressRoutes.length,
+      });
+    }
+
+    if (sentQuotes.length > 0) {
+      alerts.push({
+        id: 'sent-quotes',
+        title: 'Quotes Awaiting Approval',
+        description: `${sentQuotes.length} quote${sentQuotes.length === 1 ? '' : 's'} are still waiting on a customer decision.`,
+        severity: 'info',
+        link: '/jobs',
+        linkState: { activeTab: 'quotes' },
+        count: sentQuotes.length,
       });
     }
 

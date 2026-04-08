@@ -6,15 +6,18 @@ import { routeService } from '../services/RouteService';
 import { Route } from '../modules/routes/types';
 import { storageService } from '../services/StorageService';
 import { alertService } from '../services/alertService';
+import { quoteService, Quote } from '../services/quoteService';
 
 export default function Alerts() {
   const [jobs, setJobs] = useState<Job[]>([]);
   const [routes, setRoutes] = useState<Route[]>([]);
+  const [quotes, setQuotes] = useState<Quote[]>([]);
   const [storageSummary, setStorageSummary] = useState({ used_bytes: 0, limit_bytes: 0 });
 
   useEffect(() => {
     const unsubscribeJobs = jobService.subscribeToJobs(setJobs);
     const unsubscribeRoutes = routeService.subscribeToRoutes(setRoutes);
+    const unsubscribeQuotes = quoteService.subscribeToQuotes(setQuotes);
 
     const loadStorageSummary = async () => {
       const summary = await storageService.getUsageSummary();
@@ -26,12 +29,13 @@ export default function Alerts() {
     return () => {
       unsubscribeJobs();
       unsubscribeRoutes();
+      unsubscribeQuotes();
     };
   }, []);
 
   const alerts = useMemo(
-    () => alertService.buildOperationalAlerts(jobs, routes, storageSummary),
-    [jobs, routes, storageSummary]
+    () => alertService.buildOperationalAlerts(jobs, routes, quotes, storageSummary),
+    [jobs, quotes, routes, storageSummary]
   );
 
   return (
