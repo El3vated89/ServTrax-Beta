@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Outlet, Link, useLocation } from 'react-router-dom';
-import { Home, Users, ClipboardList, Wrench, Menu, Bell, LogOut, Settings as SettingsIcon, X, Search, Map, Plus, Camera, MessageSquare, HardDrive } from 'lucide-react';
+import { Home, Users, ClipboardList, Wrench, Menu, Bell, LogOut, Settings as SettingsIcon, X, Search, Map, Plus, Camera, MessageSquare, HardDrive, Route as RouteIcon } from 'lucide-react';
 import { auth } from '../firebase';
 import { signOut } from 'firebase/auth';
 import PhotoCaptureFlow from './PhotoCaptureFlow';
@@ -19,6 +19,7 @@ export default function Layout() {
   ];
 
   const menuItems = [
+    { path: '/routes', icon: RouteIcon, label: 'Route Builder' },
     { path: '/equip', icon: Wrench, label: 'Equipment' },
     { path: '/messaging', icon: MessageSquare, label: 'Messaging' },
     { path: '/storage', icon: HardDrive, label: 'Storage' },

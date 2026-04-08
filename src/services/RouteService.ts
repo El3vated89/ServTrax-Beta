@@ -3,7 +3,14 @@ import { db, auth } from '../firebase';
 import { handleFirestoreError, OperationType } from './verificationService';
 import { Route, RouteStop } from '../modules/routes/types';
 
+const getActorNameSnapshot = () => auth.currentUser?.displayName || auth.currentUser?.email || auth.currentUser?.uid || 'Unknown User';
+
 export const routeService = {
+  getCurrentActorSnapshot: () => ({
+    userId: auth.currentUser?.uid || '',
+    name: getActorNameSnapshot()
+  }),
+
   getBusinessProfile: async () => {
     const user = auth.currentUser;
     if (!user) return null;
@@ -101,6 +108,7 @@ export const routeService = {
         ...routeData,
         ownerId: user.uid,
         created_by: user.uid,
+        created_by_name: getActorNameSnapshot(),
         created_at: serverTimestamp(),
         updated_at: serverTimestamp()
       });
@@ -122,9 +130,11 @@ export const routeService = {
   },
 
   addRouteStop: async (stopData: Omit<RouteStop, 'id' | 'created_at' | 'updated_at'>) => {
+    const user = auth.currentUser;
     try {
       return await addDoc(collection(db, 'route_stops'), {
         ...stopData,
+        ownerId: stopData.ownerId || user?.uid,
         created_at: serverTimestamp(),
         updated_at: serverTimestamp()
       });
@@ -152,6 +162,46 @@ export const routeService = {
     } catch (error) {
       handleFirestoreError(error, OperationType.DELETE, `route_stops/${id}`);
     }
+  },
+
+  deleteRoute: async (id: string) => {
+    const docRef = doc(db, 'routes', id);
+    try {
+      return await deleteDoc(docRef);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.DELETE, `routes/${id}`);
+    }
+  },
+
+  ensureRouteForDate: async (date: Date, baseCamp: { label: string; address: string; lat: number; lng: number }) => {
+    const existingRoute = await routeService.getRouteByDate(date);
+    if (existingRoute) return existingRoute;
+
+    const newRouteData = {
+      name: `Route for ${date.toLocaleDateString()}`,
+      route_date: Timestamp.fromDate(date),
+      status: 'draft' as const,
+      base_camp_label: baseCamp.label,
+      base_camp_address: baseCamp.address,
+      base_camp_lat: baseCamp.lat,
+      base_camp_lng: baseCamp.lng,
+      return_to_base: true,
+      optimization_mode: 'none' as const,
+      manual_override: false
+    };
+
+    const newRouteRef = await routeService.createRoute(newRouteData);
+    if (!newRouteRef) return null;
+
+    return {
+      id: newRouteRef.id,
+      ownerId: auth.currentUser?.uid || '',
+      created_by: auth.currentUser?.uid || '',
+      created_by_name: getActorNameSnapshot(),
+      created_at: Timestamp.now(),
+      updated_at: Timestamp.now(),
+      ...newRouteData
+    } as Route;
   },
 
   batchUpdateStopOrders: async (stops: { id: string, stop_order: number, manual_order: number }[]) => {

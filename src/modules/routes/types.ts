@@ -25,12 +25,24 @@ export interface Route {
   optimization_mode: OptimizationMode;
   manual_override: boolean;
   created_by: string;
+  created_by_name?: string;
+  assigned_team_id?: string;
+  assigned_team_name_snapshot?: string;
+  assigned_user_ids?: string[];
+  assigned_user_names_snapshot?: string[];
+  started_at?: Timestamp | string;
+  started_by_user_id?: string;
+  started_by_name?: string;
+  completed_at?: Timestamp | string;
+  completed_by_user_id?: string;
+  completed_by_name?: string;
   created_at: Timestamp;
   updated_at: Timestamp;
 }
 
 export interface RouteStop {
   id?: string;
+  ownerId?: string;
   route_id: string;
   customer_id?: string;
   job_id?: string;
@@ -51,6 +63,11 @@ export interface RouteStop {
   due_date: Timestamp | string;
   delayed_reason?: string;
   completed_at?: Timestamp;
+  completed_by_user_id?: string;
+  completed_by_name?: string;
+  assigned_user_id?: string;
+  assigned_user_name_snapshot?: string;
+  verification_id?: string;
   notes_internal?: string;
   created_at: Timestamp;
   updated_at: Timestamp;

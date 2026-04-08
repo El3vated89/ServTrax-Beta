@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { MapPin, Clock, CheckCircle, AlertCircle, GripVertical, MoreVertical, ChevronUp, ChevronDown, User, Briefcase, Share2 } from 'lucide-react';
+import { MapPin, Clock, CheckCircle, AlertCircle, GripVertical, MoreVertical, ChevronUp, ChevronDown, User, Briefcase, Share2, Trash2 } from 'lucide-react';
 import { Timestamp } from 'firebase/firestore';
 import { RouteStop, StopDueState } from '../types';
 import RouteStopMenuModal from './RouteStopMenuModal';
@@ -13,6 +13,7 @@ interface RouteStopCardProps {
   onStatusChange?: (stop: RouteStop, status: 'pending' | 'completed' | 'canceled') => void;
   onDelay?: (stop: RouteStop) => void;
   onReorder?: (index: number, direction: 'up' | 'down') => void;
+  onRemove?: (stop: RouteStop) => void;
   hideReorder?: boolean;
 }
 
@@ -32,9 +33,10 @@ const statusTextColors: Record<StopDueState, string> = {
   upcoming: 'text-blue-700 bg-blue-50',
 };
 
-export default function RouteStopCard({ stop, index, totalStops, onSelect, onDelay, onStatusChange, onReorder, hideReorder }: RouteStopCardProps) {
+export default function RouteStopCard({ stop, index, totalStops, onSelect, onDelay, onStatusChange, onReorder, onRemove, hideReorder }: RouteStopCardProps) {
   const [showMenu, setShowMenu] = useState(false);
   const navigate = useNavigate();
+  const showOperationalActions = Boolean(onStatusChange);
 
   return (
     <div 
@@ -114,6 +116,18 @@ export default function RouteStopCard({ stop, index, totalStops, onSelect, onDel
 
       {/* Actions */}
       <div className="flex items-center gap-1 sm:gap-2 flex-shrink-0 ml-auto relative z-10">
+        {onRemove && (
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onRemove(stop);
+            }}
+            className="p-2 sm:p-3 text-gray-400 hover:text-red-600 rounded-2xl hover:bg-red-50 transition-all"
+            title="Remove Stop"
+          >
+            <Trash2 className="h-5 w-5 sm:h-6 sm:w-6" />
+          </button>
+        )}
         {stop.due_state === 'completed' && (
           <button 
             onClick={(e) => { 
@@ -126,7 +140,7 @@ export default function RouteStopCard({ stop, index, totalStops, onSelect, onDel
             <Share2 className="h-5 w-5 sm:h-6 sm:w-6" />
           </button>
         )}
-        {stop.due_state !== 'completed' && (
+        {showOperationalActions && stop.due_state !== 'completed' && (
           <div className="flex items-center gap-1 sm:gap-2">
             <button 
               onClick={(e) => { e.stopPropagation(); onStatusChange?.(stop, 'completed'); }}
@@ -135,7 +149,7 @@ export default function RouteStopCard({ stop, index, totalStops, onSelect, onDel
             >
               <CheckCircle className="h-5 w-5 sm:h-6 sm:w-6" />
             </button>
-            {stop.due_state !== 'delayed' && (
+            {stop.due_state !== 'delayed' && onDelay && (
               <button 
                 onClick={(e) => { e.stopPropagation(); onDelay?.(stop); }}
                 className="p-2 sm:p-3 text-gray-400 hover:text-orange-500 rounded-2xl hover:bg-orange-50 transition-all"

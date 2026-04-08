@@ -16,6 +16,7 @@ import Customers from './components/Customers';
 import Jobs from './components/Jobs';
 import Equip from './components/Equip';
 import ActiveRoutePage from './modules/routes/ActiveRoutePage';
+import RoutesManagementPage from './modules/routes/RoutesManagementPage';
 import PublicJobProof from './components/PublicJobProof';
 import Messaging from './components/Messaging';
 import Storage from './components/Storage';
@@ -75,6 +76,7 @@ export default function App() {
               <Route index element={<Dashboard />} />
               <Route path="jobs" element={<Jobs />} />
               <Route path="customers" element={<Customers />} />
+              <Route path="routes" element={<RoutesManagementPage />} />
               <Route path="map" element={<ActiveRoutePage />} />
               <Route path="equip" element={<Equip />} />
               <Route path="messaging" element={<Messaging />} />

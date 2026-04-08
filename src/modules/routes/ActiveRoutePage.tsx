@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { useLocation } from 'react-router-dom';
 import { 
   Map as MapIcon, 
   List, 
@@ -45,6 +46,7 @@ import { verificationService } from '../../services/verificationService';
 import { renderProofMessage, templateService, MessageTemplate } from '../../services/templateService';
 
 export default function ActiveRoutePage() {
+  const location = useLocation();
   const [flags] = useState<FeatureFlags>(featureFlagService.getFlags());
   const [routes, setRoutes] = useState<Route[]>([]);
   const [activeRoute, setActiveRoute] = useState<Route | null>(null);
@@ -108,6 +110,7 @@ export default function ActiveRoutePage() {
   const [availableJobs, setAvailableJobs] = useState<Job[]>([]);
   const [availableCustomers, setAvailableCustomers] = useState<Customer[]>([]);
   const [selectedDate, setSelectedDate] = useState<Date>(new Date());
+  const [stopFilter, setStopFilter] = useState<'open' | 'completed' | 'overdue' | 'delayed' | 'all'>('open');
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   const getShareProofLink = (job: any) => `${getPublicOrigin()}/#/proof/${job.id}/${job.share_token}`;
@@ -160,6 +163,16 @@ export default function ActiveRoutePage() {
   }, [templates.length, currentTemplateIndex]);
 
   useEffect(() => {
+    const routeState = location.state as { selectedRouteDate?: string } | null;
+    if (!routeState?.selectedRouteDate) return;
+
+    const nextDate = new Date(routeState.selectedRouteDate);
+    if (!Number.isNaN(nextDate.getTime())) {
+      setSelectedDate(nextDate);
+    }
+  }, [location.state]);
+
+  useEffect(() => {
     const handleShareRouteStop = (e: Event) => {
       const customEvent = e as CustomEvent<RouteStop>;
       const stop = customEvent.detail;
@@ -183,34 +196,9 @@ export default function ActiveRoutePage() {
 
   useEffect(() => {
     const loadRouteForDate = async () => {
-      const route = await routeService.getRouteByDate(selectedDate);
+      const route = await routeService.ensureRouteForDate(selectedDate, baseCamp);
       if (route) {
         setActiveRoute(route);
-      } else {
-        // Create a new route for this date if it doesn't exist
-        const newRouteData = {
-          name: `Route for ${selectedDate.toLocaleDateString()}`,
-          route_date: Timestamp.fromDate(selectedDate),
-          status: 'draft' as const,
-          base_camp_label: baseCamp.label,
-          base_camp_address: baseCamp.address,
-          base_camp_lat: baseCamp.lat,
-          base_camp_lng: baseCamp.lng,
-          return_to_base: true,
-          optimization_mode: 'none' as const,
-          manual_override: false
-        };
-        const newRouteRef = await routeService.createRoute(newRouteData);
-        if (newRouteRef) {
-          setActiveRoute({
-            id: newRouteRef.id,
-            ownerId: 'temp', // Will be updated on next fetch
-            created_by: 'temp',
-            created_at: Timestamp.now(),
-            updated_at: Timestamp.now(),
-            ...newRouteData
-          });
-        }
       }
     };
     loadRouteForDate();
@@ -248,6 +236,21 @@ export default function ActiveRoutePage() {
       setStops([]);
     }
   }, [activeRoute?.id]);
+
+  useEffect(() => {
+    setStopFilter('open');
+  }, [activeRoute?.id, selectedDate]);
+
+  useEffect(() => {
+    const syncedRoute = routes.find((route) => {
+      const routeDate = route.route_date instanceof Timestamp ? route.route_date.toDate() : new Date(route.route_date);
+      return routeDate.toDateString() === selectedDate.toDateString();
+    });
+
+    if (syncedRoute) {
+      setActiveRoute(syncedRoute);
+    }
+  }, [routes, selectedDate]);
 
   const handleArrowReorder = async (index: number, direction: 'up' | 'down') => {
     const newStops = [...stops];
@@ -430,6 +433,8 @@ export default function ActiveRoutePage() {
     setErrorMessage(null);
 
     try {
+      const actor = routeService.getCurrentActorSnapshot();
+      const completedAt = Timestamp.now();
       let currentJobId = stop.job_id;
 
       // If no job linked, create one now so we can share proof
@@ -449,7 +454,7 @@ export default function ActiveRoutePage() {
           internal_notes: notes || '',
           customer_notes: '',
           scheduled_date: stop.scheduled_date,
-          completed_date: Timestamp.now()
+          completed_date: completedAt
         });
         if (jobRef) {
           currentJobId = jobRef.id;
@@ -460,19 +465,11 @@ export default function ActiveRoutePage() {
         }
       }
 
-      // Update stop
-      await routeService.updateRouteStop(stop.id, {
-        status: 'completed',
-        due_state: 'completed',
-        completed_at: Timestamp.now(),
-        notes_internal: notes
-      });
-
       // Update job if linked
       if (currentJobId && !currentJobId.startsWith('sample-')) {
         await jobService.updateJob(currentJobId, {
           status: 'completed',
-          completed_date: Timestamp.now()
+          completed_date: completedAt
         });
       }
 
@@ -490,9 +487,19 @@ export default function ActiveRoutePage() {
       // Update customer if linked
       if (stop.customer_id && !stop.customer_id.startsWith('sample-')) {
         await customerService.updateCustomer(stop.customer_id, {
-          last_service_date: Timestamp.now()
+          last_service_date: completedAt
         });
       }
+
+      await routeService.updateRouteStop(stop.id, {
+        status: 'completed',
+        due_state: 'completed',
+        completed_at: completedAt,
+        completed_by_user_id: actor.userId,
+        completed_by_name: actor.name,
+        notes_internal: notes,
+        verification_id: verificationId || undefined
+      });
 
       setStopToVerify(null);
       setVerificationPhotoUrls([]);
@@ -570,7 +577,21 @@ export default function ActiveRoutePage() {
     if (!activeRoute?.id) return;
     setErrorMessage(null);
     try {
-      await routeService.updateRoute(activeRoute.id, { status: 'in_progress' });
+      const actor = routeService.getCurrentActorSnapshot();
+      const startedAt = Timestamp.now();
+      await routeService.updateRoute(activeRoute.id, {
+        status: 'in_progress',
+        started_at: startedAt,
+        started_by_user_id: actor.userId,
+        started_by_name: actor.name
+      });
+      setActiveRoute(prev => prev ? ({
+        ...prev,
+        status: 'in_progress',
+        started_at: startedAt,
+        started_by_user_id: actor.userId,
+        started_by_name: actor.name
+      }) : null);
     } catch (error: any) {
       console.error('Error starting route:', error);
       setErrorMessage('Failed to start route.');
@@ -581,7 +602,21 @@ export default function ActiveRoutePage() {
     if (!activeRoute?.id) return;
     setErrorMessage(null);
     try {
-      await routeService.updateRoute(activeRoute.id, { status: 'completed' });
+      const actor = routeService.getCurrentActorSnapshot();
+      const completedAt = Timestamp.now();
+      await routeService.updateRoute(activeRoute.id, {
+        status: 'completed',
+        completed_at: completedAt,
+        completed_by_user_id: actor.userId,
+        completed_by_name: actor.name
+      });
+      setActiveRoute(prev => prev ? ({
+        ...prev,
+        status: 'completed',
+        completed_at: completedAt,
+        completed_by_user_id: actor.userId,
+        completed_by_name: actor.name
+      }) : null);
     } catch (error: any) {
       console.error('Error completing route:', error);
       setErrorMessage('Failed to complete route.');
@@ -626,12 +661,21 @@ export default function ActiveRoutePage() {
     setExpandedCities(prev => ({ ...prev, [city]: !prev[city] }));
   };
 
-  const filteredStops = stops.filter(stop => 
-    stop.due_state !== 'completed' &&
-    (stop.customer_name_snapshot.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    stop.address_snapshot.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    stop.city_snapshot.toLowerCase().includes(searchQuery.toLowerCase()))
-  );
+  const filteredStops = stops.filter((stop) => {
+    const matchesSearch =
+      stop.customer_name_snapshot.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      stop.address_snapshot.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      stop.city_snapshot.toLowerCase().includes(searchQuery.toLowerCase());
+
+    if (!matchesSearch) return false;
+
+    if (stopFilter === 'completed') return stop.due_state === 'completed';
+    if (stopFilter === 'overdue') return stop.due_state === 'overdue';
+    if (stopFilter === 'delayed') return stop.due_state === 'delayed';
+    if (stopFilter === 'all') return true;
+
+    return stop.due_state !== 'completed';
+  });
 
   const stopsByCity = routeOptimizationService.groupByCity(filteredStops);
 
@@ -709,22 +753,42 @@ export default function ActiveRoutePage() {
 
         {/* Summary Counters */}
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-          <div className="bg-white rounded-3xl p-5 border border-gray-100 shadow-sm">
-            <p className="text-2xl font-black text-gray-900">{stats.total - stats.completed}</p>
-            <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Stops Left</p>
-          </div>
-          <div className="bg-white rounded-3xl p-5 border border-gray-100 shadow-sm">
-            <p className="text-2xl font-black text-green-600">{stats.completed}</p>
-            <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Completed</p>
-          </div>
-          <div className="bg-white rounded-3xl p-5 border border-gray-100 shadow-sm">
-            <p className="text-2xl font-black text-red-600">{stats.overdue}</p>
-            <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Overdue</p>
-          </div>
-          <div className="bg-white rounded-3xl p-5 border border-gray-100 shadow-sm">
-            <p className="text-2xl font-black text-orange-600">{stats.delayed}</p>
-            <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Delayed</p>
-          </div>
+          <button
+            onClick={() => setStopFilter('open')}
+            className={`rounded-3xl p-5 border text-left transition-all ${
+              stopFilter === 'open' ? 'bg-blue-600 text-white border-blue-600 shadow-xl shadow-blue-100' : 'bg-white border-gray-100 shadow-sm hover:border-blue-200'
+            }`}
+          >
+            <p className={`text-2xl font-black ${stopFilter === 'open' ? 'text-white' : 'text-gray-900'}`}>{stats.total - stats.completed}</p>
+            <p className={`text-[10px] font-bold uppercase tracking-widest ${stopFilter === 'open' ? 'text-blue-100' : 'text-gray-400'}`}>Stops Left</p>
+          </button>
+          <button
+            onClick={() => setStopFilter('completed')}
+            className={`rounded-3xl p-5 border text-left transition-all ${
+              stopFilter === 'completed' ? 'bg-green-600 text-white border-green-600 shadow-xl shadow-green-100' : 'bg-white border-gray-100 shadow-sm hover:border-green-200'
+            }`}
+          >
+            <p className={`text-2xl font-black ${stopFilter === 'completed' ? 'text-white' : 'text-green-600'}`}>{stats.completed}</p>
+            <p className={`text-[10px] font-bold uppercase tracking-widest ${stopFilter === 'completed' ? 'text-green-100' : 'text-gray-400'}`}>Completed</p>
+          </button>
+          <button
+            onClick={() => setStopFilter('overdue')}
+            className={`rounded-3xl p-5 border text-left transition-all ${
+              stopFilter === 'overdue' ? 'bg-red-600 text-white border-red-600 shadow-xl shadow-red-100' : 'bg-white border-gray-100 shadow-sm hover:border-red-200'
+            }`}
+          >
+            <p className={`text-2xl font-black ${stopFilter === 'overdue' ? 'text-white' : 'text-red-600'}`}>{stats.overdue}</p>
+            <p className={`text-[10px] font-bold uppercase tracking-widest ${stopFilter === 'overdue' ? 'text-red-100' : 'text-gray-400'}`}>Overdue</p>
+          </button>
+          <button
+            onClick={() => setStopFilter('delayed')}
+            className={`rounded-3xl p-5 border text-left transition-all ${
+              stopFilter === 'delayed' ? 'bg-orange-600 text-white border-orange-600 shadow-xl shadow-orange-100' : 'bg-white border-gray-100 shadow-sm hover:border-orange-200'
+            }`}
+          >
+            <p className={`text-2xl font-black ${stopFilter === 'delayed' ? 'text-white' : 'text-orange-600'}`}>{stats.delayed}</p>
+            <p className={`text-[10px] font-bold uppercase tracking-widest ${stopFilter === 'delayed' ? 'text-orange-100' : 'text-gray-400'}`}>Delayed</p>
+          </button>
         </div>
       </header>
 
