@@ -5,18 +5,53 @@ import { settingsService, BusinessSettings, DEFAULT_SETTINGS } from '../services
 import { db, auth } from '../firebase';
 import { doc, getDoc, setDoc, updateDoc } from 'firebase/firestore';
 
-const createDefaultOffSeasonRule = () => ({
+const getDefaultOffSeasonIntervalDays = (frequency?: string) => {
+  if (frequency === 'weekly') return 7;
+  if (frequency === 'bi_weekly' || frequency === 'bi-weekly') return 14;
+  if (frequency === 'monthly' || frequency === 'one_time' || frequency === 'one-time') return 30;
+  return 7;
+};
+
+const getDefaultOffSeasonFrequency = (frequency?: string) => {
+  if (frequency === 'weekly') return 'weekly';
+  if (frequency === 'bi_weekly' || frequency === 'bi-weekly') return 'bi_weekly';
+  return 'monthly';
+};
+
+const createDefaultOffSeasonRule = (frequency?: string) => ({
   start_date: '',
   end_date: '',
-  interval_days: 7,
+  interval_days: getDefaultOffSeasonIntervalDays(frequency),
   label: 'Off-season',
-  off_season_frequency: 'monthly'
+  off_season_frequency: getDefaultOffSeasonFrequency(frequency)
 });
+
+type PlanFrequency = 'one_time' | 'weekly' | 'bi_weekly' | 'monthly';
+
+const normalizePlanFrequencyForUi = (frequency?: string): PlanFrequency => {
+  if (frequency === 'one-time') return 'one_time';
+  if (frequency === 'bi-weekly') return 'bi_weekly';
+  if (frequency === 'weekly' || frequency === 'bi_weekly' || frequency === 'monthly') return frequency;
+  return 'one_time';
+};
+
+const getPlanFrequencyLabel = (frequency?: string) => {
+  switch (normalizePlanFrequencyForUi(frequency)) {
+    case 'weekly':
+      return 'Weekly';
+    case 'bi_weekly':
+      return 'Bi-weekly';
+    case 'monthly':
+      return 'Monthly';
+    case 'one_time':
+    default:
+      return 'One-time';
+  }
+};
 
 export default function Settings() {
   const [servicePlans, setServicePlans] = useState<ServicePlan[]>([]);
   const [isAddingPlan, setIsAddingPlan] = useState(false);
-  const [editingSeasonalPlanId, setEditingSeasonalPlanId] = useState<string | null>(null);
   const [editingPlanId, setEditingPlanId] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
@@ -25,7 +60,7 @@ export default function Settings() {
   const [planName, setPlanName] = useState('');
   const [planDescription, setPlanDescription] = useState('');
   const [planPrice, setPlanPrice] = useState('');
-  const [planFrequency, setPlanFrequency] = useState<'one_time' | 'weekly' | 'bi_weekly' | 'monthly'>('one_time');
+  const [planFrequency, setPlanFrequency] = useState<PlanFrequency>('one_time');
   const [planRequiresPhotos, setPlanRequiresPhotos] = useState(true);
   const [planSeasonalEnabled, setPlanSeasonalEnabled] = useState(false);
   const [planSeasonalRules, setPlanSeasonalRules] = useState<any[]>([]);
@@ -229,6 +264,28 @@ export default function Settings() {
     }
   };
 
+  const enableSeasonalRulesForAllServices = async () => {
+    const plansToUpdate = servicePlans.filter(plan => plan.id && !plan.seasonal_enabled);
+    if (plansToUpdate.length === 0) return;
+
+    setErrorMessage(null);
+    setSuccessMessage(null);
+
+    try {
+      await Promise.all(plansToUpdate.map(plan => servicePlanService.updateServicePlan(plan.id!, {
+        seasonal_enabled: true,
+        seasonal_rules: (plan.seasonal_rules || [])[0]
+          ? (plan.seasonal_rules || []).slice(0, 1)
+          : [createDefaultOffSeasonRule(plan.billing_frequency)]
+      })));
+      setSuccessMessage('Seasonal rules turned on for all services!');
+      setTimeout(() => setSuccessMessage(null), 3000);
+    } catch (error) {
+      console.error('Error enabling seasonal rules:', error);
+      setErrorMessage('Failed to turn on seasonal rules for all services.');
+    }
+  };
+
   const handleSaveProfile = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!auth.currentUser) return;
@@ -399,13 +456,23 @@ export default function Settings() {
               <h3 className="text-xl font-black text-gray-900 tracking-tight">Services</h3>
               <p className="text-sm font-bold text-gray-400 uppercase tracking-widest mt-1">Customize your services, pricing, and seasonal rules</p>
             </div>
-            <button 
-              onClick={() => { setIsAddingPlan(true); setEditingPlanId(null); setPlanName(''); setPlanDescription(''); setPlanPrice(''); setPlanFrequency('one_time'); setPlanRequiresPhotos(true); setPlanSeasonalEnabled(false); setPlanSeasonalRules([]); setErrorMessage(null); setSuccessMessage(null); }} 
-              className="bg-blue-600 text-white py-3 px-6 rounded-2xl text-xs font-black uppercase tracking-widest hover:bg-blue-700 shadow-lg shadow-blue-100 transition-all active:scale-95 flex items-center gap-2"
-            >
-              <Plus className="h-4 w-4" />
-              Add Service
-            </button>
+            <div className="flex flex-wrap gap-2">
+              <button
+                onClick={enableSeasonalRulesForAllServices}
+                disabled={servicePlans.length === 0 || servicePlans.every(plan => plan.seasonal_enabled)}
+                className="bg-blue-50 text-blue-700 py-3 px-5 rounded-2xl text-xs font-black uppercase tracking-widest hover:bg-blue-100 transition-all active:scale-95 flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                <Snowflake className="h-4 w-4" />
+                Turn Seasonal On For All
+              </button>
+              <button
+                onClick={() => { setIsAddingPlan(true); setEditingPlanId(null); setPlanName(''); setPlanDescription(''); setPlanPrice(''); setPlanFrequency('one_time'); setPlanRequiresPhotos(true); setPlanSeasonalEnabled(false); setPlanSeasonalRules([]); setErrorMessage(null); setSuccessMessage(null); }}
+                className="bg-blue-600 text-white py-3 px-6 rounded-2xl text-xs font-black uppercase tracking-widest hover:bg-blue-700 shadow-lg shadow-blue-100 transition-all active:scale-95 flex items-center gap-2"
+              >
+                <Plus className="h-4 w-4" />
+                Add Service
+              </button>
+            </div>
           </div>
           
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-8">
@@ -421,7 +488,10 @@ export default function Settings() {
                       <div className="flex items-center gap-3 mb-2">
                         <h4 className="text-lg font-black text-gray-900 leading-tight">{plan.name}</h4>
                         <span className="text-[10px] font-black px-2 py-0.5 bg-blue-100 text-blue-700 rounded-full uppercase tracking-widest">
-                          Every {plan.billing_frequency === 'weekly' ? '7' : plan.billing_frequency === 'bi_weekly' ? '14' : '30'} Days
+                          {getPlanFrequencyLabel(plan.billing_frequency)}
+                        </span>
+                        <span className={`text-[10px] font-black px-2 py-0.5 rounded-full uppercase tracking-widest ${plan.seasonal_enabled ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'}`}>
+                          Seasonal {plan.seasonal_enabled ? 'On' : 'Off'}
                         </span>
                       </div>
                       <p className="text-sm font-bold text-gray-400 line-clamp-2">{plan.description}</p>
@@ -431,7 +501,7 @@ export default function Settings() {
                   <div className="flex items-center justify-between pt-4 border-t border-gray-50">
                     <div className="flex gap-2">
                       <button 
-                        onClick={() => { setEditingPlanId(plan.id!); setPlanName(plan.name); setPlanDescription(plan.description); setPlanPrice(plan.price.toString()); setPlanFrequency(plan.billing_frequency as 'one_time' | 'weekly' | 'bi_weekly' | 'monthly'); setPlanRequiresPhotos(plan.requires_photos); setPlanSeasonalEnabled(plan.seasonal_enabled); setPlanSeasonalRules((plan.seasonal_rules || []).slice(0, 1)); setIsAddingPlan(true); }}
+                        onClick={() => { setEditingPlanId(plan.id!); setPlanName(plan.name); setPlanDescription(plan.description); setPlanPrice(plan.price.toString()); setPlanFrequency(normalizePlanFrequencyForUi(plan.billing_frequency)); setPlanRequiresPhotos(plan.requires_photos); setPlanSeasonalEnabled(plan.seasonal_enabled); setPlanSeasonalRules((plan.seasonal_rules || []).slice(0, 1)); setIsAddingPlan(true); }}
                         className="text-[10px] font-black text-gray-600 uppercase tracking-widest bg-gray-100 px-3 py-1 rounded-lg hover:bg-gray-200"
                       >
                         Edit
@@ -443,12 +513,6 @@ export default function Settings() {
                         Delete
                       </button>
                     </div>
-                    <button 
-                      onClick={() => setEditingSeasonalPlanId(plan.id!)}
-                      className="text-[10px] font-black text-blue-600 uppercase tracking-widest bg-blue-50 px-3 py-1 rounded-lg hover:bg-blue-100"
-                    >
-                      Edit Seasonal Rules
-                    </button>
                   </div>
                 </div>
               ))
@@ -624,7 +688,7 @@ export default function Settings() {
                   <input type="number" required min="0" step="0.01" value={planPrice} onChange={e => setPlanPrice(e.target.value)} className="w-full bg-gray-50 border-gray-100 rounded-2xl py-4 px-5 text-sm font-bold text-gray-900 focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all outline-none" />
                 </div>
                 <div>
-                  <label className="block text-xs font-black text-gray-400 uppercase tracking-widest mb-2 ml-1">Billing Frequency</label>
+                  <label className="block text-xs font-black text-gray-400 uppercase tracking-widest mb-2 ml-1">Frequency</label>
                   <select required value={planFrequency} onChange={e => setPlanFrequency(e.target.value as any)} className="w-full bg-gray-50 border-gray-100 rounded-2xl py-4 px-5 text-sm font-bold text-gray-900 focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all outline-none appearance-none">
                     <option value="one_time">One-time</option>
                     <option value="weekly">Weekly</option>
@@ -668,7 +732,7 @@ export default function Settings() {
                         {planSeasonalRules.length === 0 && (
                           <button
                             type="button"
-                            onClick={() => setPlanSeasonalRules([createDefaultOffSeasonRule()])}
+                            onClick={() => setPlanSeasonalRules([createDefaultOffSeasonRule(planFrequency)])}
                             className="text-[10px] font-black text-blue-600 uppercase tracking-widest hover:text-blue-700"
                           >
                             + Add Off-Season Rule
@@ -714,15 +778,21 @@ export default function Settings() {
                               }}
                               className="w-full bg-gray-50 border-none rounded-lg py-1.5 px-2 text-[10px] font-bold"
                             />
-                            <input 
-                              type="number" 
-                              placeholder="Interval"
-                              value={planSeasonalRules[0].interval_days}
+                            <select
+                              value={planSeasonalRules[0].off_season_frequency || getDefaultOffSeasonFrequency(planFrequency)}
                               onChange={e => {
-                                setPlanSeasonalRules([{ ...planSeasonalRules[0], interval_days: Number(e.target.value) }]);
+                                setPlanSeasonalRules([{
+                                  ...planSeasonalRules[0],
+                                  off_season_frequency: e.target.value,
+                                  interval_days: getDefaultOffSeasonIntervalDays(e.target.value)
+                                }]);
                               }}
                               className="w-full bg-gray-50 border-none rounded-lg py-1.5 px-2 text-[10px] font-bold"
-                            />
+                            >
+                              <option value="weekly">Weekly</option>
+                              <option value="bi_weekly">Bi-weekly</option>
+                              <option value="monthly">Monthly</option>
+                            </select>
                           </div>
                         </div>
                       )}
@@ -740,121 +810,6 @@ export default function Settings() {
         </div>
       )}
 
-      {/* Seasonal Rules Modal */}
-      {editingSeasonalPlanId && servicePlans.find(p => p.id === editingSeasonalPlanId) && (
-        <div className="fixed inset-0 bg-gray-900/40 backdrop-blur-sm z-[70] flex justify-center items-center p-2 sm:p-4">
-          <div className="bg-white w-full h-[95vh] sm:h-auto sm:max-w-lg rounded-3xl p-8 overflow-y-auto shadow-2xl relative">
-            <div className="flex justify-between items-center mb-8">
-              <div>
-                <h3 className="text-2xl font-black text-gray-900 tracking-tight">Seasonal Rules</h3>
-                <p className="text-sm font-bold text-gray-400 uppercase tracking-widest">{servicePlans.find(p => p.id === editingSeasonalPlanId)?.name}</p>
-              </div>
-              <button onClick={() => setEditingSeasonalPlanId(null)} className="p-2 text-gray-400 hover:bg-gray-100 rounded-xl transition-colors">
-                <X className="h-6 w-6" />
-              </button>
-            </div>
-
-            {(() => {
-              const plan = servicePlans.find(p => p.id === editingSeasonalPlanId)!;
-              return (
-                <div className="space-y-4">
-                  <div className="flex items-center justify-between p-5 bg-gray-50 rounded-2xl">
-                    <div className="flex flex-col">
-                      <span className="text-sm font-black text-gray-900 uppercase tracking-tight">Seasonal Frequency</span>
-                      <span className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Enable one off-season rule for this service</span>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => servicePlanService.updateServicePlan(plan.id!, { seasonal_enabled: !plan.seasonal_enabled, seasonal_rules: (plan.seasonal_rules || []).slice(0, 1) })}
-                      className={`w-12 h-6 rounded-full relative transition-all duration-300 ${plan.seasonal_enabled ? 'bg-blue-600' : 'bg-gray-200'}`}
-                    >
-                      <div className={`absolute top-1 w-4 h-4 rounded-full bg-white shadow-sm transition-all duration-300 ${plan.seasonal_enabled ? 'left-7' : 'left-1'}`} />
-                    </button>
-                  </div>
-                  
-                  {plan.seasonal_enabled && (
-                    <div className="space-y-3">
-                      <div className="flex justify-between items-center">
-                        <h5 className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Off-Season Rule</h5>
-                        {(plan.seasonal_rules || []).length === 0 && (
-                          <button
-                            type="button"
-                            onClick={() => {
-                              servicePlanService.updateServicePlan(plan.id!, {
-                                seasonal_rules: [createDefaultOffSeasonRule()]
-                              });
-                            }}
-                            className="text-[10px] font-black text-blue-600 uppercase tracking-widest hover:text-blue-700"
-                          >
-                            + Add Off-Season Rule
-                          </button>
-                        )}
-                      </div>
-                      {(plan.seasonal_rules || [])[0] && (
-                        <div className="bg-white p-3 rounded-xl border border-gray-100 space-y-2">
-                          <div className="flex justify-between items-center">
-                            <input 
-                              type="text" 
-                              placeholder="Label (e.g. Winter)" 
-                              value={(plan.seasonal_rules || [])[0].label}
-                              onChange={e => {
-                                const rule = (plan.seasonal_rules || [])[0];
-                                servicePlanService.updateServicePlan(plan.id!, { seasonal_rules: [{ ...rule, label: e.target.value }] });
-                              }}
-                              className="text-xs font-bold text-gray-900 bg-transparent border-none p-0 focus:ring-0 w-full"
-                            />
-                            <button 
-                              type="button" 
-                              onClick={() => setConfirmSeasonalRuleDelete({ planId: plan.id! })}
-                              className="text-gray-400 hover:text-red-500"
-                            >
-                              <Trash2 className="h-3 w-3" />
-                            </button>
-                          </div>
-                          <div className="grid grid-cols-3 gap-2">
-                            <input 
-                              type="text" 
-                              placeholder="Start (MM-DD)"
-                              value={(plan.seasonal_rules || [])[0].start_date}
-                              onChange={e => {
-                                const rule = (plan.seasonal_rules || [])[0];
-                                servicePlanService.updateServicePlan(plan.id!, { seasonal_rules: [{ ...rule, start_date: e.target.value }] });
-                              }}
-                              className="w-full bg-gray-50 border-none rounded-lg py-1.5 px-2 text-[10px] font-bold"
-                            />
-                            <input 
-                              type="text" 
-                              placeholder="End (MM-DD)"
-                              value={(plan.seasonal_rules || [])[0].end_date}
-                              onChange={e => {
-                                const rule = (plan.seasonal_rules || [])[0];
-                                servicePlanService.updateServicePlan(plan.id!, { seasonal_rules: [{ ...rule, end_date: e.target.value }] });
-                              }}
-                              className="w-full bg-gray-50 border-none rounded-lg py-1.5 px-2 text-[10px] font-bold"
-                            />
-                            <select 
-                              value={(plan.seasonal_rules || [])[0].off_season_frequency || 'monthly'}
-                              onChange={e => {
-                                const rule = (plan.seasonal_rules || [])[0];
-                                servicePlanService.updateServicePlan(plan.id!, { seasonal_rules: [{ ...rule, off_season_frequency: e.target.value }] });
-                              }}
-                              className="w-full bg-gray-50 border-none rounded-lg py-1.5 px-2 text-[10px] font-bold"
-                            >
-                              <option value="weekly">Weekly</option>
-                              <option value="bi-weekly">Bi-Weekly</option>
-                              <option value="monthly">Monthly</option>
-                            </select>
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  )}
-                </div>
-              );
-            })()}
-          </div>
-        </div>
-      )}
       {/* Delete Confirmation Modal */}
       {confirmDeleteId && (
         <div className="fixed inset-0 bg-gray-900/40 backdrop-blur-sm z-[300] flex justify-center items-center p-4">

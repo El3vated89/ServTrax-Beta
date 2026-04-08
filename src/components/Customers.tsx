@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { Search, Plus, MapPin, Phone, X, Map, History, Briefcase, Calendar, CheckCircle, Clock, Trash2, Snowflake } from 'lucide-react';
+import { Search, Plus, MapPin, Phone, X, Map, History, Briefcase, Calendar, CheckCircle, Clock, Trash2 } from 'lucide-react';
 import { customerService, Customer } from '../services/customerService';
 import { jobService, Job } from '../services/jobService';
 import { Timestamp } from 'firebase/firestore';
@@ -22,8 +22,6 @@ export default function Customers() {
   const [state, setState] = useState('');
   const [zip, setZip] = useState('');
   const [notes, setNotes] = useState('');
-  const [offSeasonEnabled, setOffSeasonEnabled] = useState(false);
-  const [offSeasonRules, setOffSeasonRules] = useState<any[]>([]);
   const [customerJobs, setCustomerJobs] = useState<Job[]>([]);
   const [allJobs, setAllJobs] = useState<Job[]>([]);
 
@@ -37,8 +35,6 @@ export default function Customers() {
     setState(customer.state || '');
     setZip(customer.zip || '');
     setNotes(customer.notes || '');
-    setOffSeasonEnabled(customer.off_season_enabled || false);
-    setOffSeasonRules(customer.off_season_rules || []);
   };
 
   useEffect(() => {
@@ -93,8 +89,6 @@ export default function Customers() {
           state,
           zip,
           notes,
-          off_season_enabled: offSeasonEnabled,
-          off_season_rules: offSeasonRules,
         });
         setEditingCustomer(null);
       } else {
@@ -108,8 +102,6 @@ export default function Customers() {
           zip,
           notes,
           status: 'active',
-          off_season_enabled: offSeasonEnabled,
-          off_season_rules: offSeasonRules,
         });
         setIsAdding(false);
       }
@@ -121,8 +113,6 @@ export default function Customers() {
       setState('');
       setZip('');
       setNotes('');
-      setOffSeasonEnabled(false);
-      setOffSeasonRules([]);
     } catch (error) {
       console.error('Error saving customer:', error);
     }
@@ -139,8 +129,6 @@ export default function Customers() {
     setState('');
     setZip('');
     setNotes('');
-    setOffSeasonEnabled(false);
-    setOffSeasonRules([]);
   };
 
   const filteredCustomers = customers.filter(c => {
@@ -305,102 +293,6 @@ export default function Customers() {
                       </div>
                     </div>
                   </div>
-                </div>
-
-                <div className="pt-4 border-t border-gray-50">
-                  <div className="flex items-center justify-between mb-4">
-                    <div className="flex items-center gap-2">
-                      <Snowflake className="h-4 w-4 text-blue-600" />
-                      <h4 className="text-[10px] font-black text-blue-600 uppercase tracking-[0.2em]">Off-Season Overrides</h4>
-                    </div>
-                    <label className="relative inline-flex items-center cursor-pointer">
-                      <input type="checkbox" checked={offSeasonEnabled} onChange={e => setOffSeasonEnabled(e.target.checked)} className="sr-only peer" />
-                      <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
-                    </label>
-                  </div>
-
-                  {offSeasonEnabled && (
-                    <div className="space-y-4">
-                      <div className="flex justify-between items-center">
-                        <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Customer-specific seasonal rules</p>
-                        <button
-                          type="button"
-                          onClick={() => setOffSeasonRules([...offSeasonRules, { start_date: '11-01', end_date: '03-31', interval_days: 14, label: 'Winter' }])}
-                          className="text-[10px] font-black text-blue-600 uppercase tracking-widest hover:text-blue-700"
-                        >
-                          + Add Rule
-                        </button>
-                      </div>
-
-                      {offSeasonRules.map((rule, idx) => (
-                        <div key={idx} className="bg-gray-50 p-4 rounded-2xl border border-gray-100 space-y-3">
-                          <div className="flex justify-between items-center">
-                            <input 
-                              type="text" 
-                              placeholder="Rule Label" 
-                              value={rule.label}
-                              onChange={e => {
-                                const newRules = [...offSeasonRules];
-                                newRules[idx].label = e.target.value;
-                                setOffSeasonRules(newRules);
-                              }}
-                              className="text-xs font-black text-gray-900 bg-transparent border-none p-0 focus:ring-0 w-full"
-                            />
-                            <button 
-                              type="button" 
-                              onClick={() => setOffSeasonRules(offSeasonRules.filter((_, i) => i !== idx))}
-                              className="p-1 text-gray-400 hover:text-red-500 transition-all"
-                            >
-                              <Trash2 className="h-3 w-3" />
-                            </button>
-                          </div>
-                          <div className="grid grid-cols-3 gap-2">
-                            <div>
-                              <label className="block text-[8px] font-black text-gray-400 uppercase tracking-widest mb-1">Start</label>
-                              <input 
-                                type="text" 
-                                placeholder="MM-DD"
-                                value={rule.start_date}
-                                onChange={e => {
-                                  const newRules = [...offSeasonRules];
-                                  newRules[idx].start_date = e.target.value;
-                                  setOffSeasonRules(newRules);
-                                }}
-                                className="w-full bg-white border-gray-100 rounded-lg py-2 px-3 text-xs font-bold text-gray-900 outline-none focus:ring-1 focus:ring-blue-500"
-                              />
-                            </div>
-                            <div>
-                              <label className="block text-[8px] font-black text-gray-400 uppercase tracking-widest mb-1">End</label>
-                              <input 
-                                type="text" 
-                                placeholder="MM-DD"
-                                value={rule.end_date}
-                                onChange={e => {
-                                  const newRules = [...offSeasonRules];
-                                  newRules[idx].end_date = e.target.value;
-                                  setOffSeasonRules(newRules);
-                                }}
-                                className="w-full bg-white border-gray-100 rounded-lg py-2 px-3 text-xs font-bold text-gray-900 outline-none focus:ring-1 focus:ring-blue-500"
-                              />
-                            </div>
-                            <div>
-                              <label className="block text-[8px] font-black text-gray-400 uppercase tracking-widest mb-1">Days</label>
-                              <input 
-                                type="number" 
-                                value={rule.interval_days}
-                                onChange={e => {
-                                  const newRules = [...offSeasonRules];
-                                  newRules[idx].interval_days = Number(e.target.value);
-                                  setOffSeasonRules(newRules);
-                                }}
-                                className="w-full bg-white border-gray-100 rounded-lg py-2 px-3 text-xs font-bold text-gray-900 outline-none focus:ring-1 focus:ring-blue-500"
-                              />
-                            </div>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
                 </div>
 
                 <div>

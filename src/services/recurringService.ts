@@ -32,6 +32,47 @@ export interface RecurringPlan {
 
 const COLLECTION_NAME = 'recurring_plans';
 
+const normalizeFrequency = (frequency?: string): BillingFrequency | undefined => {
+  if (frequency === 'one_time' || frequency === 'one-time') return 'one-time';
+  if (frequency === 'bi_weekly' || frequency === 'bi-weekly') return 'bi-weekly';
+  if (frequency === 'weekly' || frequency === 'monthly' || frequency === 'flexible') return frequency;
+  return undefined;
+};
+
+const applyFrequencyToDate = (nextDate: Date, date: Date, frequency: BillingFrequency, settings: BusinessSettings) => {
+  switch (frequency) {
+    case 'weekly':
+      nextDate.setDate(date.getDate() + (settings.recurrence.weekly.days_between || 7));
+      break;
+    case 'bi-weekly':
+      if (settings.recurrence.bi_weekly.mode === 'twice_per_month') {
+        nextDate.setDate(date.getDate() + 15);
+      } else {
+        nextDate.setDate(date.getDate() + (settings.recurrence.bi_weekly.days_between || 14));
+      }
+      break;
+    case 'monthly':
+      if (settings.recurrence.monthly.mode === 'last_day') {
+        nextDate.setMonth(date.getMonth() + 2, 0);
+      } else {
+        nextDate.setMonth(date.getMonth() + 1);
+      }
+      break;
+    default:
+      break;
+  }
+};
+
+const isMonthDayInRange = (currentMonthDay: string, startDate?: string, endDate?: string) => {
+  if (!startDate || !endDate) return false;
+
+  if (startDate <= endDate) {
+    return currentMonthDay >= startDate && currentMonthDay <= endDate;
+  }
+
+  return currentMonthDay >= startDate || currentMonthDay <= endDate;
+};
+
 export const recurringService = {
   subscribeToPlans: (callback: (plans: RecurringPlan[]) => void) => {
     const user = auth.currentUser;
@@ -101,33 +142,21 @@ export const recurringService = {
       }
     }
 
-    if (seasonalEnabled) {
-      let interval = 7; // Default interval
-
-      // Check seasonal rules
+    if (seasonalEnabled && seasonalRules.length > 0) {
+      const rule = seasonalRules[0];
       const currentMonthDay = `${(date.getMonth() + 1).toString().padStart(2, '0')}-${date.getDate().toString().padStart(2, '0')}`;
-      
-      for (const rule of seasonalRules) {
-        if (!rule.start_date || !rule.end_date) {
-          interval = rule.interval_days;
-          continue; 
+
+      if (isMonthDayInRange(currentMonthDay, rule.start_date, rule.end_date)) {
+        const offSeasonFrequency = normalizeFrequency(rule.off_season_frequency);
+
+        if (offSeasonFrequency) {
+          applyFrequencyToDate(nextDate, date, offSeasonFrequency, settings);
+        } else if (rule.interval_days) {
+          nextDate.setDate(date.getDate() + rule.interval_days);
         }
 
-        if (rule.start_date <= rule.end_date) {
-          if (currentMonthDay >= rule.start_date && currentMonthDay <= rule.end_date) {
-            interval = rule.interval_days;
-            break;
-          }
-        } else {
-          if (currentMonthDay >= rule.start_date || currentMonthDay <= rule.end_date) {
-            interval = rule.interval_days;
-            break;
-          }
-        }
+        return nextDate;
       }
-
-      nextDate.setDate(date.getDate() + interval);
-      return nextDate;
     }
 
     // Check Winter Mode (legacy but keeping for compatibility if needed)
@@ -158,27 +187,7 @@ export const recurringService = {
       }
     }
 
-    switch (frequency) {
-      case 'weekly':
-        nextDate.setDate(date.getDate() + (settings.recurrence.weekly.days_between || 7));
-        break;
-      case 'bi-weekly':
-        if (settings.recurrence.bi_weekly.mode === 'twice_per_month') {
-          nextDate.setDate(date.getDate() + 15);
-        } else {
-          nextDate.setDate(date.getDate() + (settings.recurrence.bi_weekly.days_between || 14));
-        }
-        break;
-      case 'monthly':
-        if (settings.recurrence.monthly.mode === 'last_day') {
-          nextDate.setMonth(date.getMonth() + 2, 0);
-        } else {
-          nextDate.setMonth(date.getMonth() + 1);
-        }
-        break;
-      default:
-        break;
-    }
+    applyFrequencyToDate(nextDate, date, frequency, settings);
     return nextDate;
   }
 };

@@ -1,11 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { Plus, Calendar, MapPin, CheckCircle, X, Camera, Share2, Copy, Map, AlertCircle, Briefcase, User, Upload, ChevronRight, ChevronLeft, CreditCard, ClipboardList, ChevronDown, MessageSquare, FileText, Repeat, ArrowRight, Settings as SettingsIcon, Snowflake, Clock, CheckSquare, Trash2 } from 'lucide-react';
+import { Plus, Calendar, MapPin, CheckCircle, X, Camera, Share2, Copy, Map, AlertCircle, Briefcase, User, Upload, ChevronRight, ChevronLeft, CreditCard, ClipboardList, ChevronDown, MessageSquare, FileText, Repeat, ArrowRight, Settings as SettingsIcon, Clock, CheckSquare, Trash2 } from 'lucide-react';
 import { jobService, Job } from '../services/jobService';
 import { customerService, Customer } from '../services/customerService';
 import { verificationService } from '../services/verificationService';
 import { servicePlanService, ServicePlan } from '../services/servicePlanService';
-import { templateService, MessageTemplate } from '../services/templateService';
+import { renderProofMessage, templateService, MessageTemplate } from '../services/templateService';
 import { recurringService, RecurringPlan, BillingFrequency } from '../services/recurringService';
 import { settingsService, BusinessSettings } from '../services/settingsService';
 import { quoteService, Quote } from '../services/quoteService';
@@ -31,17 +31,21 @@ export default function Jobs() {
   // Update current message when sharingJob or template index changes
   useEffect(() => {
     if (sharingJob) {
-      if (templates.length > 0) {
-        setCurrentMessage(
-          templates[currentTemplateIndex].content
-            .replaceAll('{customer}', sharingJob.customer_name_snapshot)
-            .replaceAll('{link}', `${getPublicOrigin()}/#/proof/${sharingJob.id}/${sharingJob.share_token}`)
-        );
-      } else {
-        setCurrentMessage(`Hi ${sharingJob.customer_name_snapshot}, your service is complete! View proof here: ${getPublicOrigin()}/#/proof/${sharingJob.id}/${sharingJob.share_token}`);
-      }
+      const proofLink = `${getPublicOrigin()}/#/proof/${sharingJob.id}/${sharingJob.share_token}`;
+      setCurrentMessage(renderProofMessage(templates[currentTemplateIndex] || null, {
+        customerName: sharingJob.customer_name_snapshot,
+        serviceName: sharingJob.service_snapshot,
+        price: sharingJob.price_snapshot,
+        proofLink
+      }));
     }
   }, [sharingJob, currentTemplateIndex, templates]);
+
+  useEffect(() => {
+    if (templates.length > 0 && currentTemplateIndex >= templates.length) {
+      setCurrentTemplateIndex(0);
+    }
+  }, [templates.length, currentTemplateIndex]);
   const [activeTab, setActiveTab] = useState<'today' | 'upcoming' | 'completed' | 'due'>('today');
   const [searchQuery, setSearchQuery] = useState('');
   const [isAdding, setIsAdding] = useState(false);
@@ -89,13 +93,6 @@ export default function Jobs() {
   const [newCustomerNotes, setNewCustomerNotes] = useState('');
   const [newCustomerAccessNotes, setNewCustomerAccessNotes] = useState('');
 
-  const [winterModeOverride, setWinterModeOverride] = useState<'pause' | 'stop' | 'reduce_frequency' | 'no_change' | undefined>();
-  const [reducedFrequencyOverride, setReducedFrequencyOverride] = useState<'weekly' | 'bi-weekly' | 'monthly' | undefined>();
-  
-  const [intervalDays, setIntervalDays] = useState<string>('7');
-  const [overrideEnabled, setOverrideEnabled] = useState(false);
-  const [seasonalEnabled, setSeasonalEnabled] = useState(false);
-  const [seasonalRules, setSeasonalRules] = useState<any[]>([]);
   const [businessSettings, setBusinessSettings] = useState<BusinessSettings | null>(null);
 
   useEffect(() => {
@@ -212,13 +209,7 @@ export default function Jobs() {
           status: 'active',
           start_date: scheduledDate ? new Date(scheduledDate).toISOString() : new Date().toISOString(),
           next_due_date: scheduledDate ? new Date(scheduledDate).toISOString() : new Date().toISOString(),
-          notes: internalNotes || '',
-          
-          // Flexible/Seasonal fields
-          interval_days: Number(intervalDays),
-          override_enabled: overrideEnabled,
-          seasonal_enabled: seasonalEnabled,
-          seasonal_rules: seasonalRules
+          notes: internalNotes || ''
         });
         if (plan) {
           jobPayload.recurringPlanId = plan.id;
@@ -422,13 +413,6 @@ export default function Jobs() {
     }
     setEditDate(dateStr);
     setEditNotes(job.internal_notes || '');
-    
-    // Load seasonal settings if available
-    setIntervalDays((job as any).interval_days?.toString() || '7');
-    setOverrideEnabled((job as any).override_enabled || false);
-    setSeasonalEnabled((job as any).seasonal_enabled || false);
-    setSeasonalRules((job as any).seasonal_rules || []);
-    
     setErrorMessage(null);
   };
 
@@ -494,13 +478,7 @@ export default function Jobs() {
         service_setup_type: serviceSetupType,
         internal_notes: internalNotes || '',
         customer_notes: '',
-        created_at: serverTimestamp(),
-        
-        // Flexible/Seasonal fields
-        interval_days: Number(intervalDays) || 7,
-        override_enabled: overrideEnabled,
-        seasonal_enabled: seasonalEnabled,
-        seasonal_rules: seasonalRules
+        created_at: serverTimestamp()
       };
 
       await jobService.addJob(quotePayload);
@@ -532,10 +510,6 @@ export default function Jobs() {
     setNewCustomerZip('');
     setNewCustomerNotes('');
     setNewCustomerAccessNotes('');
-    setIntervalDays('7');
-    setOverrideEnabled(false);
-    setSeasonalEnabled(false);
-    setSeasonalRules([]);
   };
 
   const handleConvertQuoteToJob = async (quote: Job) => {
@@ -554,13 +528,7 @@ export default function Jobs() {
           status: 'active',
           start_date: quote.scheduled_date || new Date().toISOString(),
           next_due_date: quote.scheduled_date || new Date().toISOString(),
-          notes: quote.internal_notes || '',
-          
-          // Flexible/Seasonal fields from quote
-          interval_days: (quote as any).interval_days,
-          override_enabled: (quote as any).override_enabled,
-          seasonal_enabled: (quote as any).seasonal_enabled,
-          seasonal_rules: (quote as any).seasonal_rules
+          notes: quote.internal_notes || ''
         });
         if (plan) {
           updateData.recurringPlanId = plan.id;
@@ -636,22 +604,13 @@ export default function Jobs() {
       await jobService.updateJob(editingJob.id, {
         price_snapshot: editPrice ? parseFloat(editPrice) : 0,
         scheduled_date: editDate ? new Date(editDate).toISOString() : null,
-        internal_notes: editNotes,
-        // Update seasonal fields on the job snapshot
-        interval_days: Number(intervalDays),
-        override_enabled: overrideEnabled,
-        seasonal_enabled: seasonalEnabled,
-        seasonal_rules: seasonalRules
+        internal_notes: editNotes
       });
 
       // If it's a recurring job, we might also want to update the recurring plan
       if (editingJob.recurringPlanId) {
         await recurringService.updatePlan(editingJob.recurringPlanId, {
-          price: editPrice ? parseFloat(editPrice) : 0,
-          interval_days: Number(intervalDays),
-          override_enabled: overrideEnabled,
-          seasonal_enabled: seasonalEnabled,
-          seasonal_rules: seasonalRules
+          price: editPrice ? parseFloat(editPrice) : 0
         });
       }
 
@@ -1041,131 +1000,6 @@ export default function Jobs() {
                   />
                 </div>
 
-                {/* Flexible/Seasonal Settings in Edit Modal */}
-                {(editingJob.service_setup_type === 'recurring' || editingJob.service_setup_type === 'flexible') && (
-                  <div className="space-y-4 p-6 bg-gray-50 rounded-3xl border border-gray-100">
-                    <h4 className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-2 ml-1">Frequency & Seasonal</h4>
-                    
-                    <div>
-                      <label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1.5 ml-1">Interval Days</label>
-                      <input 
-                        type="number" 
-                        required 
-                        min="1"
-                        value={intervalDays}
-                        onChange={e => setIntervalDays(e.target.value)}
-                        className="w-full bg-white border border-gray-200 rounded-2xl py-4 px-5 text-sm font-black text-gray-900 focus:ring-2 focus:ring-blue-500 outline-none"
-                      />
-                    </div>
-
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-2">
-                        <Snowflake className="h-3 w-3 text-blue-600" />
-                        <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Seasonal Control</label>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => setSeasonalEnabled(!seasonalEnabled)}
-                        className={`w-10 h-5 rounded-full transition-colors relative ${seasonalEnabled ? 'bg-blue-600' : 'bg-gray-200'}`}
-                      >
-                        <div className={`absolute top-1 w-3 h-3 rounded-full bg-white transition-all ${seasonalEnabled ? 'left-6' : 'left-1'}`} />
-                      </button>
-                    </div>
-
-                    <div className="flex items-center justify-between">
-                      <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest ml-1">Enable Seasonal Overrides</label>
-                      <button
-                        type="button"
-                        onClick={() => setOverrideEnabled(!overrideEnabled)}
-                        className={`w-10 h-5 rounded-full transition-colors relative ${overrideEnabled ? 'bg-blue-600' : 'bg-gray-200'}`}
-                      >
-                        <div className={`absolute top-1 w-3 h-3 rounded-full bg-white transition-all ${overrideEnabled ? 'left-6' : 'left-1'}`} />
-                      </button>
-                    </div>
-
-                    {overrideEnabled && (
-                      <div className="space-y-3">
-                        <div className="flex items-center justify-between">
-                          <h5 className="text-[10px] font-black text-gray-400 uppercase tracking-widest ml-1">Custom Seasonal Rules</h5>
-                          <button
-                            type="button"
-                            onClick={() => setSeasonalRules([...seasonalRules, { start_date: '', end_date: '', interval_days: 7, label: '' }])}
-                            className="text-[10px] font-black text-blue-600 uppercase tracking-widest hover:text-blue-700"
-                          >
-                            + Add Rule
-                          </button>
-                        </div>
-                        {seasonalRules.map((rule, idx) => (
-                          <div key={idx} className="bg-white p-3 rounded-xl border border-gray-100 space-y-2">
-                            <div className="flex justify-between items-center">
-                              <input 
-                                type="text" 
-                                placeholder="Label (e.g. Winter)" 
-                                value={rule.label}
-                                onChange={e => {
-                                  const newRules = [...seasonalRules];
-                                  newRules[idx].label = e.target.value;
-                                  setSeasonalRules(newRules);
-                                }}
-                                className="text-xs font-bold text-gray-900 bg-transparent border-none p-0 focus:ring-0 w-full"
-                              />
-                              <button 
-                                type="button" 
-                                onClick={() => setSeasonalRules(seasonalRules.filter((_, i) => i !== idx))}
-                                className="text-gray-400 hover:text-red-500"
-                              >
-                                <Trash2 className="h-3 w-3" />
-                              </button>
-                            </div>
-                            <div className="grid grid-cols-3 gap-2">
-                              <div>
-                                <label className="block text-[8px] font-black text-gray-400 uppercase mb-1">Start</label>
-                                <input 
-                                  type="text" 
-                                  placeholder="MM-DD"
-                                  value={rule.start_date}
-                                  onChange={e => {
-                                    const newRules = [...seasonalRules];
-                                    newRules[idx].start_date = e.target.value;
-                                    setSeasonalRules(newRules);
-                                  }}
-                                  className="w-full bg-gray-50 border-none rounded-lg py-1.5 px-2 text-[10px] font-bold"
-                                />
-                              </div>
-                              <div>
-                                <label className="block text-[8px] font-black text-gray-400 uppercase mb-1">End</label>
-                                <input 
-                                  type="text" 
-                                  placeholder="MM-DD"
-                                  value={rule.end_date}
-                                  onChange={e => {
-                                    const newRules = [...seasonalRules];
-                                    newRules[idx].end_date = e.target.value;
-                                    setSeasonalRules(newRules);
-                                  }}
-                                  className="w-full bg-gray-50 border-none rounded-lg py-1.5 px-2 text-[10px] font-bold"
-                                />
-                              </div>
-                              <div>
-                                <label className="block text-[8px] font-black text-gray-400 uppercase mb-1">Interval</label>
-                                <input 
-                                  type="number" 
-                                  value={rule.interval_days}
-                                  onChange={e => {
-                                    const newRules = [...seasonalRules];
-                                    newRules[idx].interval_days = Number(e.target.value);
-                                    setSeasonalRules(newRules);
-                                  }}
-                                  className="w-full bg-gray-50 border-none rounded-lg py-1.5 px-2 text-[10px] font-bold"
-                                />
-                              </div>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                )}
               </div>
 
               <div className="pt-4">
@@ -1488,8 +1322,7 @@ export default function Jobs() {
                   {/* Customer Copy Button */}
                   <button 
                     onClick={() => {
-                      const msg = `Hi ${sharingJob.customer_name_snapshot}, your ${sharingJob.service_snapshot} is complete! View your service proof here: ${getPublicOrigin()}/#/proof/${sharingJob.id}/${sharingJob.share_token}`;
-                      copyToClipboard(msg);
+                      copyToClipboard(currentMessage);
                     }}
                     className="w-full py-3 px-4 bg-blue-50 text-blue-600 rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-blue-100 transition-all flex items-center justify-center gap-2 border border-blue-100"
                   >
@@ -1500,8 +1333,14 @@ export default function Jobs() {
                   {/* Payment Copy Button */}
                   <button 
                     onClick={() => {
-                      const msg = `Hi ${sharingJob.customer_name_snapshot}, the total for your ${sharingJob.service_snapshot} is $${sharingJob.price_snapshot}. You can view the details and pay here: ${getPublicOrigin()}/#/proof/${sharingJob.id}/${sharingJob.share_token}`;
-                      copyToClipboard(msg);
+                      const proofLink = `${getPublicOrigin()}/#/proof/${sharingJob.id}/${sharingJob.share_token}`;
+                      copyToClipboard(renderProofMessage(templates[currentTemplateIndex] || null, {
+                        customerName: sharingJob.customer_name_snapshot,
+                        serviceName: sharingJob.service_snapshot,
+                        price: sharingJob.price_snapshot,
+                        proofLink,
+                        paymentDue: true
+                      }));
                     }}
                     className="w-full py-3 px-4 bg-green-50 text-green-600 rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-green-100 transition-all flex items-center justify-center gap-2 border border-green-100"
                   >
@@ -1538,11 +1377,11 @@ export default function Jobs() {
                     if (navigator.share) {
                       navigator.share({
                         title: 'Service Proof',
-                        text: `Service proof for ${sharingJob.customer_name_snapshot}`,
+                        text: currentMessage,
                         url: url
                       });
                     } else {
-                      window.location.href = `mailto:?subject=Service Proof&body=Check out your service proof here: ${url}`;
+                      window.location.href = `mailto:?subject=Service Proof&body=${encodeURIComponent(currentMessage)}`;
                     }
                   }}
                   className="w-full bg-blue-600 text-white py-5 px-4 rounded-2xl text-sm font-black uppercase tracking-widest hover:bg-blue-700 shadow-xl shadow-blue-100 transition-all flex items-center justify-center gap-2"
@@ -1909,132 +1748,6 @@ export default function Jobs() {
                     ))}
                   </div>
 
-                  {(serviceSetupType === 'recurring' || serviceSetupType === 'flexible') && (
-                    <div className="mt-4 space-y-4 p-4 bg-gray-50 rounded-2xl border border-gray-100 animate-in fade-in slide-in-from-top-2 duration-200">
-                      <div>
-                        <label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1.5 ml-1">Interval Days</label>
-                        <input 
-                          type="number" 
-                          required 
-                          min="1"
-                          value={intervalDays}
-                          onChange={e => setIntervalDays(e.target.value)}
-                          className="w-full bg-white border-gray-100 rounded-xl py-3 px-4 text-sm font-bold text-gray-900 focus:ring-2 focus:ring-blue-500 outline-none"
-                        />
-                      </div>
-
-                      {serviceSetupType === 'flexible' && (
-                        <div className="space-y-4">
-                          <div className="flex items-center justify-between">
-                            <div className="flex items-center gap-2">
-                              <Snowflake className="h-3 w-3 text-blue-600" />
-                              <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Seasonal Control</label>
-                            </div>
-                            <button
-                              type="button"
-                              onClick={() => setSeasonalEnabled(!seasonalEnabled)}
-                              className={`w-10 h-5 rounded-full transition-colors relative ${seasonalEnabled ? 'bg-blue-600' : 'bg-gray-200'}`}
-                            >
-                              <div className={`absolute top-1 w-3 h-3 rounded-full bg-white transition-all ${seasonalEnabled ? 'left-6' : 'left-1'}`} />
-                            </button>
-                          </div>
-
-                          <div className="flex items-center justify-between">
-                            <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest ml-1">Enable Seasonal Overrides</label>
-                            <button
-                              type="button"
-                              onClick={() => setOverrideEnabled(!overrideEnabled)}
-                              className={`w-10 h-5 rounded-full transition-colors relative ${overrideEnabled ? 'bg-blue-600' : 'bg-gray-200'}`}
-                            >
-                              <div className={`absolute top-1 w-3 h-3 rounded-full bg-white transition-all ${overrideEnabled ? 'left-6' : 'left-1'}`} />
-                            </button>
-                          </div>
-
-                          {overrideEnabled && (
-                            <div className="space-y-3">
-                              <div className="flex items-center justify-between">
-                                <h5 className="text-[10px] font-black text-gray-400 uppercase tracking-widest ml-1">Custom Seasonal Rules</h5>
-                                <button
-                                  type="button"
-                                  onClick={() => setSeasonalRules([...seasonalRules, { start_date: '', end_date: '', interval_days: 7, label: '' }])}
-                                  className="text-[10px] font-black text-blue-600 uppercase tracking-widest hover:text-blue-700"
-                                >
-                                  + Add Rule
-                                </button>
-                              </div>
-                              {seasonalRules.map((rule, idx) => (
-                                <div key={idx} className="bg-white p-3 rounded-xl border border-gray-100 space-y-2">
-                                  <div className="flex justify-between items-center">
-                                    <input 
-                                      type="text" 
-                                      placeholder="Label (e.g. Winter)" 
-                                      value={rule.label}
-                                      onChange={e => {
-                                        const newRules = [...seasonalRules];
-                                        newRules[idx].label = e.target.value;
-                                        setSeasonalRules(newRules);
-                                      }}
-                                      className="text-xs font-bold text-gray-900 bg-transparent border-none p-0 focus:ring-0 w-full"
-                                    />
-                                    <button 
-                                      type="button" 
-                                      onClick={() => setSeasonalRules(seasonalRules.filter((_, i) => i !== idx))}
-                                      className="text-gray-400 hover:text-red-500"
-                                    >
-                                      <Trash2 className="h-3 w-3" />
-                                    </button>
-                                  </div>
-                                  <div className="grid grid-cols-3 gap-2">
-                                    <div>
-                                      <label className="block text-[8px] font-black text-gray-400 uppercase mb-1">Start</label>
-                                      <input 
-                                        type="text" 
-                                        placeholder="MM-DD"
-                                        value={rule.start_date}
-                                        onChange={e => {
-                                          const newRules = [...seasonalRules];
-                                          newRules[idx].start_date = e.target.value;
-                                          setSeasonalRules(newRules);
-                                        }}
-                                        className="w-full bg-gray-50 border-none rounded-lg py-1.5 px-2 text-[10px] font-bold"
-                                      />
-                                    </div>
-                                    <div>
-                                      <label className="block text-[8px] font-black text-gray-400 uppercase mb-1">End</label>
-                                      <input 
-                                        type="text" 
-                                        placeholder="MM-DD"
-                                        value={rule.end_date}
-                                        onChange={e => {
-                                          const newRules = [...seasonalRules];
-                                          newRules[idx].end_date = e.target.value;
-                                          setSeasonalRules(newRules);
-                                        }}
-                                        className="w-full bg-gray-50 border-none rounded-lg py-1.5 px-2 text-[10px] font-bold"
-                                      />
-                                    </div>
-                                    <div>
-                                      <label className="block text-[8px] font-black text-gray-400 uppercase mb-1">Interval</label>
-                                      <input 
-                                        type="number" 
-                                        value={rule.interval_days}
-                                        onChange={e => {
-                                          const newRules = [...seasonalRules];
-                                          newRules[idx].interval_days = Number(e.target.value);
-                                          setSeasonalRules(newRules);
-                                        }}
-                                        className="w-full bg-gray-50 border-none rounded-lg py-1.5 px-2 text-[10px] font-bold"
-                                      />
-                                    </div>
-                                  </div>
-                                </div>
-                              ))}
-                            </div>
-                          )}
-                        </div>
-                      )}
-                    </div>
-                  )}
                 </div>
 
                 <div>

@@ -42,7 +42,7 @@ import { Timestamp } from 'firebase/firestore';
 import { getPublicOrigin } from '../../utils';
 
 import { verificationService } from '../../services/verificationService';
-import { templateService, MessageTemplate } from '../../services/templateService';
+import { renderProofMessage, templateService, MessageTemplate } from '../../services/templateService';
 
 export default function ActiveRoutePage() {
   const [flags] = useState<FeatureFlags>(featureFlagService.getFlags());
@@ -110,6 +110,19 @@ export default function ActiveRoutePage() {
   const [selectedDate, setSelectedDate] = useState<Date>(new Date());
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
+  const getShareProofLink = (job: any) => `${getPublicOrigin()}/#/proof/${job.id}/${job.share_token}`;
+  const getCurrentShareMessage = (includePaymentDue = paymentDue) => {
+    if (!sharingJob) return '';
+
+    return renderProofMessage(templates[currentTemplateIndex] || null, {
+      customerName: sharingJob.customer_name_snapshot,
+      serviceName: sharingJob.service_snapshot || sharingJob.service_type_snapshot,
+      price: sharingJob.price_snapshot || '0.00',
+      proofLink: getShareProofLink(sharingJob),
+      paymentDue: includePaymentDue
+    });
+  };
+
   useEffect(() => {
     let unsubscribeJobs: () => void = () => {};
     let unsubscribeCustomers: () => void = () => {};
@@ -139,6 +152,12 @@ export default function ActiveRoutePage() {
       unsubscribeTemplates();
     };
   }, []);
+
+  useEffect(() => {
+    if (templates.length > 0 && currentTemplateIndex >= templates.length) {
+      setCurrentTemplateIndex(0);
+    }
+  }, [templates.length, currentTemplateIndex]);
 
   useEffect(() => {
     const handleShareRouteStop = (e: Event) => {
@@ -1137,24 +1156,11 @@ export default function ActiveRoutePage() {
                 <div className="space-y-2">
                   <div className="bg-gray-50 border border-gray-100 rounded-2xl p-4 relative group">
                     <p className="text-xs font-bold text-gray-600 leading-relaxed italic break-words">
-                      {templates.length > 0 ? (
-                        templates[currentTemplateIndex].content
-                          .replace('{customer}', sharingJob.customer_name_snapshot)
-                          .replace('{link}', `${getPublicOrigin()}/#/proof/${sharingJob.id}/${sharingJob.share_token}`)
-                      ) : (
-                        `Hi ${sharingJob.customer_name_snapshot}, your service is complete! ${paymentDue ? `The total is $${sharingJob.price_snapshot || '0.00'}. ` : ''}View proof here: ${getPublicOrigin()}/#/proof/${sharingJob.id}/${sharingJob.share_token}`
-                      )}
+                      {getCurrentShareMessage()}
                     </p>
                     <button 
                       onClick={() => {
-                        const msg = templates.length > 0 ? (
-                          templates[currentTemplateIndex].content
-                            .replace('{customer}', sharingJob.customer_name_snapshot)
-                            .replace('{link}', `${getPublicOrigin()}/#/proof/${sharingJob.id}/${sharingJob.share_token}`)
-                        ) : (
-                          `Hi ${sharingJob.customer_name_snapshot}, your service is complete! ${paymentDue ? `The total is $${sharingJob.price_snapshot || '0.00'}. ` : ''}View proof here: ${getPublicOrigin()}/#/proof/${sharingJob.id}/${sharingJob.share_token}`
-                        );
-                        copyToClipboard(msg);
+                        copyToClipboard(getCurrentShareMessage());
                       }}
                       className="absolute top-2 right-2 p-2 bg-white text-gray-400 hover:text-blue-600 rounded-xl shadow-sm transition-all border border-gray-100"
                     >
@@ -1165,8 +1171,7 @@ export default function ActiveRoutePage() {
                   {/* Customer Copy Button */}
                   <button 
                     onClick={() => {
-                      const msg = `Hi ${sharingJob.customer_name_snapshot}, your ${sharingJob.service_snapshot || sharingJob.service_type_snapshot} is complete! View your service proof here: ${getPublicOrigin()}/#/proof/${sharingJob.id}/${sharingJob.share_token}`;
-                      copyToClipboard(msg);
+                      copyToClipboard(getCurrentShareMessage(false));
                     }}
                     className="w-full py-3 px-4 bg-blue-50 text-blue-600 rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-blue-100 transition-all flex items-center justify-center gap-2 border border-blue-100"
                   >
@@ -1177,8 +1182,7 @@ export default function ActiveRoutePage() {
                   {/* Payment Copy Button */}
                   <button 
                     onClick={() => {
-                      const msg = `Hi ${sharingJob.customer_name_snapshot}, the total for your ${sharingJob.service_snapshot || sharingJob.service_type_snapshot} is $${sharingJob.price_snapshot || '0.00'}. You can view the details and pay here: ${getPublicOrigin()}/#/proof/${sharingJob.id}/${sharingJob.share_token}`;
-                      copyToClipboard(msg);
+                      copyToClipboard(getCurrentShareMessage(true));
                     }}
                     className="w-full py-3 px-4 bg-green-50 text-green-600 rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-green-100 transition-all flex items-center justify-center gap-2 border border-green-100"
                   >
@@ -1192,10 +1196,10 @@ export default function ActiveRoutePage() {
                 <label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest ml-1">Direct Link</label>
                 <div className="flex gap-2">
                   <div className="flex-1 bg-gray-50 border border-gray-100 rounded-2xl py-4 px-5 text-[10px] font-bold text-gray-600 break-all leading-tight">
-                    {getPublicOrigin()}/#/proof/{sharingJob.id}/{sharingJob.share_token}
+                    {getShareProofLink(sharingJob)}
                   </div>
                   <button 
-                    onClick={() => copyToClipboard(`${getPublicOrigin()}/#/proof/${sharingJob.id}/${sharingJob.share_token}`)}
+                    onClick={() => copyToClipboard(getShareProofLink(sharingJob))}
                     className={`px-6 rounded-2xl font-black text-xs uppercase tracking-widest transition-all ${
                       copied ? 'bg-green-600 text-white' : 'bg-gray-900 text-white hover:bg-gray-800'
                     }`}
@@ -1208,15 +1212,16 @@ export default function ActiveRoutePage() {
               <div className="pt-4">
                 <button 
                   onClick={() => {
-                    const url = `${getPublicOrigin()}/#/proof/${sharingJob.id}/${sharingJob.share_token}`;
+                    const url = getShareProofLink(sharingJob);
+                    const message = getCurrentShareMessage();
                     if (navigator.share) {
                       navigator.share({
                         title: 'Service Proof',
-                        text: `Service proof for ${sharingJob.customer_name_snapshot}`,
+                        text: message,
                         url: url
                       });
                     } else {
-                      window.location.href = `mailto:?subject=Service Proof&body=Check out your service proof here: ${url}`;
+                      window.location.href = `mailto:?subject=Service Proof&body=${encodeURIComponent(message)}`;
                     }
                   }}
                   className="w-full bg-blue-600 text-white py-5 px-4 rounded-2xl text-sm font-black uppercase tracking-widest hover:bg-blue-700 shadow-xl shadow-blue-100 transition-all flex items-center justify-center gap-2"

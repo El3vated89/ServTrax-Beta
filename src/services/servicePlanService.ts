@@ -22,7 +22,28 @@ const normalizeBillingFrequency = (frequency?: string) => {
   return frequency || 'one_time';
 };
 
-const normalizeSeasonalRules = (rules?: any[]) => (rules || []).slice(0, 1);
+const getIntervalDaysForFrequency = (frequency?: string) => {
+  if (frequency === 'weekly') return 7;
+  if (frequency === 'bi_weekly' || frequency === 'bi-weekly') return 14;
+  if (frequency === 'monthly') return 30;
+  return 7;
+};
+
+const normalizeSeasonalFrequency = (frequency?: string) => {
+  if (frequency === 'bi-weekly') return 'bi_weekly';
+  if (frequency === 'weekly' || frequency === 'bi_weekly' || frequency === 'monthly') return frequency;
+  return 'monthly';
+};
+
+const normalizeSeasonalRules = (rules?: any[]) => (rules || []).slice(0, 1).map(rule => {
+  const offSeasonFrequency = normalizeSeasonalFrequency(rule.off_season_frequency);
+
+  return {
+    ...rule,
+    off_season_frequency: offSeasonFrequency,
+    interval_days: Number(rule.interval_days) || getIntervalDaysForFrequency(offSeasonFrequency)
+  };
+});
 
 export const servicePlanService = {
   subscribeToServicePlans: (callback: (plans: ServicePlan[]) => void) => {
