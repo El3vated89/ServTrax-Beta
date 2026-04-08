@@ -189,10 +189,22 @@ service cloud.firestore {
     function isValidBusinessProfile(data) {
       return data.ownerId is string &&
              data.business_name is string &&
+             (!('phone' in data) || data.phone is string) &&
+             (!('email' in data) || data.email is string) &&
              (!('business_tagline' in data) || data.business_tagline is string) &&
              (!('logo_url' in data) || data.logo_url is string) &&
+             (!('address' in data) || data.address is string) &&
+             (!('base_camp_label' in data) || data.base_camp_label is string) &&
+             (!('base_camp_address' in data) || data.base_camp_address is string) &&
              (!('base_camp_lat' in data) || data.base_camp_lat is number || data.base_camp_lat == null) &&
-             (!('base_camp_lng' in data) || data.base_camp_lng is number || data.base_camp_lng == null);
+             (!('base_camp_lng' in data) || data.base_camp_lng is number || data.base_camp_lng == null) &&
+             (!('plan_key' in data) || data.plan_key is string) &&
+             (!('plan_name' in data) || data.plan_name is string) &&
+             (!('subscription_status' in data) || data.subscription_status in ['trialing', 'active', 'past_due', 'paused', 'canceled']) &&
+             (!('storage_add_on_quantity' in data) || data.storage_add_on_quantity is number) &&
+             (!('custom_storage_cap' in data) || data.custom_storage_cap is number || data.custom_storage_cap == null) &&
+             (!('updated_at' in data) || data.updated_at is timestamp) &&
+             (!('created_at' in data) || data.created_at is timestamp);
     }
 
     function isValidRoute(data) {

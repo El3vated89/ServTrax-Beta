@@ -94,8 +94,27 @@ export const userProfileService = {
     if (!user) throw new Error('User not authenticated');
 
     try {
-      await updateDoc(doc(db, 'users', user.uid), {
-        ...updates,
+      const docRef = doc(db, 'users', user.uid);
+      const existing = await getDoc(docRef);
+
+      if (existing.exists()) {
+        await updateDoc(docRef, {
+          ...updates,
+          updated_at: serverTimestamp(),
+        });
+        return;
+      }
+
+      await setDoc(docRef, {
+        uid: user.uid,
+        email: user.email || '',
+        name: updates.name ?? user.displayName ?? '',
+        phone: updates.phone ?? '',
+        role: user.email === PLATFORM_ADMIN_EMAIL ? 'admin' : 'owner',
+        permissions: [],
+        team_memberships: [],
+        active: true,
+        created_at: serverTimestamp(),
         updated_at: serverTimestamp(),
       });
     } catch (error) {

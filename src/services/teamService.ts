@@ -47,27 +47,31 @@ const buildPermissionList = (member: Partial<TeamMember>) => {
 const syncLinkedUserProfile = async (memberId: string, member: Partial<TeamMember>) => {
   if (!member.email) return;
 
-  const userSnapshot = await getDocs(query(collection(db, 'users'), where('email', '==', member.email)));
-  if (userSnapshot.empty) return;
+  try {
+    const userSnapshot = await getDocs(query(collection(db, 'users'), where('email', '==', member.email)));
+    if (userSnapshot.empty) return;
 
-  const permissions = buildPermissionList(member);
+    const permissions = buildPermissionList(member);
 
-  await Promise.all(
-    userSnapshot.docs.map((entry) => {
-      const existingMemberships = Array.isArray(entry.data().team_memberships) ? entry.data().team_memberships : [];
-      const nextMemberships = existingMemberships.includes(memberId)
-        ? existingMemberships
-        : [...existingMemberships, memberId];
+    await Promise.all(
+      userSnapshot.docs.map((entry) => {
+        const existingMemberships = Array.isArray(entry.data().team_memberships) ? entry.data().team_memberships : [];
+        const nextMemberships = existingMemberships.includes(memberId)
+          ? existingMemberships
+          : [...existingMemberships, memberId];
 
-      return updateDoc(entry.ref, {
-        role: 'staff',
-        active: member.account_status !== 'inactive',
-        permissions,
-        team_memberships: nextMemberships,
-        updated_at: serverTimestamp(),
-      });
-    })
-  );
+        return updateDoc(entry.ref, {
+          role: 'staff',
+          active: member.account_status !== 'inactive',
+          permissions,
+          team_memberships: nextMemberships,
+          updated_at: serverTimestamp(),
+        });
+      })
+    );
+  } catch (error) {
+    console.error('Unable to sync linked user profile for team member yet:', error);
+  }
 };
 
 export const teamService = {
