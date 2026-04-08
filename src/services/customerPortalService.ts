@@ -352,51 +352,55 @@ export const customerPortalService = {
 
     await batch.commit();
 
-    const publicPortalDoc: CustomerPortalRecord = {
-      ...portalDoc,
-      created_at: existingPortalSnap.exists() ? existingPortalSnap.data().created_at || serverTimestamp() : serverTimestamp(),
-    };
+    try {
+      const publicPortalDoc: CustomerPortalRecord = {
+        ...portalDoc,
+        created_at: existingPortalSnap.exists() ? existingPortalSnap.data().created_at || serverTimestamp() : serverTimestamp(),
+      };
 
-    await setDoc(doc(db, PUBLIC_PORTAL_COLLECTION, customer.portal_token), publicPortalDoc, { merge: true });
+      await setDoc(doc(db, PUBLIC_PORTAL_COLLECTION, customer.portal_token), publicPortalDoc, { merge: true });
 
-    const publicHistorySnapshot = await getDocs(
-      query(collection(db, PUBLIC_PORTAL_HISTORY_COLLECTION), where('portal_token', '==', customer.portal_token))
-    );
-    const publicQuoteSnapshot = await getDocs(
-      query(collection(db, PUBLIC_PORTAL_QUOTES_COLLECTION), where('portal_token', '==', customer.portal_token))
-    );
+      const publicHistorySnapshot = await getDocs(
+        query(collection(db, PUBLIC_PORTAL_HISTORY_COLLECTION), where('portal_token', '==', customer.portal_token))
+      );
+      const publicQuoteSnapshot = await getDocs(
+        query(collection(db, PUBLIC_PORTAL_QUOTES_COLLECTION), where('portal_token', '==', customer.portal_token))
+      );
 
-    const publicBatch = writeBatch(db);
-    const nextPublicHistoryIds = new Set(historyDocs.map((item) => `${customer.portal_token}_${item.id}`));
-    const nextPublicQuoteIds = new Set(quoteDocs.map((item) => `${customer.portal_token}_${item.source_type}_${item.source_id}`));
+      const publicBatch = writeBatch(db);
+      const nextPublicHistoryIds = new Set(historyDocs.map((item) => `${customer.portal_token}_${item.id}`));
+      const nextPublicQuoteIds = new Set(quoteDocs.map((item) => `${customer.portal_token}_${item.source_type}_${item.source_id}`));
 
-    publicHistorySnapshot.docs.forEach((entry) => {
-      if (!nextPublicHistoryIds.has(entry.id)) {
-        publicBatch.delete(entry.ref);
-      }
-    });
-
-    publicQuoteSnapshot.docs.forEach((entry) => {
-      if (!nextPublicQuoteIds.has(entry.id)) {
-        publicBatch.delete(entry.ref);
-      }
-    });
-
-    historyDocs.forEach((item) => {
-      publicBatch.set(doc(db, PUBLIC_PORTAL_HISTORY_COLLECTION, `${customer.portal_token}_${item.id}`), {
-        ...item,
-        portal_token: customer.portal_token,
+      publicHistorySnapshot.docs.forEach((entry) => {
+        if (!nextPublicHistoryIds.has(entry.id)) {
+          publicBatch.delete(entry.ref);
+        }
       });
-    });
 
-    quoteDocs.forEach((item) => {
-      publicBatch.set(doc(db, PUBLIC_PORTAL_QUOTES_COLLECTION, `${customer.portal_token}_${item.source_type}_${item.source_id}`), {
-        ...item,
-        portal_token: customer.portal_token,
-        portal_visible: !!customer.portal_show_quotes,
+      publicQuoteSnapshot.docs.forEach((entry) => {
+        if (!nextPublicQuoteIds.has(entry.id)) {
+          publicBatch.delete(entry.ref);
+        }
       });
-    });
 
-    await publicBatch.commit();
+      historyDocs.forEach((item) => {
+        publicBatch.set(doc(db, PUBLIC_PORTAL_HISTORY_COLLECTION, `${customer.portal_token}_${item.id}`), {
+          ...item,
+          portal_token: customer.portal_token,
+        });
+      });
+
+      quoteDocs.forEach((item) => {
+        publicBatch.set(doc(db, PUBLIC_PORTAL_QUOTES_COLLECTION, `${customer.portal_token}_${item.source_type}_${item.source_id}`), {
+          ...item,
+          portal_token: customer.portal_token,
+          portal_visible: !!customer.portal_show_quotes,
+        });
+      });
+
+      await publicBatch.commit();
+    } catch (error) {
+      console.error('Public portal mirror sync failed. Internal portal preview remains available:', error);
+    }
   },
 };

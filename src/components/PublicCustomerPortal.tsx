@@ -2,13 +2,14 @@ import { useEffect, useMemo, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { collection, doc, getDoc, getDocs, query, where } from 'firebase/firestore';
 import { AlertCircle, Calendar, CheckCircle, FileText, Info, LockKeyhole, MapPin } from 'lucide-react';
-import { db } from '../firebase';
+import { auth, db } from '../firebase';
 import {
   CustomerPortalHistoryItem,
   CustomerPortalQuoteItem,
   CustomerPortalRecord,
   customerPortalService,
 } from '../services/customerPortalService';
+import { waitForCurrentUser } from '../services/authSessionService';
 
 const toDate = (value: any) => {
   if (!value) return null;
@@ -27,6 +28,7 @@ export default function PublicCustomerPortal() {
   const [phoneInput, setPhoneInput] = useState('');
   const [phoneError, setPhoneError] = useState('');
   const [isPhoneVerified, setIsPhoneVerified] = useState(false);
+  const [portalSource, setPortalSource] = useState<'public' | 'internal_preview'>('public');
 
   const requiresPhoneGate = !!customerPortal && customerPortal.portal_access_mode === 'phone_only_temporary';
 
@@ -39,16 +41,41 @@ export default function PublicCustomerPortal() {
       }
 
       try {
+        let portalData: CustomerPortalRecord | null = null;
+
         const portalSnap = await getDoc(doc(db, 'public_customer_portals', portalToken));
-        if (!portalSnap.exists()) {
-          setError('Customer portal not found.');
-          setLoading(false);
-          return;
+        if (portalSnap.exists()) {
+          const publicPortalData = { customerId: portalSnap.id, ...portalSnap.data() } as CustomerPortalRecord;
+          if (
+            publicPortalData.portal_enabled &&
+            publicPortalData.portal_token === portalToken &&
+            publicPortalData.customerId === customerId
+          ) {
+            portalData = publicPortalData;
+            setPortalSource('public');
+          }
         }
 
-        const portalData = { customerId: portalSnap.id, ...portalSnap.data() } as CustomerPortalRecord;
-        if (!portalData.portal_enabled || portalData.portal_token !== portalToken || portalData.customerId !== customerId) {
-          setError('This customer portal link is invalid.');
+        if (!portalData) {
+          const currentUser = await waitForCurrentUser();
+          if (currentUser) {
+            const internalPortalSnap = await getDoc(doc(db, 'customer_portals', customerId));
+            if (internalPortalSnap.exists()) {
+              const internalPortalData = { customerId, ...internalPortalSnap.data() } as CustomerPortalRecord;
+              if (
+                internalPortalData.portal_enabled &&
+                internalPortalData.portal_token === portalToken &&
+                internalPortalData.customerId === customerId
+              ) {
+                portalData = internalPortalData;
+                setPortalSource('internal_preview');
+              }
+            }
+          }
+        }
+
+        if (!portalData) {
+          setError('Customer portal not found.');
           setLoading(false);
           return;
         }
@@ -83,22 +110,44 @@ export default function PublicCustomerPortal() {
 
       setLoading(true);
       try {
-        const [jobsSnap, quotesSnap] = await Promise.all([
-          getDocs(
-            query(
-              collection(db, 'public_customer_portal_job_history'),
-              where('portal_token', '==', portalToken),
-              where('portal_visible', '==', true)
-            )
-          ),
-          getDocs(
-            query(
-              collection(db, 'public_customer_portal_quotes'),
-              where('portal_token', '==', portalToken),
-              where('portal_visible', '==', true)
-            )
-          ),
-        ]);
+        let jobsSnap;
+        let quotesSnap;
+
+        if (portalSource === 'internal_preview' && auth.currentUser) {
+          [jobsSnap, quotesSnap] = await Promise.all([
+            getDocs(
+              query(
+                collection(db, 'customer_portal_job_history'),
+                where('customerId', '==', customerPortal.customerId),
+                where('portal_visible', '==', true)
+              )
+            ),
+            getDocs(
+              query(
+                collection(db, 'customer_portal_quotes'),
+                where('customerId', '==', customerPortal.customerId),
+                where('portal_visible', '==', true)
+              )
+            ),
+          ]);
+        } else {
+          [jobsSnap, quotesSnap] = await Promise.all([
+            getDocs(
+              query(
+                collection(db, 'public_customer_portal_job_history'),
+                where('portal_token', '==', portalToken),
+                where('portal_visible', '==', true)
+              )
+            ),
+            getDocs(
+              query(
+                collection(db, 'public_customer_portal_quotes'),
+                where('portal_token', '==', portalToken),
+                where('portal_visible', '==', true)
+              )
+            ),
+          ]);
+        }
 
         setJobs(
           jobsSnap.docs
@@ -262,6 +311,18 @@ export default function PublicCustomerPortal() {
   return (
     <div className="min-h-screen bg-gray-50 py-12 px-4 sm:px-6 lg:px-8">
       <div className="max-w-3xl mx-auto space-y-6">
+        {portalSource === 'internal_preview' && (
+          <div className="bg-amber-50 border border-amber-100 rounded-2xl p-4 flex items-start gap-3">
+            <AlertCircle className="h-5 w-5 text-amber-600 flex-shrink-0 mt-0.5" />
+            <div>
+              <h3 className="text-sm font-black text-amber-900 mb-1">Portal Preview Mode</h3>
+              <p className="text-xs font-bold text-amber-700 leading-relaxed">
+                Public portal data is unavailable right now, so this is loading from the internal portal record while you are signed in.
+              </p>
+            </div>
+          </div>
+        )}
+
         <div className="bg-blue-50 border border-blue-100 rounded-2xl p-4 flex items-start gap-3">
           <Info className="h-5 w-5 text-blue-600 flex-shrink-0 mt-0.5" />
           <div>
