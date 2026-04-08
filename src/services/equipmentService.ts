@@ -1,7 +1,7 @@
 import { collection, addDoc, updateDoc, deleteDoc, doc, query, where, serverTimestamp, onSnapshot } from 'firebase/firestore';
 import { db, auth } from '../firebase';
 import { waitForCurrentUser } from './authSessionService';
-import { handleFirestoreError, OperationType } from './verificationService';
+import { localFallbackStore } from './localFallbackStore';
 
 export interface Equipment {
   id?: string;
@@ -19,33 +19,91 @@ export interface Equipment {
   created_at?: any;
 }
 
+const COLLECTION_NAME = 'equipment';
+const LOCAL_FALLBACK_NAMESPACE = 'equipment';
+type LocalEquipment = Equipment & { _local_deleted?: boolean };
+const equipmentCache = new Map<string, Equipment>();
+const toClientTimestamp = () => new Date().toISOString();
+
+const normalizeLocalEquipment = (ownerId: string, entry: Partial<LocalEquipment>): Equipment => ({
+  id: entry.id,
+  ownerId,
+  name: entry.name || '',
+  brand: entry.brand || '',
+  model: entry.model || '',
+  serial_number: entry.serial_number || '',
+  part_number: entry.part_number || '',
+  notes: entry.notes || '',
+  service_history: entry.service_history || [],
+  created_at: entry.created_at as any,
+});
+
+const mergeEquipment = (primaryEquipment: Equipment[], localEquipment: LocalEquipment[]) => {
+  const next = new Map<string, Equipment>();
+  primaryEquipment.forEach((entry) => {
+    if (!entry.id) return;
+    next.set(entry.id, entry);
+  });
+  localEquipment.forEach((entry) => {
+    if (!entry.id) return;
+    if (entry._local_deleted) {
+      next.delete(entry.id);
+      return;
+    }
+    next.set(entry.id, normalizeLocalEquipment(entry.ownerId, entry));
+  });
+  const merged = Array.from(next.values()).sort((left, right) => left.name.localeCompare(right.name));
+  equipmentCache.clear();
+  merged.forEach((entry) => {
+    if (entry.id) equipmentCache.set(entry.id, entry);
+  });
+  return merged;
+};
+
 export const equipmentService = {
   subscribeToEquipment: (callback: (equipment: Equipment[]) => void) => {
     let unsubscribeEquipment = () => {};
+    let unsubscribeLocal = () => {};
+    let primaryEquipment: Equipment[] = [];
+    let localEquipment: LocalEquipment[] = [];
+
+    const emit = () => callback(mergeEquipment(primaryEquipment, localEquipment));
 
     const unsubscribeAuth = auth.onAuthStateChanged((user) => {
       unsubscribeEquipment();
+      unsubscribeLocal();
+      primaryEquipment = [];
+      localEquipment = [];
 
       if (!user) {
+        equipmentCache.clear();
         callback([]);
         return;
       }
 
-      const q = query(collection(db, 'equipment'), where('ownerId', '==', user.uid));
+      const q = query(collection(db, COLLECTION_NAME), where('ownerId', '==', user.uid));
       
       unsubscribeEquipment = onSnapshot(q, (snapshot) => {
-        const equipment = snapshot.docs.map(doc => ({
+        primaryEquipment = snapshot.docs.map(doc => ({
           id: doc.id,
           ...doc.data()
         })) as Equipment[];
-        callback(equipment);
+        emit();
       }, (error) => {
-        console.error("Error fetching equipment:", error);
+        console.error('Primary equipment subscription failed, using local fallback only:', error);
+        primaryEquipment = [];
+        emit();
+      });
+
+      unsubscribeLocal = localFallbackStore.subscribeToRecords<LocalEquipment>(LOCAL_FALLBACK_NAMESPACE, user.uid, (records) => {
+        localEquipment = records;
+        emit();
       });
     });
 
     return () => {
       unsubscribeEquipment();
+      unsubscribeLocal();
       unsubscribeAuth();
     };
   },
@@ -55,35 +113,87 @@ export const equipmentService = {
     if (!user) throw new Error('User not authenticated');
 
     try {
-      return await addDoc(collection(db, 'equipment'), {
+      return await addDoc(collection(db, COLLECTION_NAME), {
         ...equipmentData,
         ownerId: user.uid,
         created_at: serverTimestamp()
       });
     } catch (error) {
-      handleFirestoreError(error, OperationType.WRITE, 'equipment');
+      console.error('Primary equipment save failed, saving locally instead:', error);
+      const localId = localFallbackStore.upsertRecord<LocalEquipment>(LOCAL_FALLBACK_NAMESPACE, user.uid, {
+        id: localFallbackStore.createLocalId(LOCAL_FALLBACK_NAMESPACE),
+        ...equipmentData,
+        ownerId: user.uid,
+        created_at: toClientTimestamp() as any,
+      });
+      return { id: localId };
     }
   },
 
   updateEquipment: async (id: string, data: Partial<Equipment>) => {
     const user = await waitForCurrentUser();
     if (!user) throw new Error('User not authenticated');
-    const docRef = doc(db, 'equipment', id);
+    const docRef = doc(db, COLLECTION_NAME, id);
     try {
+      if (localFallbackStore.isLocalId(id, LOCAL_FALLBACK_NAMESPACE)) {
+        localFallbackStore.updateRecord<LocalEquipment>(LOCAL_FALLBACK_NAMESPACE, user.uid, id, {
+          ...data,
+          _local_deleted: false,
+        });
+        return;
+      }
       return await updateDoc(docRef, data);
     } catch (error) {
-      handleFirestoreError(error, OperationType.UPDATE, `equipment/${id}`);
+      console.error('Primary equipment update failed, updating local fallback instead:', error);
+      const cachedEquipment = equipmentCache.get(id);
+      localFallbackStore.upsertRecord<LocalEquipment>(LOCAL_FALLBACK_NAMESPACE, user.uid, {
+        ...(cachedEquipment || {
+          id,
+          ownerId: user.uid,
+          name: data.name || '',
+          brand: data.brand || '',
+          model: data.model || '',
+          serial_number: data.serial_number || '',
+          part_number: data.part_number || '',
+          notes: data.notes || '',
+          service_history: data.service_history || [],
+          created_at: toClientTimestamp() as any,
+        }),
+        ...data,
+        _local_deleted: false,
+      } as LocalEquipment);
     }
   },
 
   deleteEquipment: async (id: string) => {
     const user = await waitForCurrentUser();
     if (!user) throw new Error('User not authenticated');
-    const docRef = doc(db, 'equipment', id);
+    const docRef = doc(db, COLLECTION_NAME, id);
     try {
+      if (localFallbackStore.isLocalId(id, LOCAL_FALLBACK_NAMESPACE)) {
+        localFallbackStore.removeRecord<LocalEquipment>(LOCAL_FALLBACK_NAMESPACE, user.uid, id);
+        equipmentCache.delete(id);
+        return;
+      }
       return await deleteDoc(docRef);
     } catch (error) {
-      handleFirestoreError(error, OperationType.DELETE, `equipment/${id}`);
+      console.error('Primary equipment delete failed, hiding it locally instead:', error);
+      const cachedEquipment = equipmentCache.get(id);
+      localFallbackStore.upsertRecord<LocalEquipment>(LOCAL_FALLBACK_NAMESPACE, user.uid, {
+        ...(cachedEquipment || {
+          id,
+          ownerId: user.uid,
+          name: '',
+          brand: '',
+          model: '',
+          serial_number: '',
+          part_number: '',
+          notes: '',
+          service_history: [],
+          created_at: toClientTimestamp() as any,
+        }),
+        _local_deleted: true,
+      } as LocalEquipment);
     }
   }
 };
