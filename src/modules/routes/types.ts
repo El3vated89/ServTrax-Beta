@@ -3,6 +3,8 @@ import { Timestamp } from 'firebase/firestore';
 export type RouteStatus = 'draft' | 'active' | 'in_progress' | 'completed' | 'archived';
 export type StopDueState = 'upcoming' | 'due' | 'overdue' | 'delayed' | 'completed';
 export type OptimizationMode = 'none' | 'close_to_far' | 'far_to_close' | 'optimized';
+export type RouteTemplateCadence = 'weekly' | 'bi_weekly' | 'monthly' | 'manual';
+export type RouteTemplateMode = 'day' | 'area' | 'hybrid' | 'custom';
 
 export interface BaseCamp {
   label: string;
@@ -11,10 +13,30 @@ export interface BaseCamp {
   lng: number;
 }
 
+export interface RouteTemplate {
+  id?: string;
+  ownerId: string;
+  name: string;
+  mode: RouteTemplateMode;
+  cadence: RouteTemplateCadence;
+  preferred_day?: number | null;
+  service_area?: string;
+  include_overdue: boolean;
+  include_skipped: boolean;
+  include_delayed: boolean;
+  created_at?: Timestamp;
+  updated_at?: Timestamp;
+}
+
 export interface Route {
   id?: string;
   ownerId: string;
   name: string;
+  template_id?: string;
+  template_name?: string;
+  template_mode?: RouteTemplateMode;
+  template_day?: number | null;
+  template_area?: string;
   route_date: Timestamp | string;
   status: RouteStatus;
   base_camp_label: string;

@@ -1,7 +1,7 @@
-import { collection, addDoc, updateDoc, deleteDoc, doc, query, where, serverTimestamp, onSnapshot, orderBy, Timestamp, getDoc, getDocs, limit } from 'firebase/firestore';
+import { collection, addDoc, updateDoc, deleteDoc, doc, query, where, serverTimestamp, onSnapshot, orderBy, Timestamp, getDoc, getDocs } from 'firebase/firestore';
 import { db, auth } from '../firebase';
 import { handleFirestoreError, OperationType } from './verificationService';
-import { Route, RouteStop } from '../modules/routes/types';
+import { Route, RouteStop, RouteTemplate } from '../modules/routes/types';
 
 const getActorNameSnapshot = () => auth.currentUser?.displayName || auth.currentUser?.email || auth.currentUser?.uid || 'Unknown User';
 
@@ -60,6 +60,55 @@ export const routeService = {
     }
   },
 
+  getRoutesByDate: async (date: Date) => {
+    const user = auth.currentUser;
+    if (!user) return [];
+
+    const start = new Date(date);
+    start.setHours(0, 0, 0, 0);
+    const end = new Date(date);
+    end.setHours(23, 59, 59, 999);
+
+    const q = query(
+      collection(db, 'routes'),
+      where('ownerId', '==', user.uid),
+      where('route_date', '>=', Timestamp.fromDate(start)),
+      where('route_date', '<=', Timestamp.fromDate(end))
+    );
+
+    try {
+      const querySnapshot = await getDocs(q);
+      return querySnapshot.docs.map((entry) => ({ id: entry.id, ...entry.data() } as Route));
+    } catch (error) {
+      handleFirestoreError(error, OperationType.GET, 'routes_by_date');
+      return [];
+    }
+  },
+
+  subscribeToRoutesByDate: (date: Date, callback: (routes: Route[]) => void) => {
+    const user = auth.currentUser;
+    if (!user) return () => {};
+
+    const start = new Date(date);
+    start.setHours(0, 0, 0, 0);
+    const end = new Date(date);
+    end.setHours(23, 59, 59, 999);
+
+    const q = query(
+      collection(db, 'routes'),
+      where('ownerId', '==', user.uid),
+      where('route_date', '>=', Timestamp.fromDate(start)),
+      where('route_date', '<=', Timestamp.fromDate(end)),
+      orderBy('route_date', 'asc')
+    );
+
+    return onSnapshot(q, (snapshot) => {
+      callback(snapshot.docs.map((entry) => ({ id: entry.id, ...entry.data() } as Route)));
+    }, (error) => {
+      handleFirestoreError(error, OperationType.GET, 'routes_by_date');
+    });
+  },
+
   subscribeToRoutes: (callback: (routes: Route[]) => void) => {
     const user = auth.currentUser;
     if (!user) return () => {};
@@ -97,6 +146,27 @@ export const routeService = {
     }, (error) => {
       handleFirestoreError(error, OperationType.GET, `route_stops/${routeId}`);
     });
+  },
+
+  getRouteStops: async (routeId: string) => {
+    const q = query(
+      collection(db, 'route_stops'),
+      where('route_id', '==', routeId),
+      orderBy('stop_order', 'asc')
+    );
+
+    try {
+      const querySnapshot = await getDocs(q);
+      return querySnapshot.docs.map((entry) => ({ id: entry.id, ...entry.data() } as RouteStop));
+    } catch (error) {
+      handleFirestoreError(error, OperationType.GET, `route_stops/${routeId}`);
+      return [];
+    }
+  },
+
+  getRouteByTemplateAndDate: async (templateId: string, date: Date) => {
+    const routes = await routeService.getRoutesByDate(date);
+    return routes.find((route) => route.template_id === templateId) || null;
   },
 
   createRoute: async (routeData: Omit<Route, 'id' | 'ownerId' | 'created_by' | 'created_at' | 'updated_at'>) => {
@@ -179,6 +249,48 @@ export const routeService = {
 
     const newRouteData = {
       name: `Route for ${date.toLocaleDateString()}`,
+      route_date: Timestamp.fromDate(date),
+      status: 'draft' as const,
+      base_camp_label: baseCamp.label,
+      base_camp_address: baseCamp.address,
+      base_camp_lat: baseCamp.lat,
+      base_camp_lng: baseCamp.lng,
+      return_to_base: true,
+      optimization_mode: 'none' as const,
+      manual_override: false
+    };
+
+    const newRouteRef = await routeService.createRoute(newRouteData);
+    if (!newRouteRef) return null;
+
+    return {
+      id: newRouteRef.id,
+      ownerId: auth.currentUser?.uid || '',
+      created_by: auth.currentUser?.uid || '',
+      created_by_name: getActorNameSnapshot(),
+      created_at: Timestamp.now(),
+      updated_at: Timestamp.now(),
+      ...newRouteData
+    } as Route;
+  },
+
+  ensureRouteRunForTemplate: async (
+    template: RouteTemplate,
+    date: Date,
+    baseCamp: { label: string; address: string; lat: number; lng: number }
+  ) => {
+    if (!template.id) return null;
+
+    const existingRoute = await routeService.getRouteByTemplateAndDate(template.id, date);
+    if (existingRoute) return existingRoute;
+
+    const newRouteData = {
+      name: `${template.name} - ${date.toLocaleDateString()}`,
+      template_id: template.id,
+      template_name: template.name,
+      template_mode: template.mode,
+      template_day: template.preferred_day ?? null,
+      template_area: template.service_area || '',
       route_date: Timestamp.fromDate(date),
       status: 'draft' as const,
       base_camp_label: baseCamp.label,

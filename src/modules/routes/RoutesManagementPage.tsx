@@ -1,32 +1,36 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { AlertTriangle, CheckCircle2, ChevronRight, Clock, GripVertical, Map as MapIcon, Plus, Save, Search, Users } from 'lucide-react';
+import { useLocation, useNavigate } from 'react-router-dom';
+import {
+  AlertTriangle,
+  Calendar,
+  CheckCircle2,
+  ChevronRight,
+  GripVertical,
+  MapPin,
+  Pencil,
+  Plus,
+  RefreshCw,
+  Save,
+  Search,
+  Trash2,
+  Users,
+  X,
+} from 'lucide-react';
 import { Timestamp } from 'firebase/firestore';
-import { auth } from '../../firebase';
-import { customerService, Customer } from '../../services/customerService';
 import { jobService, Job } from '../../services/jobService';
-import { routeOptimizationService } from '../../services/RouteOptimizationService';
+import { routePlanningService } from '../../services/routePlanningService';
+import { routeTemplateService } from '../../services/routeTemplateService';
 import { routeService } from '../../services/RouteService';
 import { BASE_CAMP } from './constants';
 import RouteStopCard from './components/RouteStopCard';
-import { BaseCamp, Route, RouteStatus, RouteStop } from './types';
+import { BaseCamp, Route, RouteStop, RouteTemplate, RouteTemplateCadence, RouteTemplateMode } from './types';
 
-type PlannerMode = 'day' | 'week';
-type BuilderFilter = 'all' | 'draft' | 'in_progress';
-type PanelMode = 'builder' | 'history';
-type QueueFilter = 'needs_attention' | 'due' | 'overdue' | 'unassigned' | 'assigned';
-type JobTimingState = 'due' | 'overdue' | 'upcoming' | 'unscheduled';
+const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 
-type DraftRouteStop = RouteStop & {
-  temp_key: string;
-};
-
-const MS_PER_DAY = 24 * 60 * 60 * 1000;
-
-const toDate = (value: Timestamp | string | Date | undefined) => {
+const toDate = (value: any) => {
   if (!value) return new Date();
   if (value instanceof Timestamp) return value.toDate();
-  if (value instanceof Date) return value;
+  if (value?.toDate) return value.toDate();
   return new Date(value);
 };
 
@@ -36,74 +40,96 @@ const startOfDay = (value: Date) => {
   return next;
 };
 
-const sameDay = (left: Date, right: Date) => startOfDay(left).getTime() === startOfDay(right).getTime();
-
-const startOfWeek = (value: Date) => {
-  const next = startOfDay(value);
-  const weekday = next.getDay();
-  next.setDate(next.getDate() - weekday);
-  return next;
+const toDateInputValue = (value: Date) => {
+  const local = new Date(value);
+  local.setMinutes(local.getMinutes() - local.getTimezoneOffset());
+  return local.toISOString().slice(0, 10);
 };
 
-const formatRouteDate = (value: Timestamp | string) =>
+const getJobTimingState = (job: Job, selectedDate: Date) => {
+  const rawDate = job.next_due_date || job.scheduled_date;
+  if (!rawDate) return 'unscheduled';
+  const jobDate = startOfDay(toDate(rawDate)).getTime();
+  const selectedDay = startOfDay(selectedDate).getTime();
+  if (jobDate < selectedDay) return 'overdue';
+  if (job.status === 'skipped' || job.status === 'delayed') return 'carryover';
+  if (jobDate === selectedDay) return 'due';
+  return 'upcoming';
+};
+
+const formatRouteDate = (value: any) =>
   toDate(value).toLocaleDateString('en-US', {
     weekday: 'short',
     month: 'short',
     day: 'numeric',
   });
 
-const routeStatusClasses: Record<RouteStatus, string> = {
-  draft: 'bg-gray-100 text-gray-700',
-  active: 'bg-blue-50 text-blue-600',
-  in_progress: 'bg-amber-50 text-amber-600',
-  completed: 'bg-green-50 text-green-600',
-  archived: 'bg-slate-100 text-slate-600',
+const cadenceLabels: Record<RouteTemplateCadence, string> = {
+  weekly: 'Weekly',
+  bi_weekly: 'Bi-weekly',
+  monthly: 'Monthly',
+  manual: 'Manual',
 };
 
-const getJobScheduleDate = (job: Job) => {
-  const rawDate = job.next_due_date || job.scheduled_date || job.last_completed_date;
-  return rawDate ? toDate(rawDate) : null;
+const modeLabels: Record<RouteTemplateMode, string> = {
+  day: 'Day',
+  area: 'Area',
+  hybrid: 'Day + Area',
+  custom: 'Custom',
 };
 
-const getJobTimingState = (job: Job, selectedDate: Date): JobTimingState => {
-  const scheduleDate = getJobScheduleDate(job);
-  if (!scheduleDate) return 'unscheduled';
-
-  const selectedDay = startOfDay(selectedDate).getTime();
-  const jobDay = startOfDay(scheduleDate).getTime();
-
-  if (jobDay < selectedDay) return 'overdue';
-  if (jobDay === selectedDay) return 'due';
-  return 'upcoming';
+const defaultTemplateForm = {
+  id: '',
+  name: '',
+  mode: 'hybrid' as RouteTemplateMode,
+  cadence: 'weekly' as RouteTemplateCadence,
+  preferred_day: new Date().getDay().toString(),
+  service_area: '',
+  include_overdue: true,
+  include_skipped: true,
+  include_delayed: true,
 };
 
 export default function RoutesManagementPage() {
+  const location = useLocation();
   const navigate = useNavigate();
+  const [templates, setTemplates] = useState<RouteTemplate[]>([]);
   const [routes, setRoutes] = useState<Route[]>([]);
-  const [selectedRouteId, setSelectedRouteId] = useState<string | null>(null);
-  const [selectedDate, setSelectedDate] = useState<Date>(new Date());
-  const [plannerMode, setPlannerMode] = useState<PlannerMode>('week');
-  const [panelMode, setPanelMode] = useState<PanelMode>('builder');
-  const [builderFilter, setBuilderFilter] = useState<BuilderFilter>('all');
-  const [selectedRouteStops, setSelectedRouteStops] = useState<RouteStop[]>([]);
-  const [draftStops, setDraftStops] = useState<DraftRouteStop[]>([]);
-  const [removedStopIds, setRemovedStopIds] = useState<string[]>([]);
-  const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
-  const [isSavingRoute, setIsSavingRoute] = useState(false);
-  const [saveMessage, setSaveMessage] = useState<string | null>(null);
-  const [queueFilter, setQueueFilter] = useState<QueueFilter>('needs_attention');
-  const [draggedJobId, setDraggedJobId] = useState<string | null>(null);
-  const [draggedStopKey, setDraggedStopKey] = useState<string | null>(null);
-  const [availableJobs, setAvailableJobs] = useState<Job[]>([]);
-  const [availableCustomers, setAvailableCustomers] = useState<Customer[]>([]);
+  const [selectedTemplateId, setSelectedTemplateId] = useState<string | null>(null);
+  const [selectedDate, setSelectedDate] = useState(new Date());
+  const [jobs, setJobs] = useState<Job[]>([]);
   const [baseCamp, setBaseCamp] = useState<BaseCamp>(BASE_CAMP);
-  const [builderSearchQuery, setBuilderSearchQuery] = useState('');
-  const [addStopSearchQuery, setAddStopSearchQuery] = useState('');
-  const [isAddingStop, setIsAddingStop] = useState(false);
-  const [isOptimizing, setIsOptimizing] = useState(false);
+  const [activeRunId, setActiveRunId] = useState<string | null>(null);
+  const [activeStops, setActiveStops] = useState<RouteStop[]>([]);
+  const [draftStops, setDraftStops] = useState<RouteStop[]>([]);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [isSyncingRun, setIsSyncingRun] = useState(false);
+  const [isSavingOrder, setIsSavingOrder] = useState(false);
+  const [isTemplateModalOpen, setIsTemplateModalOpen] = useState(false);
+  const [templateForm, setTemplateForm] = useState(defaultTemplateForm);
+  const [saveMessage, setSaveMessage] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [draggedStopId, setDraggedStopId] = useState<string | null>(null);
+  const [hasUnsavedOrder, setHasUnsavedOrder] = useState(false);
 
   useEffect(() => {
+    const routeState = location.state as { selectedDate?: string; selectedTemplateId?: string } | null;
+    if (routeState?.selectedDate) {
+      const nextDate = new Date(routeState.selectedDate);
+      if (!Number.isNaN(nextDate.getTime())) {
+        setSelectedDate(nextDate);
+      }
+    }
+    if (routeState?.selectedTemplateId) {
+      setSelectedTemplateId(routeState.selectedTemplateId);
+    }
+  }, [location.state]);
+
+  useEffect(() => {
+    const unsubscribeTemplates = routeTemplateService.subscribeToTemplates(setTemplates);
+    const unsubscribeRoutes = routeService.subscribeToRoutes(setRoutes);
+    const unsubscribeJobs = jobService.subscribeToJobs(setJobs);
+
     const loadBaseCamp = async () => {
       const profile = await routeService.getBusinessProfile();
       if (profile?.base_camp_address) {
@@ -118,532 +144,269 @@ export default function RoutesManagementPage() {
 
     loadBaseCamp();
 
-    const unsubscribeRoutes = routeService.subscribeToRoutes(setRoutes);
-    return () => unsubscribeRoutes();
-  }, []);
-
-  useEffect(() => {
-    let unsubscribeJobs: () => void = () => {};
-    let unsubscribeCustomers: () => void = () => {};
-
-    const authUnsubscribe = auth.onAuthStateChanged((user) => {
-      unsubscribeJobs();
-      unsubscribeCustomers();
-
-      if (!user) {
-        setAvailableJobs([]);
-        setAvailableCustomers([]);
-        return;
-      }
-
-      unsubscribeJobs = jobService.subscribeToJobs(setAvailableJobs);
-      unsubscribeCustomers = customerService.subscribeToCustomers(setAvailableCustomers);
-    });
-
     return () => {
-      authUnsubscribe();
+      unsubscribeTemplates();
+      unsubscribeRoutes();
       unsubscribeJobs();
-      unsubscribeCustomers();
     };
   }, []);
 
   useEffect(() => {
-    if (!selectedRouteId) {
-      setSelectedRouteStops([]);
+    if (templates.length === 0) {
+      setSelectedTemplateId(null);
       return;
     }
 
-    const unsubscribeStops = routeService.subscribeToRouteStops(selectedRouteId, setSelectedRouteStops);
+    if (!selectedTemplateId || !templates.some((template) => template.id === selectedTemplateId)) {
+      setSelectedTemplateId(templates[0].id || null);
+    }
+  }, [selectedTemplateId, templates]);
+
+  useEffect(() => {
+    if (!saveMessage && !errorMessage) return undefined;
+    const timeout = window.setTimeout(() => {
+      setSaveMessage(null);
+      setErrorMessage(null);
+    }, 2500);
+    return () => window.clearTimeout(timeout);
+  }, [errorMessage, saveMessage]);
+
+  const selectedTemplate = templates.find((template) => template.id === selectedTemplateId) || null;
+
+  const matchingRuns = useMemo(() => {
+    if (!selectedTemplate?.id) return [];
+
+    return routes
+      .filter((route) => route.template_id === selectedTemplate.id)
+      .sort((left, right) => toDate(right.route_date).getTime() - toDate(left.route_date).getTime());
+  }, [routes, selectedTemplate]);
+
+  const currentRun = useMemo(() => {
+    if (!selectedTemplate?.id) return null;
+
+    return matchingRuns.find((route) => startOfDay(toDate(route.route_date)).getTime() === startOfDay(selectedDate).getTime()) || null;
+  }, [matchingRuns, selectedDate, selectedTemplate]);
+
+  useEffect(() => {
+    setActiveRunId(currentRun?.id || null);
+  }, [currentRun?.id]);
+
+  useEffect(() => {
+    if (!activeRunId) {
+      setActiveStops([]);
+      return;
+    }
+
+    const unsubscribeStops = routeService.subscribeToRouteStops(activeRunId, setActiveStops);
     return () => unsubscribeStops();
-  }, [selectedRouteId]);
+  }, [activeRunId]);
 
   useEffect(() => {
-    setHasUnsavedChanges(false);
-    setRemovedStopIds([]);
-    setSaveMessage(null);
-  }, [selectedRouteId]);
+    setDraftStops(activeStops);
+    setHasUnsavedOrder(false);
+  }, [activeStops]);
 
-  useEffect(() => {
-    if (hasUnsavedChanges) return;
-
-    setDraftStops(
-      selectedRouteStops.map((stop, index) => ({
-        ...stop,
-        temp_key: stop.id || `existing-${index}`,
-      }))
-    );
-  }, [hasUnsavedChanges, selectedRouteStops]);
-
-  const selectedWeekDays = useMemo(() => {
-    const weekStart = startOfWeek(selectedDate);
-    return Array.from({ length: 7 }, (_, index) => {
-      const day = new Date(weekStart);
-      day.setDate(weekStart.getDate() + index);
-      return day;
-    });
-  }, [selectedDate]);
-
-  const routesInWindow = useMemo(() => {
-    return routes.filter((route) => {
-      const routeDate = toDate(route.route_date);
-      if (plannerMode === 'day') return sameDay(routeDate, selectedDate);
-
-      const weekStart = startOfWeek(selectedDate).getTime();
-      const weekEnd = weekStart + (7 * MS_PER_DAY);
-      const routeTime = startOfDay(routeDate).getTime();
-      return routeTime >= weekStart && routeTime < weekEnd;
-    });
-  }, [plannerMode, routes, selectedDate]);
-
-  const planningRoutes = useMemo(
-    () => routesInWindow.filter((route) => !['completed', 'archived'].includes(route.status)),
-    [routesInWindow]
-  );
-
-  const historyRoutes = useMemo(
-    () => routesInWindow.filter((route) => ['completed', 'archived'].includes(route.status)),
-    [routesInWindow]
-  );
-
-  const filteredPlanningRoutes = useMemo(() => {
-    if (builderFilter === 'all') return planningRoutes;
-    return planningRoutes.filter((route) => route.status === builderFilter);
-  }, [builderFilter, planningRoutes]);
-
-  const visibleRoutes = panelMode === 'history' ? historyRoutes : filteredPlanningRoutes;
-  const selectedRoute = visibleRoutes.find((route) => route.id === selectedRouteId) || null;
-
-  useEffect(() => {
-    if (visibleRoutes.length === 0) {
-      setSelectedRouteId(null);
-      return;
-    }
-
-    const hasCurrentSelection = selectedRouteId && visibleRoutes.some((route) => route.id === selectedRouteId);
-    if (!hasCurrentSelection) {
-      const preferredRoute = visibleRoutes.find((route) => sameDay(toDate(route.route_date), selectedDate)) || visibleRoutes[0];
-      setSelectedRouteId(preferredRoute.id || null);
-    }
-  }, [selectedDate, selectedRouteId, visibleRoutes]);
-
-  const selectedDayRoute = planningRoutes.find((route) => sameDay(toDate(route.route_date), selectedDate)) || null;
+  const eligibleJobs = useMemo(() => {
+    if (!selectedTemplate) return [];
+    return routePlanningService.getEligibleJobsForTemplate(jobs, selectedTemplate, selectedDate);
+  }, [jobs, selectedDate, selectedTemplate]);
 
   const assignedJobIds = useMemo(
     () => new Set(draftStops.map((stop) => stop.job_id).filter(Boolean)),
     [draftStops]
   );
 
-  const plannerJobs = useMemo(
-    () =>
-      availableJobs.filter((job) =>
-        !['completed', 'canceled', 'quote'].includes(job.status)
-      ),
-    [availableJobs]
-  );
-
-  const queueStats = useMemo(() => {
-    const due = plannerJobs.filter((job) => getJobTimingState(job, selectedDate) === 'due').length;
-    const overdue = plannerJobs.filter((job) => getJobTimingState(job, selectedDate) === 'overdue').length;
-    const unassigned = plannerJobs.filter((job) => !assignedJobIds.has(job.id)).length;
-    const assigned = plannerJobs.filter((job) => assignedJobIds.has(job.id)).length;
-
-    return {
-      due,
-      overdue,
-      unassigned,
-      assigned,
-      needsAttention: plannerJobs.filter((job) => {
-        const timingState = getJobTimingState(job, selectedDate);
-        return timingState === 'overdue' || (timingState === 'due' && !assignedJobIds.has(job.id));
-      }).length,
-    };
-  }, [assignedJobIds, plannerJobs, selectedDate]);
-
-  const visibleQueueJobs = useMemo(() => {
-    const query = builderSearchQuery.trim().toLowerCase();
-
-    return plannerJobs.filter((job) => {
-      const matchesSearch =
+  const filteredJobs = useMemo(() => {
+    const query = searchQuery.trim().toLowerCase();
+    return eligibleJobs.filter((job) => {
+      const matchesSearch = !query ||
         job.customer_name_snapshot.toLowerCase().includes(query) ||
-        job.address_snapshot.toLowerCase().includes(query) ||
-        job.service_snapshot.toLowerCase().includes(query);
-
-      if (!matchesSearch) return false;
-
-      const timingState = getJobTimingState(job, selectedDate);
-      const isAssigned = assignedJobIds.has(job.id);
-
-      if (queueFilter === 'assigned') return isAssigned;
-      if (queueFilter === 'unassigned') return !isAssigned;
-      if (queueFilter === 'overdue') return timingState === 'overdue';
-      if (queueFilter === 'due') return timingState === 'due';
-
-      return timingState === 'overdue' || (timingState === 'due' && !isAssigned);
+        job.service_snapshot.toLowerCase().includes(query) ||
+        job.address_snapshot.toLowerCase().includes(query);
+      return matchesSearch;
     });
-  }, [assignedJobIds, builderSearchQuery, plannerJobs, queueFilter, selectedDate]);
+  }, [eligibleJobs, searchQuery]);
 
-  const visibleStops = useMemo(() => {
-    const query = builderSearchQuery.trim().toLowerCase();
-    const sourceStops = panelMode === 'builder' ? draftStops : selectedRouteStops;
-    if (!query) return sourceStops;
+  const queueStats = useMemo(() => ({
+    due: eligibleJobs.filter((job) => getJobTimingState(job, selectedDate) === 'due').length,
+    overdue: eligibleJobs.filter((job) => getJobTimingState(job, selectedDate) === 'overdue').length,
+    unassigned: eligibleJobs.filter((job) => !assignedJobIds.has(job.id)).length,
+    assigned: eligibleJobs.filter((job) => assignedJobIds.has(job.id)).length,
+    carryover: eligibleJobs.filter((job) => ['skipped', 'delayed'].includes(job.status)).length,
+  }), [eligibleJobs, selectedDate, assignedJobIds]);
 
-    return sourceStops.filter((stop) =>
-      stop.customer_name_snapshot.toLowerCase().includes(query) ||
-      stop.address_snapshot.toLowerCase().includes(query) ||
-      stop.city_snapshot.toLowerCase().includes(query) ||
-      stop.service_type_snapshot.toLowerCase().includes(query)
-    );
-  }, [builderSearchQuery, draftStops, panelMode, selectedRouteStops]);
-
-  const routeStats = {
-    planning: planningRoutes.length,
-    drafts: planningRoutes.filter((route) => route.status === 'draft').length,
-    inProgress: planningRoutes.filter((route) => route.status === 'in_progress').length,
-    history: historyRoutes.length,
-  };
-  const canReorderVisibleStops = panelMode === 'builder' && builderSearchQuery.trim() === '';
-
-  const handleCreateRouteForDay = async () => {
-    setErrorMessage(null);
-
-    try {
-      const route = await routeService.ensureRouteForDate(selectedDate, baseCamp);
-      if (route?.id) {
-        setPanelMode('builder');
-        setBuilderFilter('all');
-        setSelectedRouteId(route.id);
-      }
-    } catch (error) {
-      console.error('Error creating route for day:', error);
-      setErrorMessage('Failed to create route for the selected day.');
-    }
-  };
-
-  const handleShiftWindow = (direction: 'back' | 'forward') => {
-    const increment = plannerMode === 'week' ? 7 : 1;
-    const delta = direction === 'back' ? -increment : increment;
-    setSelectedDate((current) => new Date(current.getTime() + (delta * MS_PER_DAY)));
-  };
-
-  const handleOpenDailyRoute = (route: Route) => {
-    navigate('/map', {
-      state: {
-        selectedRouteDate: toDate(route.route_date).toISOString(),
-      },
-    });
-  };
-
-  const handleAddJobToRoute = async (job: Job) => {
-    if (!selectedRoute?.id || assignedJobIds.has(job.id)) return;
-
-    const lat = baseCamp.lat + ((Math.random() - 0.5) * 0.1);
-    const lng = baseCamp.lng + ((Math.random() - 0.5) * 0.1);
-
-    setDraftStops((current) => [
-      ...current,
-      {
-        route_id: selectedRoute.id!,
-        job_id: job.id,
-        customer_id: job.customerId,
-        stop_order: current.length,
-        manual_order: current.length,
-        optimized_order: current.length,
-        status: 'pending',
-        due_state: getJobTimingState(job, selectedDate) === 'overdue' ? 'overdue' : 'due',
-        city_snapshot: (job.address_snapshot || '').split(',')[1]?.trim() || '',
-        address_snapshot: job.address_snapshot || '',
-        lat_snapshot: lat,
-        lng_snapshot: lng,
-        service_type_snapshot: job.service_snapshot || 'General Service',
-        customer_name_snapshot: job.customer_name_snapshot || 'Unknown Customer',
-        price_snapshot: job.price_snapshot || 0,
-        last_service_date_snapshot: job.completed_date || '',
-        scheduled_date: job.scheduled_date || Timestamp.now(),
-        due_date: job.scheduled_date || Timestamp.now(),
-        created_at: Timestamp.now(),
-        updated_at: Timestamp.now(),
-        temp_key: `job-${job.id}`,
-      },
-    ]);
-    setHasUnsavedChanges(true);
-    setSaveMessage(null);
-  };
-
-  const handleAddCustomerToRoute = async (customer: Customer) => {
-    if (!selectedRoute?.id) return;
-
-    const lat = baseCamp.lat + ((Math.random() - 0.5) * 0.1);
-    const lng = baseCamp.lng + ((Math.random() - 0.5) * 0.1);
-
-    setDraftStops((current) => [
-      ...current,
-      {
-        route_id: selectedRoute.id!,
-        customer_id: customer.id,
-        stop_order: current.length,
-        manual_order: current.length,
-        optimized_order: current.length,
-        status: 'pending',
-        due_state: 'due',
-        city_snapshot: customer.city || '',
-        address_snapshot: [customer.street, customer.city, customer.state, customer.zip].filter(Boolean).join(', '),
-        lat_snapshot: lat,
-        lng_snapshot: lng,
-        service_type_snapshot: 'General Service',
-        customer_name_snapshot: customer.name || 'Unknown Customer',
-        price_snapshot: 0,
-        scheduled_date: Timestamp.now(),
-        due_date: Timestamp.now(),
-        created_at: Timestamp.now(),
-        updated_at: Timestamp.now(),
-        temp_key: `customer-${customer.id}-${current.length}`,
-      },
-    ]);
-    setHasUnsavedChanges(true);
-    setSaveMessage(null);
-    setAddStopSearchQuery('');
-    setIsAddingStop(false);
-  };
-
-  const handleOptimizeRoute = async () => {
-    if (!selectedRoute?.id || draftStops.length === 0) return;
-    setIsOptimizing(true);
-    setErrorMessage(null);
-
-    try {
-      const optimizedStops = routeOptimizationService.optimizeRoute(
-        draftStops,
-        baseCamp,
-        selectedRoute.return_to_base
-      ).map((stop, index) => ({
-        ...stop,
-        stop_order: index,
-        manual_order: index,
-        temp_key: (stop as DraftRouteStop).temp_key || stop.id || `optimized-${index}`,
-      }));
-
-      setDraftStops(optimizedStops);
-      setHasUnsavedChanges(true);
-      setSaveMessage(null);
-    } catch (error) {
-      console.error('Error optimizing route:', error);
-      setErrorMessage('Failed to optimize the selected route.');
-    } finally {
-      setIsOptimizing(false);
-    }
-  };
-
-  const handleArrowReorder = async (index: number, direction: 'up' | 'down') => {
-    if (!selectedRoute?.id) return;
-
-    const reordered = [...draftStops];
-    const targetIndex = direction === 'up' ? index - 1 : index + 1;
-    if (targetIndex < 0 || targetIndex >= reordered.length) return;
-
-    const moved = reordered[index];
-    reordered[index] = reordered[targetIndex];
-    reordered[targetIndex] = moved;
-
-    setDraftStops(reordered.map((stop, orderIndex) => ({
-      ...stop,
-      stop_order: orderIndex,
-      manual_order: orderIndex,
-    })));
-    setHasUnsavedChanges(true);
-    setSaveMessage(null);
-  };
-
-  const handleRemoveStop = async (stop: RouteStop) => {
-    const confirmed = window.confirm(`Remove ${stop.customer_name_snapshot} from this route?`);
-    if (!confirmed) return;
-
-    if (stop.id) {
-      setRemovedStopIds((current) => Array.from(new Set([...current, stop.id!])));
-    }
-
-    setDraftStops((current) =>
-      current
-        .filter((currentStop) => currentStop.temp_key !== (stop as DraftRouteStop).temp_key && currentStop.id !== stop.id)
-        .map((currentStop, index) => ({
-          ...currentStop,
-          stop_order: index,
-          manual_order: index,
-        }))
-    );
-    setHasUnsavedChanges(true);
-    setSaveMessage(null);
-  };
-
-  const handleInsertJobAtIndex = (jobId: string, targetIndex?: number) => {
-    const job = plannerJobs.find((currentJob) => currentJob.id === jobId);
-    if (!job || !selectedRoute?.id || assignedJobIds.has(jobId)) return;
-
-    const lat = baseCamp.lat + ((Math.random() - 0.5) * 0.1);
-    const lng = baseCamp.lng + ((Math.random() - 0.5) * 0.1);
-    const insertIndex = typeof targetIndex === 'number' ? targetIndex : draftStops.length;
-
-    const nextDraft: DraftRouteStop = {
-      route_id: selectedRoute.id,
-      job_id: job.id,
-      customer_id: job.customerId,
-      stop_order: insertIndex,
-      manual_order: insertIndex,
-      optimized_order: insertIndex,
-      status: 'pending',
-      due_state: getJobTimingState(job, selectedDate) === 'overdue' ? 'overdue' : 'due',
-      city_snapshot: (job.address_snapshot || '').split(',')[1]?.trim() || '',
-      address_snapshot: job.address_snapshot || '',
-      lat_snapshot: lat,
-      lng_snapshot: lng,
-      service_type_snapshot: job.service_snapshot || 'General Service',
-      customer_name_snapshot: job.customer_name_snapshot || 'Unknown Customer',
-      price_snapshot: job.price_snapshot || 0,
-      last_service_date_snapshot: job.completed_date || '',
-      scheduled_date: job.scheduled_date || Timestamp.now(),
-      due_date: job.scheduled_date || Timestamp.now(),
-      created_at: Timestamp.now(),
-      updated_at: Timestamp.now(),
-      temp_key: `job-${job.id}`,
-    };
-
-    setDraftStops((current) =>
-      [...current.slice(0, insertIndex), nextDraft, ...current.slice(insertIndex)].map((stop, index) => ({
-        ...stop,
-        stop_order: index,
-        manual_order: index,
+  const queueSections = useMemo(() => {
+    const sectionOrder = ['overdue', 'carryover', 'due', 'upcoming'] as const;
+    return sectionOrder
+      .map((key) => ({
+        key,
+        label: key === 'carryover' ? 'Carryover Work' : key.charAt(0).toUpperCase() + key.slice(1),
+        jobs: filteredJobs.filter((job) => getJobTimingState(job, selectedDate) === key),
       }))
-    );
-    setHasUnsavedChanges(true);
-    setSaveMessage(null);
-  };
+      .filter((section) => section.jobs.length > 0);
+  }, [filteredJobs, selectedDate]);
 
-  const handleMoveDraftStop = (stopKey: string, targetIndex: number) => {
-    setDraftStops((current) => {
-      const fromIndex = current.findIndex((stop) => stop.temp_key === stopKey);
-      if (fromIndex === -1) return current;
+  const templateHistory = matchingRuns.slice(0, 6);
+  const isPreferredDayMatch = selectedTemplate ? routePlanningService.isTemplateActiveForDate(selectedTemplate, selectedDate) : true;
 
-      const next = [...current];
-      const [moved] = next.splice(fromIndex, 1);
-      next.splice(targetIndex, 0, moved);
-
-      return next.map((stop, index) => ({
-        ...stop,
-        stop_order: index,
-        manual_order: index,
-      }));
+  const openCreateTemplate = () => {
+    setTemplateForm({
+      ...defaultTemplateForm,
+      preferred_day: selectedDate.getDay().toString(),
     });
-    setHasUnsavedChanges(true);
-    setSaveMessage(null);
+    setIsTemplateModalOpen(true);
   };
 
-  const handleDropOnRoute = (targetIndex?: number) => {
-    if (draggedJobId) {
-      handleInsertJobAtIndex(draggedJobId, targetIndex);
-      setDraggedJobId(null);
+  const openEditTemplate = (template: RouteTemplate) => {
+    setTemplateForm({
+      id: template.id || '',
+      name: template.name,
+      mode: template.mode,
+      cadence: template.cadence,
+      preferred_day: template.preferred_day == null ? '' : String(template.preferred_day),
+      service_area: template.service_area || '',
+      include_overdue: template.include_overdue,
+      include_skipped: template.include_skipped,
+      include_delayed: template.include_delayed,
+    });
+    setIsTemplateModalOpen(true);
+  };
+
+  const handleSaveTemplate = async (event: React.FormEvent) => {
+    event.preventDefault();
+    setErrorMessage(null);
+
+    const trimmedName = templateForm.name.trim();
+    if (!trimmedName) {
+      setErrorMessage('Route template name is required.');
       return;
     }
 
-    if (draggedStopKey && typeof targetIndex === 'number') {
-      handleMoveDraftStop(draggedStopKey, targetIndex);
-      setDraggedStopKey(null);
+    const payload = {
+      name: trimmedName,
+      mode: templateForm.mode,
+      cadence: templateForm.cadence,
+      preferred_day: templateForm.preferred_day === '' ? null : Number(templateForm.preferred_day),
+      service_area: templateForm.service_area,
+      include_overdue: templateForm.include_overdue,
+      include_skipped: templateForm.include_skipped,
+      include_delayed: templateForm.include_delayed,
+    };
+
+    try {
+      if (templateForm.id) {
+        await routeTemplateService.updateTemplate(templateForm.id, payload);
+        setSaveMessage('Route template updated');
+      } else {
+        const ref = await routeTemplateService.addTemplate(payload as Omit<RouteTemplate, 'id' | 'ownerId' | 'created_at' | 'updated_at'>);
+        if (ref?.id) {
+          setSelectedTemplateId(ref.id);
+        }
+        setSaveMessage('Route template created');
+      }
+
+      setIsTemplateModalOpen(false);
+    } catch (error) {
+      console.error('Error saving route template:', error);
+      setErrorMessage('Failed to save route template.');
     }
   };
 
-  const handleSaveRoute = async () => {
-    if (!selectedRoute?.id) return;
-
-    setIsSavingRoute(true);
-    setErrorMessage(null);
-    setSaveMessage(null);
+  const handleDeleteTemplate = async (template: RouteTemplate) => {
+    if (!template.id) return;
+    const confirmed = window.confirm(`Delete ${template.name}?`);
+    if (!confirmed) return;
 
     try {
-      for (const stopId of removedStopIds) {
-        await routeService.deleteRouteStop(stopId);
-      }
-
-      const persistedStopUpdates = draftStops
-        .filter((stop) => Boolean(stop.id))
-        .map((stop, index) => ({
-          id: stop.id!,
-          stop_order: index,
-          manual_order: index,
-        }));
-
-      if (persistedStopUpdates.length > 0) {
-        await routeService.batchUpdateStopOrders(
-          persistedStopUpdates
-        );
-      }
-
-      for (let index = 0; index < draftStops.length; index += 1) {
-        const stop = draftStops[index];
-        if (stop.id) continue;
-
-        let jobId = stop.job_id;
-
-        if (!jobId && stop.customer_id) {
-          const jobRef = await jobService.addJob({
-            customerId: stop.customer_id,
-            customer_name_snapshot: stop.customer_name_snapshot,
-            address_snapshot: stop.address_snapshot,
-            phone_snapshot: '',
-            service_snapshot: stop.service_type_snapshot,
-            price_snapshot: stop.price_snapshot || 0,
-            status: 'pending',
-            payment_status: 'unpaid',
-            visibility_mode: 'internal_only',
-            is_billable: true,
-            is_recurring: false,
-            internal_notes: '',
-            customer_notes: '',
-            scheduled_date: stop.scheduled_date || Timestamp.now(),
-          });
-
-          if (!jobRef) {
-            throw new Error('Failed to create a manual job while saving the route.');
-          }
-
-          jobId = jobRef.id;
-        }
-
-        await routeService.addRouteStop({
-          route_id: selectedRoute.id,
-          customer_id: stop.customer_id,
-          job_id: jobId,
-          stop_order: index,
-          manual_order: index,
-          optimized_order: index,
-          status: stop.status,
-          due_state: stop.due_state,
-          city_snapshot: stop.city_snapshot,
-          address_snapshot: stop.address_snapshot,
-          lat_snapshot: stop.lat_snapshot,
-          lng_snapshot: stop.lng_snapshot,
-          service_type_snapshot: stop.service_type_snapshot,
-          customer_name_snapshot: stop.customer_name_snapshot,
-          price_snapshot: stop.price_snapshot,
-          last_service_date_snapshot: stop.last_service_date_snapshot,
-          scheduled_date: stop.scheduled_date,
-          due_date: stop.due_date,
-          assigned_user_id: stop.assigned_user_id,
-          assigned_user_name_snapshot: stop.assigned_user_name_snapshot,
-          notes_internal: stop.notes_internal,
-        });
-      }
-
-      await routeService.updateRoute(selectedRoute.id, {
-        manual_override: true,
-      });
-
-      setHasUnsavedChanges(false);
-      setRemovedStopIds([]);
-      setSaveMessage('Route saved');
+      await routeTemplateService.deleteTemplate(template.id);
+      setSaveMessage('Route template deleted');
     } catch (error) {
-      console.error('Error saving route builder changes:', error);
-      setErrorMessage('Failed to save the route builder changes.');
-    } finally {
-      setIsSavingRoute(false);
+      console.error('Error deleting route template:', error);
+      setErrorMessage('Failed to delete route template.');
     }
+  };
+
+  const handleSyncRun = async () => {
+    if (!selectedTemplate) return;
+    setIsSyncingRun(true);
+    setErrorMessage(null);
+
+    try {
+      const run = await routePlanningService.syncTemplateRun(selectedTemplate, selectedDate, jobs, baseCamp);
+      if (run?.id) {
+        setActiveRunId(run.id);
+      }
+      setSaveMessage(currentRun ? 'Route run refreshed' : 'Route run generated');
+    } catch (error) {
+      console.error('Error syncing route run:', error);
+      setErrorMessage('Failed to generate this route run.');
+    } finally {
+      setIsSyncingRun(false);
+    }
+  };
+
+  const moveDraftStop = (fromIndex: number, toIndex: number) => {
+    if (toIndex < 0 || toIndex >= draftStops.length || fromIndex === toIndex) return;
+
+    const nextStops = [...draftStops];
+    const [movedStop] = nextStops.splice(fromIndex, 1);
+    nextStops.splice(toIndex, 0, movedStop);
+    setDraftStops(nextStops);
+    setHasUnsavedOrder(true);
+  };
+
+  const handleArrowReorder = (index: number, direction: 'up' | 'down') => {
+    moveDraftStop(index, direction === 'up' ? index - 1 : index + 1);
+  };
+
+  const handleSaveRouteOrder = async () => {
+    if (!currentRun?.id || draftStops.length === 0) return;
+    setIsSavingOrder(true);
+    setErrorMessage(null);
+
+    try {
+      await routeService.batchUpdateStopOrders(
+        draftStops
+          .filter((stop) => stop.id)
+          .map((stop, index) => ({
+            id: stop.id!,
+            stop_order: index,
+            manual_order: index,
+          }))
+      );
+      await routeService.updateRoute(currentRun.id, { manual_override: true });
+      setHasUnsavedOrder(false);
+      setSaveMessage('Route order saved');
+    } catch (error) {
+      console.error('Error saving route order:', error);
+      setErrorMessage('Failed to save route order.');
+    } finally {
+      setIsSavingOrder(false);
+    }
+  };
+
+  const handleRemoveStop = async (stop: RouteStop) => {
+    if (!stop.id) return;
+    const confirmed = window.confirm(`Remove ${stop.customer_name_snapshot} from this run?`);
+    if (!confirmed) return;
+
+    try {
+      await routeService.deleteRouteStop(stop.id);
+      setSaveMessage('Stop removed from route run');
+    } catch (error) {
+      console.error('Error removing route stop:', error);
+      setErrorMessage('Failed to remove route stop.');
+    }
+  };
+
+  const handleOpenDailyRoute = () => {
+    if (!currentRun?.id) return;
+    navigate('/map', {
+      state: {
+        selectedRouteId: currentRun.id,
+        selectedRouteDate: selectedDate.toISOString(),
+      },
+    });
   };
 
   return (
@@ -652,732 +415,664 @@ export default function RoutesManagementPage() {
         <div className="flex flex-col xl:flex-row xl:items-center xl:justify-between gap-4">
           <div>
             <div className="flex items-center gap-3">
-              <h2 className="text-3xl font-black text-gray-900 tracking-tight">Route Builder</h2>
+              <h2 className="text-3xl font-black text-gray-900 tracking-tight">Routes</h2>
               <span className="px-3 py-1 bg-blue-50 text-blue-600 text-[10px] font-black uppercase tracking-widest rounded-full">
-                Daily Route Split
+                Templates + Runs
               </span>
             </div>
             <p className="text-sm font-bold text-gray-400 uppercase tracking-widest mt-2">
-              Plan saved routes here, then send the selected day to the daily route screen.
+              Build reusable routes once, then generate the current run from work that is actually due.
             </p>
           </div>
 
           <div className="flex flex-wrap items-center gap-3">
             <div className="flex items-center gap-2 bg-white p-2 rounded-2xl border border-gray-100 shadow-sm">
               <button
-                onClick={() => setPlannerMode('day')}
-                className={`px-4 py-2 rounded-xl text-xs font-black uppercase tracking-widest transition-all ${
-                  plannerMode === 'day' ? 'bg-blue-600 text-white' : 'text-gray-500 hover:bg-gray-100'
-                }`}
-              >
-                Day
-              </button>
-              <button
-                onClick={() => setPlannerMode('week')}
-                className={`px-4 py-2 rounded-xl text-xs font-black uppercase tracking-widest transition-all ${
-                  plannerMode === 'week' ? 'bg-blue-600 text-white' : 'text-gray-500 hover:bg-gray-100'
-                }`}
-              >
-                Week
-              </button>
-            </div>
-
-            <div className="flex items-center gap-2 bg-white p-2 rounded-2xl border border-gray-100 shadow-sm">
-              <button
-                onClick={() => handleShiftWindow('back')}
+                onClick={() => setSelectedDate(new Date(selectedDate.getTime() - (24 * 60 * 60 * 1000)))}
                 className="p-2 text-gray-400 hover:text-gray-900 hover:bg-gray-100 rounded-xl transition-all"
               >
                 <ChevronRight className="h-4 w-4 rotate-180" />
               </button>
-              <div className="px-2 text-center">
-                <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">
-                  {plannerMode === 'week' ? 'Selected Week' : 'Selected Day'}
-                </p>
-                <p className="text-sm font-black text-gray-900">
-                  {plannerMode === 'week'
-                    ? `${selectedWeekDays[0].toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} - ${selectedWeekDays[6].toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`
-                    : selectedDate.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}
-                </p>
-              </div>
+              <input
+                type="date"
+                value={toDateInputValue(selectedDate)}
+                onChange={(event) => {
+                  const nextDate = new Date(`${event.target.value}T12:00:00`);
+                  if (!Number.isNaN(nextDate.getTime())) {
+                    setSelectedDate(nextDate);
+                  }
+                }}
+                className="px-2 py-2 bg-transparent text-sm font-black text-gray-900 outline-none"
+              />
               <button
-                onClick={() => handleShiftWindow('forward')}
+                onClick={() => setSelectedDate(new Date(selectedDate.getTime() + (24 * 60 * 60 * 1000)))}
                 className="p-2 text-gray-400 hover:text-gray-900 hover:bg-gray-100 rounded-xl transition-all"
               >
                 <ChevronRight className="h-4 w-4" />
               </button>
             </div>
+
+            <button
+              onClick={openCreateTemplate}
+              className="px-5 py-3 bg-gray-900 text-white rounded-2xl text-xs font-black uppercase tracking-widest hover:bg-gray-800 transition-all flex items-center gap-2"
+            >
+              <Plus className="h-4 w-4" />
+              New Route Template
+            </button>
           </div>
         </div>
 
-        <div className="grid grid-cols-2 lg:grid-cols-7 gap-3">
-          {selectedWeekDays.map((day) => {
-            const hasRoute = routes.some((route) => sameDay(toDate(route.route_date), day));
-            const isSelected = sameDay(day, selectedDate);
-
-            return (
-              <button
-                key={day.toISOString()}
-                onClick={() => setSelectedDate(day)}
-                className={`rounded-3xl border p-4 text-left transition-all ${
-                  isSelected
-                    ? 'bg-blue-600 text-white border-blue-600 shadow-xl shadow-blue-100'
-                    : 'bg-white text-gray-900 border-gray-100 hover:border-blue-200 hover:shadow-sm'
-                }`}
-              >
-                <p className={`text-[10px] font-black uppercase tracking-widest ${isSelected ? 'text-blue-100' : 'text-gray-400'}`}>
-                  {day.toLocaleDateString('en-US', { weekday: 'short' })}
-                </p>
-                <p className="text-lg font-black mt-2">{day.getDate()}</p>
-                <p className={`text-[10px] font-black uppercase tracking-widest mt-3 ${isSelected ? 'text-white' : hasRoute ? 'text-green-600' : 'text-gray-300'}`}>
-                  {hasRoute ? 'Route Saved' : 'Open Day'}
-                </p>
-              </button>
-            );
-          })}
-        </div>
-
-        <div className="grid grid-cols-2 xl:grid-cols-4 gap-4">
-          <button
-            onClick={() => {
-              setPanelMode('builder');
-              setBuilderFilter('all');
-            }}
-            className={`rounded-3xl p-5 border text-left transition-all ${
-              panelMode === 'builder' && builderFilter === 'all'
-                ? 'bg-blue-600 text-white border-blue-600 shadow-xl shadow-blue-100'
-                : 'bg-white border-gray-100 hover:border-blue-200 hover:shadow-sm'
-            }`}
-          >
-            <p className={`text-2xl font-black ${panelMode === 'builder' && builderFilter === 'all' ? 'text-white' : 'text-gray-900'}`}>
-              {routeStats.planning}
-            </p>
-            <p className={`text-[10px] font-black uppercase tracking-widest mt-1 ${panelMode === 'builder' && builderFilter === 'all' ? 'text-blue-100' : 'text-gray-400'}`}>
-              Planning Routes
-            </p>
-          </button>
-
-          <button
-            onClick={() => {
-              setPanelMode('builder');
-              setBuilderFilter('draft');
-            }}
-            className={`rounded-3xl p-5 border text-left transition-all ${
-              panelMode === 'builder' && builderFilter === 'draft'
-                ? 'bg-blue-600 text-white border-blue-600 shadow-xl shadow-blue-100'
-                : 'bg-white border-gray-100 hover:border-blue-200 hover:shadow-sm'
-            }`}
-          >
-            <p className={`text-2xl font-black ${panelMode === 'builder' && builderFilter === 'draft' ? 'text-white' : 'text-gray-900'}`}>
-              {routeStats.drafts}
-            </p>
-            <p className={`text-[10px] font-black uppercase tracking-widest mt-1 ${panelMode === 'builder' && builderFilter === 'draft' ? 'text-blue-100' : 'text-gray-400'}`}>
-              Draft
-            </p>
-          </button>
-
-          <button
-            onClick={() => {
-              setPanelMode('builder');
-              setBuilderFilter('in_progress');
-            }}
-            className={`rounded-3xl p-5 border text-left transition-all ${
-              panelMode === 'builder' && builderFilter === 'in_progress'
-                ? 'bg-blue-600 text-white border-blue-600 shadow-xl shadow-blue-100'
-                : 'bg-white border-gray-100 hover:border-blue-200 hover:shadow-sm'
-            }`}
-          >
-            <p className={`text-2xl font-black ${panelMode === 'builder' && builderFilter === 'in_progress' ? 'text-white' : 'text-gray-900'}`}>
-              {routeStats.inProgress}
-            </p>
-            <p className={`text-[10px] font-black uppercase tracking-widest mt-1 ${panelMode === 'builder' && builderFilter === 'in_progress' ? 'text-blue-100' : 'text-gray-400'}`}>
-              In Progress
-            </p>
-          </button>
-
-          <button
-            onClick={() => setPanelMode('history')}
-            className={`rounded-3xl p-5 border text-left transition-all ${
-              panelMode === 'history'
-                ? 'bg-blue-600 text-white border-blue-600 shadow-xl shadow-blue-100'
-                : 'bg-white border-gray-100 hover:border-blue-200 hover:shadow-sm'
-            }`}
-          >
-            <p className={`text-2xl font-black ${panelMode === 'history' ? 'text-white' : 'text-gray-900'}`}>
-              {routeStats.history}
-            </p>
-            <p className={`text-[10px] font-black uppercase tracking-widest mt-1 ${panelMode === 'history' ? 'text-blue-100' : 'text-gray-400'}`}>
-              Route History
-            </p>
-          </button>
+        <div className="grid grid-cols-2 xl:grid-cols-5 gap-4">
+          <div className="rounded-3xl border border-gray-100 bg-white p-5">
+            <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Due</p>
+            <p className="text-2xl font-black text-gray-900 mt-2">{queueStats.due}</p>
+          </div>
+          <div className="rounded-3xl border border-gray-100 bg-white p-5">
+            <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Overdue</p>
+            <p className="text-2xl font-black text-red-600 mt-2">{queueStats.overdue}</p>
+          </div>
+          <div className="rounded-3xl border border-gray-100 bg-white p-5">
+            <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Carryover</p>
+            <p className="text-2xl font-black text-amber-600 mt-2">{queueStats.carryover}</p>
+          </div>
+          <div className="rounded-3xl border border-gray-100 bg-white p-5">
+            <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Assigned</p>
+            <p className="text-2xl font-black text-blue-600 mt-2">{queueStats.assigned}</p>
+          </div>
+          <div className="rounded-3xl border border-gray-100 bg-white p-5">
+            <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Unassigned</p>
+            <p className="text-2xl font-black text-gray-900 mt-2">{queueStats.unassigned}</p>
+          </div>
         </div>
       </header>
-      <div className="grid gap-6 xl:grid-cols-[360px,minmax(0,1fr)]">
-        <section className="bg-white rounded-[32px] border border-gray-100 shadow-sm p-6 space-y-4">
-          <div className="flex items-center justify-between gap-3">
-            <div>
-              <h3 className="text-xl font-black text-gray-900">
-                {panelMode === 'history' ? 'Saved History' : 'Saved Routes'}
-              </h3>
-              <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mt-1">
-                {panelMode === 'history'
-                  ? 'Completed and archived routes in the current window'
-                  : 'Planning routes for the selected day or week'}
-              </p>
-            </div>
 
-            {panelMode === 'builder' && !selectedDayRoute && (
-              <button
-                onClick={handleCreateRouteForDay}
-                className="px-4 py-3 bg-gray-900 text-white rounded-2xl text-xs font-black uppercase tracking-widest hover:bg-gray-800 transition-all"
-              >
-                Create Day Route
-              </button>
-            )}
-          </div>
-
-          <div className="space-y-3">
-            {visibleRoutes.length === 0 && (
-              <div className="rounded-3xl border-2 border-dashed border-gray-100 p-8 text-center">
-                <p className="text-sm font-black text-gray-900">
-                  {panelMode === 'history' ? 'No route history in this window yet.' : 'No saved routes in this window yet.'}
-                </p>
-                <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mt-2">
-                  {panelMode === 'history' ? 'Complete routes from the daily route screen to build history.' : 'Create the selected day route to begin planning stops.'}
+      <div className="grid grid-cols-1 xl:grid-cols-[320px_minmax(0,1fr)] gap-6 items-start">
+        <aside className="space-y-4">
+          <div className="bg-white rounded-[32px] border border-gray-100 shadow-sm p-5">
+            <div className="flex items-center justify-between mb-4">
+              <div>
+                <h3 className="text-sm font-black text-gray-900 uppercase tracking-widest">Route Templates</h3>
+                <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mt-1">
+                  Day, area, or hybrid routes
                 </p>
               </div>
-            )}
+              <button
+                onClick={openCreateTemplate}
+                className="p-2 rounded-xl bg-blue-50 text-blue-600 hover:bg-blue-100 transition-all"
+              >
+                <Plus className="h-4 w-4" />
+              </button>
+            </div>
 
-            {visibleRoutes.map((route) => {
-              const isSelected = route.id === selectedRouteId;
+            <div className="space-y-3">
+              {templates.length === 0 && (
+                <div className="rounded-3xl border-2 border-dashed border-gray-200 p-8 text-center">
+                  <p className="text-sm font-black text-gray-500">No route templates yet</p>
+                  <p className="text-[10px] font-black text-gray-300 uppercase tracking-widest mt-2">
+                    Create one for a day, area, or both
+                  </p>
+                </div>
+              )}
 
-              return (
-                <button
-                  key={route.id}
-                  onClick={() => setSelectedRouteId(route.id || null)}
-                  className={`w-full rounded-3xl border p-5 text-left transition-all ${
-                    isSelected
-                      ? 'bg-blue-600 text-white border-blue-600 shadow-xl shadow-blue-100'
-                      : 'bg-white border-gray-100 hover:border-blue-200 hover:shadow-sm'
-                  }`}
-                >
-                  <div className="flex items-start justify-between gap-3">
-                    <div>
-                      <p className={`text-[10px] font-black uppercase tracking-widest ${isSelected ? 'text-blue-100' : 'text-gray-400'}`}>
-                        {formatRouteDate(route.route_date)}
-                      </p>
-                      <p className="text-lg font-black mt-2">{route.name}</p>
+              {templates.map((template) => {
+                const isSelected = template.id === selectedTemplateId;
+                return (
+                  <button
+                    key={template.id}
+                    onClick={() => setSelectedTemplateId(template.id || null)}
+                    className={`w-full text-left rounded-3xl border p-4 transition-all ${
+                      isSelected
+                        ? 'border-blue-600 bg-blue-50 shadow-lg shadow-blue-50'
+                        : 'border-gray-100 bg-white hover:border-blue-200 hover:bg-blue-50/40'
+                    }`}
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <p className="text-sm font-black text-gray-900">{template.name}</p>
+                        <p className="text-[10px] font-black uppercase tracking-widest text-gray-400 mt-2">
+                          {modeLabels[template.mode]} • {cadenceLabels[template.cadence]}
+                        </p>
+                      </div>
+                      {isSelected && (
+                        <CheckCircle2 className="h-5 w-5 text-blue-600 shrink-0" />
+                      )}
                     </div>
-                    <span className={`px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest ${
-                      isSelected ? 'bg-white/15 text-white' : routeStatusClasses[route.status]
-                    }`}>
-                      {route.status.replace('_', ' ')}
-                    </span>
-                  </div>
 
-                  <div className={`grid grid-cols-2 gap-3 mt-4 ${isSelected ? 'text-white' : 'text-gray-600'}`}>
-                    <div>
-                      <p className={`text-[9px] font-black uppercase tracking-widest ${isSelected ? 'text-blue-100' : 'text-gray-400'}`}>Base Camp</p>
-                      <p className="text-xs font-black mt-1 break-words">{route.base_camp_label}</p>
-                    </div>
-                    <div>
-                      <p className={`text-[9px] font-black uppercase tracking-widest ${isSelected ? 'text-blue-100' : 'text-gray-400'}`}>Owner Snapshot</p>
-                      <p className="text-xs font-black mt-1 break-words">{route.created_by_name || 'Owner'}</p>
-                    </div>
-                  </div>
-                </button>
-              );
-            })}
-          </div>
-        </section>
-
-        <section className="bg-white rounded-[32px] border border-gray-100 shadow-sm p-6 sm:p-8 space-y-6">
-          {selectedRoute ? (
-            <>
-              {panelMode === 'builder' ? (
-                <>
-                  <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
-                    <div>
-                      <div className="flex items-center gap-3">
-                        <h3 className="text-2xl font-black text-gray-900">{selectedRoute.name}</h3>
-                        <span className={`px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest ${routeStatusClasses[selectedRoute.status]}`}>
-                          {selectedRoute.status.replace('_', ' ')}
+                    <div className="flex flex-wrap gap-2 mt-3">
+                      {template.preferred_day != null && (
+                        <span className="px-2 py-1 rounded-full bg-white text-[10px] font-black uppercase tracking-widest text-gray-600 border border-blue-100">
+                          {days[template.preferred_day]}
                         </span>
-                        {hasUnsavedChanges && (
-                          <span className="px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest bg-amber-50 text-amber-600">
-                            Unsaved Changes
-                          </span>
-                        )}
-                      </div>
-                      <p className="text-sm font-bold text-gray-400 uppercase tracking-widest mt-2">
-                        Build the day route from the work queue, then save when the order is ready.
-                      </p>
-                    </div>
-
-                    <div className="flex flex-wrap items-center gap-3">
-                      <button
-                        onClick={handleSaveRoute}
-                        disabled={!hasUnsavedChanges || isSavingRoute}
-                        className={`px-5 py-3 rounded-2xl text-xs font-black uppercase tracking-widest transition-all flex items-center gap-2 ${
-                          !hasUnsavedChanges || isSavingRoute
-                            ? 'bg-gray-100 text-gray-400'
-                            : 'bg-green-600 text-white hover:bg-green-700'
-                        }`}
-                      >
-                        <Save className="h-4 w-4" />
-                        {isSavingRoute ? 'Saving' : 'Save Route'}
-                      </button>
-                      <button
-                        onClick={handleOptimizeRoute}
-                        disabled={isOptimizing || draftStops.length === 0}
-                        className={`px-5 py-3 rounded-2xl text-xs font-black uppercase tracking-widest transition-all ${
-                          isOptimizing || draftStops.length === 0
-                            ? 'bg-gray-100 text-gray-400'
-                            : 'bg-blue-600 text-white hover:bg-blue-700'
-                        }`}
-                      >
-                        {isOptimizing ? 'Optimizing' : 'Optimize Draft'}
-                      </button>
-                      <button
-                        onClick={() => {
-                          setAddStopSearchQuery('');
-                          setIsAddingStop(true);
-                        }}
-                        className="px-5 py-3 bg-gray-900 text-white rounded-2xl text-xs font-black uppercase tracking-widest hover:bg-gray-800 transition-all"
-                      >
-                        Manual Add
-                      </button>
-                      <button
-                        onClick={() => handleOpenDailyRoute(selectedRoute)}
-                        className="px-5 py-3 bg-blue-50 text-blue-600 rounded-2xl text-xs font-black uppercase tracking-widest hover:bg-blue-100 transition-all"
-                      >
-                        Open Daily Route
-                      </button>
-                    </div>
-                  </div>
-
-                  <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
-                    <div className="rounded-3xl border border-gray-100 bg-gray-50 p-5">
-                      <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Scheduled</p>
-                      <p className="text-lg font-black text-gray-900 mt-2">{formatRouteDate(selectedRoute.route_date)}</p>
-                    </div>
-                    <button
-                      onClick={() => setQueueFilter('due')}
-                      className={`rounded-3xl border p-5 text-left transition-all ${
-                        queueFilter === 'due' ? 'border-blue-600 bg-blue-600 text-white shadow-xl shadow-blue-100' : 'border-gray-100 bg-white hover:border-blue-200'
-                      }`}
-                    >
-                      <p className={`text-[10px] font-black uppercase tracking-widest ${queueFilter === 'due' ? 'text-blue-100' : 'text-gray-400'}`}>Due</p>
-                      <p className={`text-2xl font-black mt-2 ${queueFilter === 'due' ? 'text-white' : 'text-gray-900'}`}>{queueStats.due}</p>
-                    </button>
-                    <button
-                      onClick={() => setQueueFilter('overdue')}
-                      className={`rounded-3xl border p-5 text-left transition-all ${
-                        queueFilter === 'overdue' ? 'border-red-600 bg-red-600 text-white shadow-xl shadow-red-100' : 'border-gray-100 bg-white hover:border-red-200'
-                      }`}
-                    >
-                      <p className={`text-[10px] font-black uppercase tracking-widest ${queueFilter === 'overdue' ? 'text-red-100' : 'text-gray-400'}`}>Overdue</p>
-                      <p className={`text-2xl font-black mt-2 ${queueFilter === 'overdue' ? 'text-white' : 'text-red-600'}`}>{queueStats.overdue}</p>
-                    </button>
-                    <button
-                      onClick={() => setQueueFilter('unassigned')}
-                      className={`rounded-3xl border p-5 text-left transition-all ${
-                        queueFilter === 'unassigned' ? 'border-amber-600 bg-amber-600 text-white shadow-xl shadow-amber-100' : 'border-gray-100 bg-white hover:border-amber-200'
-                      }`}
-                    >
-                      <p className={`text-[10px] font-black uppercase tracking-widest ${queueFilter === 'unassigned' ? 'text-amber-100' : 'text-gray-400'}`}>Unassigned</p>
-                      <p className={`text-2xl font-black mt-2 ${queueFilter === 'unassigned' ? 'text-white' : 'text-amber-600'}`}>{queueStats.unassigned}</p>
-                    </button>
-                    <button
-                      onClick={() => setQueueFilter('needs_attention')}
-                      className={`rounded-3xl border p-5 text-left transition-all ${
-                        queueFilter === 'needs_attention' ? 'border-gray-900 bg-gray-900 text-white shadow-xl' : 'border-gray-100 bg-white hover:border-gray-300'
-                      }`}
-                    >
-                      <p className={`text-[10px] font-black uppercase tracking-widest ${queueFilter === 'needs_attention' ? 'text-gray-300' : 'text-gray-400'}`}>Needs Attention</p>
-                      <p className={`text-2xl font-black mt-2 ${queueFilter === 'needs_attention' ? 'text-white' : 'text-gray-900'}`}>{queueStats.needsAttention}</p>
-                    </button>
-                  </div>
-
-                  <div className="rounded-[28px] border border-gray-100 bg-gray-50 p-5">
-                    <div className="flex items-center gap-2">
-                      <Users className="h-4 w-4 text-blue-600" />
-                      <p className="text-sm font-black text-gray-900">Future Team Prep</p>
-                    </div>
-                    <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mt-2">
-                      Route assignments are ready for teams later without changing the route structure again.
-                    </p>
-                  </div>
-
-                  <div className="grid gap-6 xl:grid-cols-[minmax(0,0.95fr),minmax(0,1.05fr)]">
-                    <div className="rounded-[28px] border border-gray-100 bg-gray-50 p-5 space-y-4">
-                      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-                        <div>
-                          <h4 className="text-lg font-black text-gray-900">Work Queue</h4>
-                          <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mt-1">
-                            Drag jobs into the draft or add them with one tap.
-                          </p>
-                        </div>
-                        <div className="relative w-full sm:w-72">
-                          <Search className="absolute left-4 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
-                          <input
-                            value={builderSearchQuery}
-                            onChange={(event) => setBuilderSearchQuery(event.target.value)}
-                            placeholder="Search queue or route..."
-                            className="w-full pl-10 pr-4 py-3 bg-white rounded-2xl border border-gray-100 text-sm font-bold focus:ring-2 focus:ring-blue-500 transition-all"
-                          />
-                        </div>
-                      </div>
-
-                      <div className="flex flex-wrap gap-2">
-                        {[
-                          { id: 'needs_attention', label: 'Needs Attention' },
-                          { id: 'due', label: 'Due' },
-                          { id: 'overdue', label: 'Overdue' },
-                          { id: 'unassigned', label: 'Unassigned' },
-                          { id: 'assigned', label: 'Assigned' },
-                        ].map((filter) => (
-                          <button
-                            key={filter.id}
-                            onClick={() => setQueueFilter(filter.id as QueueFilter)}
-                            className={`px-4 py-2 rounded-2xl text-[10px] font-black uppercase tracking-widest transition-all ${
-                              queueFilter === filter.id ? 'bg-blue-600 text-white' : 'bg-white text-gray-500 border border-gray-100 hover:border-blue-200'
-                            }`}
-                          >
-                            {filter.label}
-                          </button>
-                        ))}
-                      </div>
-
-                      <div className="space-y-3 max-h-[640px] overflow-y-auto pr-1">
-                        {visibleQueueJobs.length === 0 && (
-                          <div className="rounded-3xl border-2 border-dashed border-gray-100 bg-white p-8 text-center">
-                            <p className="text-sm font-black text-gray-900">No jobs in this queue view.</p>
-                            <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mt-2">
-                              Change the queue filter or pick a different day.
-                            </p>
-                          </div>
-                        )}
-
-                        {visibleQueueJobs.map((job) => {
-                          const timingState = getJobTimingState(job, selectedDate);
-                          const scheduleDate = getJobScheduleDate(job);
-                          const isAssigned = assignedJobIds.has(job.id);
-                          const timingClasses = timingState === 'overdue'
-                            ? 'bg-red-50 text-red-600'
-                            : timingState === 'due'
-                              ? 'bg-blue-50 text-blue-600'
-                              : 'bg-gray-100 text-gray-600';
-
-                          return (
-                            <div
-                              key={job.id}
-                              draggable={!isAssigned}
-                              onDragStart={() => setDraggedJobId(job.id || null)}
-                              onDragEnd={() => setDraggedJobId(null)}
-                              className={`rounded-3xl border p-4 transition-all ${isAssigned ? 'bg-white border-green-200' : 'bg-white border-gray-100 hover:border-blue-200 hover:shadow-sm cursor-grab'}`}
-                            >
-                              <div className="flex items-start justify-between gap-3">
-                                <div className="min-w-0">
-                                  <div className="flex items-center gap-2">
-                                    {!isAssigned && <GripVertical className="h-4 w-4 text-gray-300" />}
-                                    <p className="text-sm font-black text-gray-900 break-words">{job.customer_name_snapshot}</p>
-                                  </div>
-                                  <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mt-2">{job.service_snapshot}</p>
-                                </div>
-                                <span className={`px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest ${timingClasses}`}>
-                                  {timingState}
-                                </span>
-                              </div>
-                              <p className="text-xs font-bold text-gray-500 mt-3 break-words">{job.address_snapshot}</p>
-                              <div className="flex items-center justify-between gap-3 mt-4">
-                                <div>
-                                  <p className="text-[9px] font-black text-gray-400 uppercase tracking-widest">Schedule</p>
-                                  <p className="text-xs font-black text-gray-700 mt-1">
-                                    {scheduleDate ? scheduleDate.toLocaleDateString() : 'No schedule'}
-                                  </p>
-                                </div>
-                                <button
-                                  onClick={() => handleAddJobToRoute(job)}
-                                  disabled={isAssigned}
-                                  className={`px-4 py-2 rounded-2xl text-[10px] font-black uppercase tracking-widest transition-all ${
-                                    isAssigned ? 'bg-gray-100 text-gray-400' : 'bg-blue-600 text-white hover:bg-blue-700'
-                                  }`}
-                                >
-                                  {isAssigned ? 'Assigned' : 'Add To Route'}
-                                </button>
-                              </div>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    </div>
-
-                    <div
-                      onDragOver={(event) => event.preventDefault()}
-                      onDrop={() => handleDropOnRoute()}
-                      className="rounded-[28px] border border-gray-100 bg-white p-5 space-y-4"
-                    >
-                      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-                        <div>
-                          <h4 className="text-lg font-black text-gray-900">Route Draft</h4>
-                          <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mt-1">
-                            Drag to reorder on desktop, use arrows on mobile, then save when ready.
-                          </p>
-                        </div>
-                        <div className="flex flex-wrap items-center gap-3">
-                          <div className="rounded-2xl bg-gray-50 px-4 py-3">
-                            <p className="text-[9px] font-black text-gray-400 uppercase tracking-widest">Draft Stops</p>
-                            <p className="text-lg font-black text-gray-900 mt-1">{draftStops.length}</p>
-                          </div>
-                          <div className="rounded-2xl bg-gray-50 px-4 py-3">
-                            <p className="text-[9px] font-black text-gray-400 uppercase tracking-widest">Save State</p>
-                            <p className={`text-sm font-black mt-1 ${hasUnsavedChanges ? 'text-amber-600' : 'text-green-600'}`}>
-                              {hasUnsavedChanges ? 'Unsaved' : saveMessage || 'Saved'}
-                            </p>
-                          </div>
-                        </div>
-                      </div>
-
-                      {saveMessage && !hasUnsavedChanges && (
-                        <div className="rounded-2xl bg-green-50 border border-green-100 p-4 flex items-center gap-3">
-                          <CheckCircle2 className="h-5 w-5 text-green-600" />
-                          <p className="text-sm font-black text-green-700">{saveMessage}</p>
-                        </div>
                       )}
-
-                      {queueStats.needsAttention > 0 && (
-                        <div className="rounded-2xl bg-amber-50 border border-amber-100 p-4 flex items-center gap-3">
-                          <AlertTriangle className="h-5 w-5 text-amber-600" />
-                          <p className="text-sm font-black text-amber-700">
-                            {queueStats.needsAttention} jobs still need attention for this day.
-                          </p>
-                        </div>
-                      )}
-
-                      {visibleStops.length === 0 ? (
-                        <div className="rounded-[28px] border-2 border-dashed border-gray-100 p-12 text-center">
-                          <p className="text-lg font-black text-gray-900">No draft stops yet.</p>
-                          <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mt-2">
-                            Drag jobs from the queue here or use Add To Route.
-                          </p>
-                        </div>
-                      ) : (
-                        <div className="space-y-4">
-                          {visibleStops.map((stop, index) => (
-                            <div
-                              key={(stop as DraftRouteStop).temp_key}
-                              draggable
-                              onDragStart={() => setDraggedStopKey((stop as DraftRouteStop).temp_key)}
-                              onDragEnd={() => setDraggedStopKey(null)}
-                              onDragOver={(event) => event.preventDefault()}
-                              onDrop={() => handleDropOnRoute(index)}
-                              className="cursor-grab"
-                            >
-                              <RouteStopCard
-                                stop={stop}
-                                index={index}
-                                totalStops={visibleStops.length}
-                                onReorder={canReorderVisibleStops ? handleArrowReorder : undefined}
-                                onRemove={handleRemoveStop}
-                                hideReorder={!canReorderVisibleStops}
-                              />
-                            </div>
-                          ))}
-                          <div
-                            onDragOver={(event) => event.preventDefault()}
-                            onDrop={() => handleDropOnRoute(draftStops.length)}
-                            className="rounded-3xl border-2 border-dashed border-gray-100 py-6 text-center text-[10px] font-black uppercase tracking-widest text-gray-300"
-                          >
-                            Drop To Add To End
-                          </div>
-                        </div>
+                      {template.service_area && (
+                        <span className="px-2 py-1 rounded-full bg-white text-[10px] font-black uppercase tracking-widest text-gray-600 border border-blue-100">
+                          {template.service_area}
+                        </span>
                       )}
                     </div>
-                  </div>
-                </>
-              ) : (
-                <>
-                <div className="grid gap-4 md:grid-cols-3">
-                  <button className="rounded-3xl border border-gray-100 bg-white p-5 text-left">
-                    <p className="text-2xl font-black text-gray-900">{selectedRouteStops.length}</p>
-                    <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mt-1">Stops Logged</p>
                   </button>
-                  <div className="rounded-3xl border border-gray-100 bg-white p-5">
-                    <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Started By</p>
-                    <p className="text-lg font-black text-gray-900 mt-2">{selectedRoute.started_by_name || 'Not Recorded'}</p>
-                    <p className="text-xs font-bold text-gray-500 mt-1">{selectedRoute.started_at ? formatRouteDate(selectedRoute.started_at) : 'No start timestamp yet'}</p>
+                );
+              })}
+            </div>
+          </div>
+        </aside>
+
+        <section className="space-y-6">
+          {!selectedTemplate && (
+            <div className="bg-white rounded-[32px] border-2 border-dashed border-gray-200 p-12 text-center">
+              <p className="text-xl font-black text-gray-900">Select or create a route template</p>
+              <p className="text-sm font-bold text-gray-400 mt-2">
+                Reusable templates are how the planner knows what route to generate again next cycle.
+              </p>
+            </div>
+          )}
+
+          {selectedTemplate && (
+            <>
+              <div className="bg-white rounded-[32px] border border-gray-100 shadow-sm p-6">
+                <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-4">
+                  <div className="space-y-3">
+                    <div className="flex items-center gap-3 flex-wrap">
+                      <h3 className="text-2xl font-black text-gray-900 tracking-tight">{selectedTemplate.name}</h3>
+                      <span className="px-3 py-1 rounded-full bg-gray-100 text-[10px] font-black uppercase tracking-widest text-gray-500">
+                        {modeLabels[selectedTemplate.mode]}
+                      </span>
+                      <span className="px-3 py-1 rounded-full bg-gray-100 text-[10px] font-black uppercase tracking-widest text-gray-500">
+                        {cadenceLabels[selectedTemplate.cadence]}
+                      </span>
+                    </div>
+
+                    <div className="flex flex-wrap gap-3 text-[10px] font-black uppercase tracking-widest text-gray-400">
+                      {selectedTemplate.preferred_day != null && (
+                        <div className="flex items-center gap-2">
+                          <Calendar className="h-4 w-4 text-blue-600" />
+                          {days[selectedTemplate.preferred_day]}
+                        </div>
+                      )}
+                      {selectedTemplate.service_area && (
+                        <div className="flex items-center gap-2">
+                          <MapPin className="h-4 w-4 text-blue-600" />
+                          {selectedTemplate.service_area}
+                        </div>
+                      )}
+                      <div className="flex items-center gap-2">
+                        <Users className="h-4 w-4 text-blue-600" />
+                        Crew assignment ready later
+                      </div>
+                    </div>
+
+                    {!isPreferredDayMatch && selectedTemplate.preferred_day != null && (
+                      <div className="flex items-center gap-3 rounded-2xl bg-amber-50 text-amber-700 px-4 py-3 border border-amber-100">
+                        <AlertTriangle className="h-4 w-4 shrink-0" />
+                        <p className="text-xs font-bold">
+                          This template prefers {days[selectedTemplate.preferred_day]}, but you can still generate this run for {selectedDate.toLocaleDateString('en-US', { weekday: 'long' })}.
+                        </p>
+                      </div>
+                    )}
                   </div>
-                  <div className="rounded-3xl border border-gray-100 bg-white p-5">
-                    <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Completed By</p>
-                    <p className="text-lg font-black text-gray-900 mt-2">{selectedRoute.completed_by_name || 'Not Recorded'}</p>
-                    <p className="text-xs font-bold text-gray-500 mt-1">{selectedRoute.completed_at ? formatRouteDate(selectedRoute.completed_at) : 'No completion timestamp yet'}</p>
+
+                  <div className="flex flex-wrap items-center gap-3">
+                    <button
+                      onClick={() => openEditTemplate(selectedTemplate)}
+                      className="px-4 py-3 bg-gray-100 text-gray-700 rounded-2xl text-xs font-black uppercase tracking-widest hover:bg-gray-200 transition-all flex items-center gap-2"
+                    >
+                      <Pencil className="h-4 w-4" />
+                      Edit
+                    </button>
+                    <button
+                      onClick={() => handleDeleteTemplate(selectedTemplate)}
+                      className="px-4 py-3 bg-red-50 text-red-600 rounded-2xl text-xs font-black uppercase tracking-widest hover:bg-red-100 transition-all flex items-center gap-2"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                      Delete
+                    </button>
                   </div>
                 </div>
-                <div className="space-y-4">
-                  <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-                    <div>
-                      <h4 className="text-lg font-black text-gray-900">Route Log</h4>
-                      <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mt-1">
-                        Tap completed stop cards to review the logged route history.
-                      </p>
+
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mt-6">
+                  <button
+                    onClick={handleSyncRun}
+                    disabled={isSyncingRun}
+                    className={`rounded-3xl px-5 py-4 text-left transition-all border ${
+                      isSyncingRun
+                        ? 'bg-gray-100 border-gray-100 text-gray-400'
+                        : 'bg-blue-600 border-blue-600 text-white shadow-xl shadow-blue-100 hover:bg-blue-700'
+                    }`}
+                  >
+                    <div className="flex items-center gap-3">
+                      <RefreshCw className={`h-5 w-5 ${isSyncingRun ? 'animate-spin' : ''}`} />
+                      <div>
+                        <p className="text-sm font-black">{currentRun ? 'Refresh Route Run' : 'Generate Route Run'}</p>
+                        <p className={`text-[10px] font-black uppercase tracking-widest ${isSyncingRun ? 'text-gray-400' : 'text-blue-100'}`}>
+                          {currentRun ? 'Pull current due work back into this run' : 'Create this run from due work'}
+                        </p>
+                      </div>
+                    </div>
+                  </button>
+
+                  <button
+                    onClick={handleSaveRouteOrder}
+                    disabled={!currentRun || !hasUnsavedOrder || isSavingOrder}
+                    className={`rounded-3xl px-5 py-4 text-left transition-all border ${
+                      !currentRun || !hasUnsavedOrder || isSavingOrder
+                        ? 'bg-gray-100 border-gray-100 text-gray-400'
+                        : 'bg-white border-gray-200 text-gray-900 hover:border-blue-300 hover:bg-blue-50'
+                    }`}
+                  >
+                    <div className="flex items-center gap-3">
+                      <Save className="h-5 w-5" />
+                      <div>
+                        <p className="text-sm font-black">{isSavingOrder ? 'Saving Order...' : 'Save Route Order'}</p>
+                        <p className="text-[10px] font-black uppercase tracking-widest text-gray-400">
+                          Keep this stop order for the current run
+                        </p>
+                      </div>
+                    </div>
+                  </button>
+
+                  <button
+                    onClick={handleOpenDailyRoute}
+                    disabled={!currentRun}
+                    className={`rounded-3xl px-5 py-4 text-left transition-all border ${
+                      !currentRun
+                        ? 'bg-gray-100 border-gray-100 text-gray-400'
+                        : 'bg-white border-gray-200 text-gray-900 hover:border-blue-300 hover:bg-blue-50'
+                    }`}
+                  >
+                    <div className="flex items-center gap-3">
+                      <ChevronRight className="h-5 w-5" />
+                      <div>
+                        <p className="text-sm font-black">Open Daily Route</p>
+                        <p className="text-[10px] font-black uppercase tracking-widest text-gray-400">
+                          Run this generated route in the field view
+                        </p>
+                      </div>
+                    </div>
+                  </button>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 2xl:grid-cols-[minmax(0,1fr)_420px] gap-6 items-start">
+                <div className="space-y-6">
+                  <div className="bg-white rounded-[32px] border border-gray-100 shadow-sm p-6">
+                    <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 mb-6">
+                      <div>
+                        <h4 className="text-lg font-black text-gray-900">Work Queue</h4>
+                        <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mt-2">
+                          Due work, overdue work, and carryover that belongs to this route
+                        </p>
+                      </div>
+
+                      <div className="relative w-full md:w-72">
+                        <Search className="absolute left-4 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
+                        <input
+                          type="text"
+                          value={searchQuery}
+                          onChange={(event) => setSearchQuery(event.target.value)}
+                          placeholder="Search queue..."
+                          className="w-full pl-11 pr-4 py-3 bg-gray-50 rounded-2xl border-none text-sm font-bold text-gray-900 placeholder:text-gray-300 focus:ring-2 focus:ring-blue-500 outline-none"
+                        />
+                      </div>
                     </div>
 
-                    <div className="relative w-full sm:w-80">
-                      <Search className="absolute left-4 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
-                      <input
-                        value={builderSearchQuery}
-                        onChange={(event) => setBuilderSearchQuery(event.target.value)}
-                        placeholder="Search route log..."
-                        className="w-full pl-10 pr-4 py-3 bg-gray-50 rounded-2xl border-none text-sm font-bold focus:ring-2 focus:ring-blue-500 transition-all"
-                      />
+                    <div className="space-y-6">
+                      {queueSections.length === 0 && (
+                        <div className="rounded-3xl border-2 border-dashed border-gray-200 p-10 text-center">
+                          <p className="text-base font-black text-gray-900">No matching work right now</p>
+                          <p className="text-sm font-bold text-gray-400 mt-2">
+                            Try another route date or relax this template&apos;s area filters.
+                          </p>
+                        </div>
+                      )}
+
+                      {queueSections.map((section) => (
+                        <div key={section.key} className="space-y-3">
+                          <div className="flex items-center gap-3">
+                            <p className="text-[10px] font-black uppercase tracking-widest text-gray-400">
+                              {section.label}
+                            </p>
+                            <div className="h-px flex-1 bg-gray-100" />
+                            <span className="text-[10px] font-black uppercase tracking-widest text-gray-400">
+                              {section.jobs.length}
+                            </span>
+                          </div>
+
+                          <div className="grid grid-cols-1 gap-3">
+                            {section.jobs.map((job) => {
+                              const timingState = getJobTimingState(job, selectedDate);
+                              const isAssigned = assignedJobIds.has(job.id);
+
+                              return (
+                                <div
+                                  key={job.id}
+                                  className="rounded-3xl border border-gray-100 bg-gray-50 p-4"
+                                >
+                                  <div className="flex items-start justify-between gap-3">
+                                    <div>
+                                      <p className="text-sm font-black text-gray-900">{job.customer_name_snapshot}</p>
+                                      <p className="text-[10px] font-black uppercase tracking-widest text-gray-400 mt-2">
+                                        {job.service_snapshot}
+                                      </p>
+                                      <p className="text-xs font-bold text-gray-500 mt-3">{job.address_snapshot}</p>
+                                    </div>
+
+                                    <div className="flex flex-col items-end gap-2">
+                                      <span className={`px-2 py-1 rounded-full text-[10px] font-black uppercase tracking-widest ${
+                                        timingState === 'overdue'
+                                          ? 'bg-red-100 text-red-700'
+                                          : timingState === 'carryover'
+                                            ? 'bg-amber-100 text-amber-700'
+                                            : timingState === 'due'
+                                              ? 'bg-blue-100 text-blue-700'
+                                              : 'bg-gray-200 text-gray-600'
+                                      }`}>
+                                        {timingState}
+                                      </span>
+                                      <span className={`px-2 py-1 rounded-full text-[10px] font-black uppercase tracking-widest ${
+                                        isAssigned ? 'bg-green-100 text-green-700' : 'bg-white text-gray-500 border border-gray-200'
+                                      }`}>
+                                        {isAssigned ? 'On Run' : 'Needs Placement'}
+                                      </span>
+                                    </div>
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      ))}
                     </div>
                   </div>
 
-                  {visibleStops.length === 0 ? (
-                    <div className="rounded-[28px] border-2 border-dashed border-gray-100 p-10 text-center">
-                      <p className="text-lg font-black text-gray-900">No logged stops for this route yet.</p>
+                  <div className="bg-white rounded-[32px] border border-gray-100 shadow-sm p-6">
+                    <div className="flex items-center justify-between gap-4 mb-6">
+                      <div>
+                        <h4 className="text-lg font-black text-gray-900">Recent Runs</h4>
+                        <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mt-2">
+                          This route template&apos;s recent generated runs
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="space-y-3">
+                      {templateHistory.length === 0 && (
+                        <div className="rounded-3xl border-2 border-dashed border-gray-200 p-8 text-center">
+                          <p className="text-sm font-black text-gray-500">No route runs yet</p>
+                          <p className="text-[10px] font-black text-gray-300 uppercase tracking-widest mt-2">
+                            Generate the first run for this template
+                          </p>
+                        </div>
+                      )}
+
+                      {templateHistory.map((route) => (
+                        <button
+                          key={route.id}
+                          onClick={() => {
+                            setSelectedDate(toDate(route.route_date));
+                            setActiveRunId(route.id || null);
+                          }}
+                          className={`w-full text-left rounded-3xl border p-4 transition-all ${
+                            route.id === currentRun?.id
+                              ? 'border-blue-600 bg-blue-50 shadow-lg shadow-blue-50'
+                              : 'border-gray-100 hover:border-blue-200 hover:bg-blue-50/40'
+                          }`}
+                        >
+                          <div className="flex items-center justify-between gap-3">
+                            <div>
+                              <p className="text-sm font-black text-gray-900">{formatRouteDate(route.route_date)}</p>
+                              <p className="text-[10px] font-black uppercase tracking-widest text-gray-400 mt-2">
+                                {route.status.replace('_', ' ')}
+                              </p>
+                            </div>
+                            <ChevronRight className="h-4 w-4 text-gray-300" />
+                          </div>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="bg-white rounded-[32px] border border-gray-100 shadow-sm p-6 space-y-6">
+                  <div className="flex items-center justify-between gap-4">
+                    <div>
+                      <h4 className="text-lg font-black text-gray-900">Current Run Draft</h4>
                       <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mt-2">
-                        Complete stops from the daily route screen to build route history.
+                        {currentRun ? formatRouteDate(currentRun.route_date) : 'Generate a run to start ordering stops'}
                       </p>
                     </div>
-                  ) : (
+
+                    {hasUnsavedOrder && (
+                      <span className="px-3 py-1 rounded-full bg-amber-50 text-amber-700 text-[10px] font-black uppercase tracking-widest">
+                        Unsaved Order
+                      </span>
+                    )}
+                  </div>
+
+                  {!currentRun && (
+                    <div className="rounded-3xl border-2 border-dashed border-gray-200 p-10 text-center">
+                      <p className="text-base font-black text-gray-900">No route run for this date yet</p>
+                      <p className="text-sm font-bold text-gray-400 mt-2">
+                        Generate the route run to pull in the work due for this template.
+                      </p>
+                    </div>
+                  )}
+
+                  {currentRun && draftStops.length === 0 && (
+                    <div className="rounded-3xl border-2 border-dashed border-gray-200 p-10 text-center">
+                      <p className="text-base font-black text-gray-900">No stops on this run</p>
+                      <p className="text-sm font-bold text-gray-400 mt-2">
+                        Refresh the run to pull matching due work back in.
+                      </p>
+                    </div>
+                  )}
+
+                  {currentRun && draftStops.length > 0 && (
                     <div className="space-y-4">
-                      {visibleStops.map((stop, index) => (
-                        <RouteStopCard
-                          key={stop.id}
-                          stop={stop}
-                          index={index}
-                          totalStops={visibleStops.length}
-                          hideReorder={true}
-                        />
-                      ))}
+                      <div className="rounded-3xl bg-gray-50 border border-gray-100 p-4 flex items-center gap-3">
+                        <GripVertical className="h-5 w-5 text-gray-400" />
+                        <div>
+                          <p className="text-sm font-black text-gray-900">Drag or arrow the stops into order</p>
+                          <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mt-1">
+                            Save the route order when you are happy with the run
+                          </p>
+                        </div>
+                      </div>
+
+                      <div className="space-y-4">
+                        {draftStops.map((stop, index) => (
+                          <div
+                            key={stop.id}
+                            draggable
+                            onDragStart={() => setDraggedStopId(stop.id || null)}
+                            onDragOver={(event) => event.preventDefault()}
+                            onDrop={() => {
+                              const fromIndex = draftStops.findIndex((item) => item.id === draggedStopId);
+                              if (fromIndex >= 0) {
+                                moveDraftStop(fromIndex, index);
+                              }
+                              setDraggedStopId(null);
+                            }}
+                            onDragEnd={() => setDraggedStopId(null)}
+                            className={draggedStopId === stop.id ? 'opacity-60' : ''}
+                          >
+                            <RouteStopCard
+                              stop={stop}
+                              index={index}
+                              totalStops={draftStops.length}
+                              onReorder={handleArrowReorder}
+                              onRemove={handleRemoveStop}
+                            />
+                          </div>
+                        ))}
+                      </div>
                     </div>
                   )}
                 </div>
-                </>
-              )}
-            </>
-          ) : (
-            <div className="rounded-[32px] border-2 border-dashed border-gray-100 p-12 text-center">
-              <div className="w-20 h-20 rounded-full bg-blue-50 text-blue-600 flex items-center justify-center mx-auto">
-                <MapIcon className="h-8 w-8" />
               </div>
-              <h3 className="text-2xl font-black text-gray-900 mt-6">
-                {panelMode === 'history' ? 'Select route history' : 'Select or create a route'}
-              </h3>
-              <p className="text-sm font-bold text-gray-400 mt-3 max-w-md mx-auto">
-                {panelMode === 'history'
-                  ? 'Pick a completed route from the left to inspect who worked it and when it finished.'
-                  : 'Choose a saved planning route or create the selected day route to begin building stops.'}
-              </p>
-              {panelMode === 'builder' && (
-                <button
-                  onClick={handleCreateRouteForDay}
-                  className="mt-6 px-6 py-4 bg-gray-900 text-white rounded-2xl text-sm font-black uppercase tracking-widest hover:bg-gray-800 transition-all"
-                >
-                  Create Selected Day Route
-                </button>
-              )}
-            </div>
+            </>
           )}
         </section>
       </div>
-
-      {isAddingStop && selectedRoute && (
-        <div className="fixed inset-0 bg-gray-900/40 backdrop-blur-sm z-[70] flex justify-center items-center p-2 sm:p-4">
-          <div className="bg-white w-full h-[90vh] sm:h-auto sm:max-w-2xl rounded-[40px] p-8 overflow-y-auto shadow-2xl relative">
-            <div className="flex justify-between items-center mb-8">
+      {isTemplateModalOpen && (
+        <div className="fixed inset-0 bg-gray-900/40 backdrop-blur-sm z-[90] flex justify-center items-center p-4">
+          <div className="bg-white w-full max-w-2xl rounded-[40px] p-8 shadow-2xl">
+            <div className="flex items-center justify-between gap-4 mb-8">
               <div>
-                <h3 className="text-2xl font-black text-gray-900 tracking-tight">Manual Add To Draft</h3>
-                <p className="text-sm font-bold text-gray-400 uppercase tracking-widest">Add a job or client without leaving the builder</p>
+                <h3 className="text-2xl font-black text-gray-900 tracking-tight">
+                  {templateForm.id ? 'Edit Route Template' : 'New Route Template'}
+                </h3>
+                <p className="text-xs font-black text-gray-400 uppercase tracking-widest mt-2">
+                  Reusable route structure for future generated runs
+                </p>
               </div>
               <button
-                onClick={() => setIsAddingStop(false)}
+                onClick={() => setIsTemplateModalOpen(false)}
                 className="p-2 text-gray-400 hover:bg-gray-100 rounded-xl transition-colors"
               >
-                <ChevronRight className="h-6 w-6 rotate-45" />
+                <X className="h-6 w-6" />
               </button>
             </div>
 
-            <div className="space-y-8">
-              <div className="relative group mb-6">
-                <div className="absolute inset-y-0 left-0 pl-5 flex items-center pointer-events-none">
-                  <Search className="h-5 w-5 text-gray-400 group-focus-within:text-blue-600 transition-colors" />
+            <form onSubmit={handleSaveTemplate} className="space-y-6">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="md:col-span-2">
+                  <label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest mb-2">
+                    Route Template Name
+                  </label>
+                  <input
+                    type="text"
+                    value={templateForm.name}
+                    onChange={(event) => setTemplateForm((prev) => ({ ...prev, name: event.target.value }))}
+                    placeholder="Monday, Oldsmar, North Friday..."
+                    className="w-full px-5 py-4 bg-gray-50 rounded-2xl border-none text-sm font-bold text-gray-900 placeholder:text-gray-300 focus:ring-2 focus:ring-blue-500 outline-none"
+                  />
                 </div>
-                <input
-                  type="text"
-                  value={addStopSearchQuery}
-                  onChange={(event) => setAddStopSearchQuery(event.target.value)}
-                  className="block w-full pl-14 pr-6 py-5 bg-gray-50 border border-gray-100 rounded-3xl text-sm font-bold text-gray-900 placeholder:text-gray-300 shadow-sm focus:ring-4 focus:ring-blue-500/10 focus:border-blue-500 transition-all outline-none"
-                  placeholder="Search jobs or customers..."
-                />
+
+                <div>
+                  <label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest mb-2">
+                    Template Type
+                  </label>
+                  <select
+                    value={templateForm.mode}
+                    onChange={(event) => setTemplateForm((prev) => ({ ...prev, mode: event.target.value as RouteTemplateMode }))}
+                    className="w-full px-5 py-4 bg-gray-50 rounded-2xl border-none text-sm font-bold text-gray-900 focus:ring-2 focus:ring-blue-500 outline-none"
+                  >
+                    <option value="day">Day</option>
+                    <option value="area">Area</option>
+                    <option value="hybrid">Day + Area</option>
+                    <option value="custom">Custom</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest mb-2">
+                    Cadence
+                  </label>
+                  <select
+                    value={templateForm.cadence}
+                    onChange={(event) => setTemplateForm((prev) => ({ ...prev, cadence: event.target.value as RouteTemplateCadence }))}
+                    className="w-full px-5 py-4 bg-gray-50 rounded-2xl border-none text-sm font-bold text-gray-900 focus:ring-2 focus:ring-blue-500 outline-none"
+                  >
+                    <option value="weekly">Weekly</option>
+                    <option value="bi_weekly">Bi-weekly</option>
+                    <option value="monthly">Monthly</option>
+                    <option value="manual">Manual</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest mb-2">
+                    Preferred Day
+                  </label>
+                  <select
+                    value={templateForm.preferred_day}
+                    onChange={(event) => setTemplateForm((prev) => ({ ...prev, preferred_day: event.target.value }))}
+                    className="w-full px-5 py-4 bg-gray-50 rounded-2xl border-none text-sm font-bold text-gray-900 focus:ring-2 focus:ring-blue-500 outline-none"
+                  >
+                    <option value="">No fixed day</option>
+                    {days.map((day, index) => (
+                      <option key={day} value={index}>
+                        {day}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest mb-2">
+                    Service Area
+                  </label>
+                  <input
+                    type="text"
+                    value={templateForm.service_area}
+                    onChange={(event) => setTemplateForm((prev) => ({ ...prev, service_area: event.target.value }))}
+                    placeholder="Oldsmar, Tampa, North..."
+                    className="w-full px-5 py-4 bg-gray-50 rounded-2xl border-none text-sm font-bold text-gray-900 placeholder:text-gray-300 focus:ring-2 focus:ring-blue-500 outline-none"
+                  />
+                </div>
               </div>
 
-              <section>
-                <h4 className="text-xs font-black text-gray-400 uppercase tracking-widest mb-4 ml-1">Active Jobs</h4>
-                <div className="grid grid-cols-1 gap-3">
-                  {availableJobs
-                    .filter((job) => job.status !== 'completed')
-                    .filter((job) =>
-                      job.customer_name_snapshot.toLowerCase().includes(addStopSearchQuery.toLowerCase()) ||
-                      job.service_snapshot.toLowerCase().includes(addStopSearchQuery.toLowerCase())
-                    )
-                    .map((job) => (
-                      <button
-                        key={job.id}
-                        onClick={() => handleAddJobToRoute(job)}
-                        className="flex items-center justify-between p-4 bg-gray-50 hover:bg-blue-50 hover:ring-2 hover:ring-blue-500 rounded-2xl transition-all text-left group"
-                      >
-                        <div>
-                          <p className="text-sm font-black text-gray-900">{job.customer_name_snapshot}</p>
-                          <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">{job.service_snapshot}</p>
-                        </div>
-                        <Plus className="h-5 w-5 text-gray-300 group-hover:text-blue-600" />
-                      </button>
-                    ))}
+              <div className="rounded-3xl bg-gray-50 border border-gray-100 p-5">
+                <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-4">Include In Route Generation</p>
+                <div className="space-y-3">
+                  <label className="flex items-center justify-between gap-4">
+                    <span className="text-sm font-black text-gray-900">Overdue work</span>
+                    <input
+                      type="checkbox"
+                      checked={templateForm.include_overdue}
+                      onChange={(event) => setTemplateForm((prev) => ({ ...prev, include_overdue: event.target.checked }))}
+                      className="h-5 w-5 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                    />
+                  </label>
+                  <label className="flex items-center justify-between gap-4">
+                    <span className="text-sm font-black text-gray-900">Skipped work</span>
+                    <input
+                      type="checkbox"
+                      checked={templateForm.include_skipped}
+                      onChange={(event) => setTemplateForm((prev) => ({ ...prev, include_skipped: event.target.checked }))}
+                      className="h-5 w-5 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                    />
+                  </label>
+                  <label className="flex items-center justify-between gap-4">
+                    <span className="text-sm font-black text-gray-900">Delayed work</span>
+                    <input
+                      type="checkbox"
+                      checked={templateForm.include_delayed}
+                      onChange={(event) => setTemplateForm((prev) => ({ ...prev, include_delayed: event.target.checked }))}
+                      className="h-5 w-5 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                    />
+                  </label>
                 </div>
-              </section>
+              </div>
 
-              <section>
-                <h4 className="text-xs font-black text-gray-400 uppercase tracking-widest mb-4 ml-1">All Clients</h4>
-                <div className="grid grid-cols-1 gap-3">
-                  {availableCustomers
-                    .filter((customer) => customer.name.toLowerCase().includes(addStopSearchQuery.toLowerCase()))
-                    .map((customer) => (
-                      <button
-                        key={customer.id}
-                        onClick={() => handleAddCustomerToRoute(customer)}
-                        className="flex items-center justify-between p-4 bg-gray-50 hover:bg-blue-50 hover:ring-2 hover:ring-blue-500 rounded-2xl transition-all text-left group"
-                      >
-                        <div>
-                          <p className="text-sm font-black text-gray-900">{customer.name}</p>
-                          <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">
-                            {customer.city}, {customer.state}
-                          </p>
-                        </div>
-                        <Plus className="h-5 w-5 text-gray-300 group-hover:text-blue-600" />
-                      </button>
-                    ))}
-                </div>
-              </section>
-            </div>
+              <div className="flex justify-end gap-3 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setIsTemplateModalOpen(false)}
+                  className="px-5 py-3 bg-gray-100 text-gray-700 rounded-2xl text-xs font-black uppercase tracking-widest hover:bg-gray-200 transition-all"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="px-5 py-3 bg-blue-600 text-white rounded-2xl text-xs font-black uppercase tracking-widest hover:bg-blue-700 transition-all flex items-center gap-2"
+                >
+                  <Save className="h-4 w-4" />
+                  Save Template
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}
 
-      {errorMessage && (
-        <div className="fixed bottom-24 left-1/2 -translate-x-1/2 z-[300] w-full max-w-md px-4 animate-in slide-in-from-bottom-4">
-          <div className="bg-red-600 text-white p-4 rounded-2xl shadow-2xl flex items-center justify-between gap-4">
-            <div className="flex items-center gap-3">
-              <Clock className="h-5 w-5 shrink-0" />
-              <p className="text-sm font-bold">{errorMessage}</p>
-            </div>
-            <button
-              onClick={() => setErrorMessage(null)}
-              className="p-1 hover:bg-white/20 rounded-lg transition-colors"
-            >
-              <ChevronRight className="h-4 w-4 rotate-45" />
-            </button>
+      {(saveMessage || errorMessage) && (
+        <div className="fixed bottom-24 left-1/2 -translate-x-1/2 z-[120] w-full max-w-md px-4">
+          <div className={`rounded-2xl shadow-2xl px-5 py-4 flex items-center gap-3 ${
+            errorMessage ? 'bg-red-600 text-white' : 'bg-green-600 text-white'
+          }`}>
+            {errorMessage ? <AlertTriangle className="h-5 w-5 shrink-0" /> : <CheckCircle2 className="h-5 w-5 shrink-0" />}
+            <p className="text-sm font-bold">{errorMessage || saveMessage}</p>
           </div>
         </div>
       )}

@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { useLocation } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { 
   Map as MapIcon, 
   List, 
@@ -47,9 +47,11 @@ import { renderProofMessage, templateService, MessageTemplate } from '../../serv
 
 export default function ActiveRoutePage() {
   const location = useLocation();
+  const navigate = useNavigate();
   const [flags] = useState<FeatureFlags>(featureFlagService.getFlags());
   const [routes, setRoutes] = useState<Route[]>([]);
   const [activeRoute, setActiveRoute] = useState<Route | null>(null);
+  const [selectedRouteId, setSelectedRouteId] = useState<string | null>(null);
   const [stopToVerify, setStopToVerify] = useState<RouteStop | null>(null);
   const [stops, setStops] = useState<RouteStop[]>([]);
   const [baseCamp, setBaseCamp] = useState<BaseCamp>(BASE_CAMP);
@@ -163,12 +165,15 @@ export default function ActiveRoutePage() {
   }, [templates.length, currentTemplateIndex]);
 
   useEffect(() => {
-    const routeState = location.state as { selectedRouteDate?: string } | null;
-    if (!routeState?.selectedRouteDate) return;
-
-    const nextDate = new Date(routeState.selectedRouteDate);
-    if (!Number.isNaN(nextDate.getTime())) {
-      setSelectedDate(nextDate);
+    const routeState = location.state as { selectedRouteDate?: string; selectedRouteId?: string } | null;
+    if (routeState?.selectedRouteDate) {
+      const nextDate = new Date(routeState.selectedRouteDate);
+      if (!Number.isNaN(nextDate.getTime())) {
+        setSelectedDate(nextDate);
+      }
+    }
+    if (routeState?.selectedRouteId) {
+      setSelectedRouteId(routeState.selectedRouteId);
     }
   }, [location.state]);
 
@@ -195,16 +200,6 @@ export default function ActiveRoutePage() {
   }, [availableJobs]);
 
   useEffect(() => {
-    const loadRouteForDate = async () => {
-      const route = await routeService.ensureRouteForDate(selectedDate, baseCamp);
-      if (route) {
-        setActiveRoute(route);
-      }
-    };
-    loadRouteForDate();
-  }, [selectedDate, baseCamp]);
-
-  useEffect(() => {
     const loadBaseCamp = async () => {
       const profile = await routeService.getBusinessProfile();
       if (profile?.base_camp_address) {
@@ -217,13 +212,15 @@ export default function ActiveRoutePage() {
       }
     };
     loadBaseCamp();
+  }, []);
 
-    const unsubscribeRoutes = routeService.subscribeToRoutes((data) => {
+  useEffect(() => {
+    const unsubscribeRoutes = routeService.subscribeToRoutesByDate(selectedDate, (data) => {
       setRoutes(data);
     });
 
     return () => unsubscribeRoutes();
-  }, []);
+  }, [selectedDate]);
 
   useEffect(() => {
     if (activeRoute?.id) {
@@ -242,15 +239,15 @@ export default function ActiveRoutePage() {
   }, [activeRoute?.id, selectedDate]);
 
   useEffect(() => {
-    const syncedRoute = routes.find((route) => {
-      const routeDate = route.route_date instanceof Timestamp ? route.route_date.toDate() : new Date(route.route_date);
-      return routeDate.toDateString() === selectedDate.toDateString();
-    });
-
-    if (syncedRoute) {
-      setActiveRoute(syncedRoute);
+    if (routes.length === 0) {
+      setActiveRoute(null);
+      return;
     }
-  }, [routes, selectedDate]);
+
+    const nextActiveRoute = routes.find((route) => route.id === selectedRouteId) || routes[0];
+    setActiveRoute(nextActiveRoute);
+    setSelectedRouteId(nextActiveRoute?.id || null);
+  }, [routes, selectedRouteId]);
 
   const handleArrowReorder = async (index: number, direction: 'up' | 'down') => {
     const newStops = [...stops];
@@ -695,7 +692,7 @@ export default function ActiveRoutePage() {
           <div>
             <div className="flex items-center gap-3">
               <h2 className="text-3xl font-black text-gray-900 tracking-tight">
-                {activeRoute?.name || 'Active Route'}
+                {activeRoute?.template_name || activeRoute?.name || 'Daily Route'}
               </h2>
               <span className="px-3 py-1 bg-blue-50 text-blue-600 text-[10px] font-black uppercase tracking-widest rounded-full">
                 {activeRoute?.status || 'Draft'}
@@ -743,6 +740,7 @@ export default function ActiveRoutePage() {
             
             <button 
               onClick={() => setIsAddingStop(true)}
+              disabled={!activeRoute?.id}
               className="flex items-center gap-2 px-6 py-3 bg-gray-900 text-white rounded-2xl shadow-lg font-black text-sm hover:bg-gray-800 transition-all"
             >
               <Plus className="h-4 w-4" />
@@ -750,6 +748,31 @@ export default function ActiveRoutePage() {
             </button>
           </div>
         </div>
+
+        {routes.length > 0 && (
+          <div className="flex flex-wrap gap-3">
+            {routes.map((route) => (
+              <button
+                key={route.id}
+                onClick={() => setSelectedRouteId(route.id || null)}
+                className={`px-4 py-3 rounded-2xl border text-left transition-all ${
+                  activeRoute?.id === route.id
+                    ? 'bg-blue-600 text-white border-blue-600 shadow-lg shadow-blue-100'
+                    : 'bg-white text-gray-700 border-gray-100 hover:border-blue-200 hover:bg-blue-50'
+                }`}
+              >
+                <p className="text-xs font-black uppercase tracking-widest">
+                  {route.template_name || route.name}
+                </p>
+                <p className={`text-[10px] font-black uppercase tracking-widest mt-1 ${
+                  activeRoute?.id === route.id ? 'text-blue-100' : 'text-gray-400'
+                }`}>
+                  {route.status.replace('_', ' ')}
+                </p>
+              </button>
+            ))}
+          </div>
+        )}
 
         {/* Summary Counters */}
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
@@ -919,26 +942,39 @@ export default function ActiveRoutePage() {
             <MapIcon className="h-10 w-10 text-blue-600" />
           </div>
           <div>
-            <h3 className="text-2xl font-black text-gray-900">No active route stops</h3>
+            <h3 className="text-2xl font-black text-gray-900">
+              {activeRoute ? 'No route stops on this run' : 'No generated route run for this date'}
+            </h3>
             <p className="text-gray-400 font-bold max-w-xs mx-auto mt-2">
-              Start building your route by adding customers or jobs from your schedule.
+              {activeRoute
+                ? 'Add work to this run or go back to the route planner to refresh what is due.'
+                : 'Generate a route run from the route planner first, then open it here for daily execution.'}
             </p>
           </div>
           <div className="flex gap-4">
-            <button 
-              onClick={() => setIsAddingStop(true)}
+            <button
+              onClick={() => {
+                navigate('/routes', {
+                  state: {
+                    selectedDate: selectedDate.toISOString(),
+                    selectedTemplateId: activeRoute?.template_id,
+                  },
+                });
+              }}
               className="flex items-center gap-2 px-8 py-4 bg-gray-900 text-white rounded-3xl font-black shadow-2xl hover:bg-gray-800 transition-all"
             >
               <Plus className="h-5 w-5" />
-              Build New Route
+              Open Route Planner
             </button>
-            <button 
-              onClick={handleSeedData}
-              className="flex items-center gap-2 px-8 py-4 bg-blue-50 text-blue-600 rounded-3xl font-black border border-blue-100 hover:bg-blue-100 transition-all"
-            >
-              <Zap className="h-5 w-5" />
-              Inject Sample Data
-            </button>
+            {activeRoute && (
+              <button
+                onClick={() => setIsAddingStop(true)}
+                className="flex items-center gap-2 px-8 py-4 bg-blue-50 text-blue-600 rounded-3xl font-black border border-blue-100 hover:bg-blue-100 transition-all"
+              >
+                <Plus className="h-5 w-5" />
+                Add Stop
+              </button>
+            )}
           </div>
         </div>
       )}

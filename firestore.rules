@@ -141,6 +141,18 @@ service cloud.firestore {
              (data.route_date is timestamp || data.route_date is string);
     }
 
+    function isValidRouteTemplate(data) {
+      return data.ownerId is string &&
+             data.name is string &&
+             data.mode in ['day', 'area', 'hybrid', 'custom'] &&
+             data.cadence in ['weekly', 'bi_weekly', 'monthly', 'manual'] &&
+             (!('preferred_day' in data) || data.preferred_day is number || data.preferred_day == null) &&
+             (!('service_area' in data) || data.service_area is string) &&
+             (!('include_overdue' in data) || data.include_overdue is bool) &&
+             (!('include_skipped' in data) || data.include_skipped is bool) &&
+             (!('include_delayed' in data) || data.include_delayed is bool);
+    }
+
     function isValidRouteStop(data) {
       return data.route_id is string &&
              data.stop_order is number &&
@@ -233,6 +245,13 @@ service cloud.firestore {
       allow read: if isDocOwner();
       allow create: if isAuthenticated() && request.resource.data.ownerId == request.auth.uid && isValidRoute(request.resource.data);
       allow update: if isDocOwner() && ownerIdNotModified() && isValidRoute(request.resource.data);
+      allow delete: if isDocOwner();
+    }
+
+    match /route_templates/{templateId} {
+      allow read: if isDocOwner();
+      allow create: if isAuthenticated() && request.resource.data.ownerId == request.auth.uid && isValidRouteTemplate(request.resource.data);
+      allow update: if isDocOwner() && ownerIdNotModified() && isValidRouteTemplate(request.resource.data);
       allow delete: if isDocOwner();
     }
 
