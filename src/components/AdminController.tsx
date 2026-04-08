@@ -16,6 +16,13 @@ const formatBytes = (bytes: number) => {
 const formatCurrency = (amount: number) =>
   amount.toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 });
 
+const formatReportDate = (value: any) => {
+  if (!value) return '';
+  if (value?.toDate) return value.toDate().toLocaleString();
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? '' : parsed.toLocaleString();
+};
+
 export default function AdminController() {
   const [metrics, setMetrics] = useState<AdminMetrics | null>(null);
   const [bugReports, setBugReports] = useState<BugReport[]>([]);
@@ -269,7 +276,7 @@ export default function AdminController() {
                       {report.category.replace('_', ' ')}
                     </span>
                     <span className="text-[10px] font-black uppercase tracking-widest text-gray-400">
-                      {report.created_at?.toDate ? report.created_at.toDate().toLocaleString() : ''}
+                      {formatReportDate(report.created_at)}
                     </span>
                   </div>
 

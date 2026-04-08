@@ -1,5 +1,6 @@
 import {
   addDoc,
+  arrayUnion,
   collection,
   onSnapshot,
   orderBy,
@@ -8,6 +9,7 @@ import {
   updateDoc,
   where,
   doc,
+  getDoc,
 } from 'firebase/firestore';
 import { auth, db } from '../firebase';
 import { waitForCurrentUser } from './authSessionService';
@@ -42,6 +44,7 @@ export interface BugReport {
   browser_info?: string;
   created_at?: any;
   updated_at?: any;
+  source?: 'primary' | 'fallback_user_doc';
 }
 
 export interface CreateBugReportInput {
@@ -55,6 +58,7 @@ export interface CreateBugReportInput {
 }
 
 const COLLECTION_NAME = 'bug_reports';
+const FALLBACK_USER_FIELD = 'bug_report_fallbacks';
 
 const MAX_SCREENSHOT_WIDTH = 1280;
 const SCREENSHOT_QUALITY = 0.72;
@@ -74,6 +78,47 @@ const loadImage = (file: File) =>
     reader.onerror = reject;
     reader.readAsDataURL(file);
   });
+
+const createClientTimestamp = () => new Date().toISOString();
+const createFallbackId = () => `fallback-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+
+const normalizeReportDate = (value: any) => {
+  if (!value) return 0;
+  if (typeof value === 'string') {
+    const parsed = Date.parse(value);
+    return Number.isNaN(parsed) ? 0 : parsed;
+  }
+  if (value?.toDate) return value.toDate().getTime();
+  if (value instanceof Date) return value.getTime();
+  return 0;
+};
+
+const sortReports = (reports: BugReport[]) =>
+  [...reports].sort((left, right) => normalizeReportDate(right.created_at) - normalizeReportDate(left.created_at));
+
+const mapFallbackReport = (ownerId: string, rawReport: any): BugReport => ({
+  id: `fallback:${ownerId}:${rawReport.fallback_id || rawReport.created_at || ''}`,
+  ownerId,
+  reporter_uid: rawReport.reporter_uid || ownerId,
+  reporter_email: rawReport.reporter_email || '',
+  reporter_name: rawReport.reporter_name || rawReport.reporter_email || 'Unknown User',
+  category: rawReport.category || 'other',
+  details: rawReport.details || '',
+  status: rawReport.status || 'open',
+  page_path: rawReport.page_path || '',
+  current_url: rawReport.current_url || '',
+  screenshot_data_url: rawReport.screenshot_data_url || '',
+  screenshot_content_type: rawReport.screenshot_content_type || '',
+  browser_info: rawReport.browser_info || '',
+  created_at: rawReport.created_at,
+  updated_at: rawReport.updated_at,
+  source: 'fallback_user_doc',
+});
+
+const extractFallbackReports = (ownerId: string, data: any): BugReport[] => {
+  const rawReports = Array.isArray(data?.[FALLBACK_USER_FIELD]) ? data[FALLBACK_USER_FIELD] : [];
+  return rawReports.map((rawReport: any) => mapFallbackReport(ownerId, rawReport));
+};
 
 export const bugReportService = {
   categories: [
@@ -105,6 +150,23 @@ export const bugReportService = {
     const user = await waitForCurrentUser();
     if (!user) throw new Error('User not authenticated');
 
+    const buildReportPayload = (screenshotUpload: { downloadUrl: string; contentType: string } | null, screenshotUploadStatus: 'not_provided' | 'saved' | 'skipped_after_upload_failure', screenshotUploadError: string) => ({
+      ownerId: user.uid,
+      reporter_uid: user.uid,
+      reporter_email: user.email || '',
+      reporter_name: input.reporter_name || user.displayName || user.email || 'Unknown User',
+      category: input.category,
+      details: input.details.trim(),
+      status: 'open' as BugReportStatus,
+      page_path: input.page_path,
+      current_url: input.current_url,
+      screenshot_data_url: screenshotUpload?.downloadUrl || '',
+      screenshot_content_type: screenshotUpload?.contentType || input.screenshot_content_type || '',
+      screenshot_upload_status: screenshotUploadStatus,
+      screenshot_upload_error: screenshotUploadError,
+      browser_info: typeof navigator !== 'undefined' ? navigator.userAgent : '',
+    });
+
     try {
       let screenshotUpload = null;
       let screenshotUploadStatus: 'not_provided' | 'saved' | 'skipped_after_upload_failure' = input.screenshot_data_url
@@ -130,24 +192,32 @@ export const bugReportService = {
         }
       }
 
-      return await addDoc(collection(db, COLLECTION_NAME), {
-        ownerId: user.uid,
-        reporter_uid: user.uid,
-        reporter_email: user.email || '',
-        reporter_name: input.reporter_name || user.displayName || user.email || 'Unknown User',
-        category: input.category,
-        details: input.details.trim(),
-        status: 'open',
-        page_path: input.page_path,
-        current_url: input.current_url,
-        screenshot_data_url: screenshotUpload?.downloadUrl || '',
-        screenshot_content_type: screenshotUpload?.contentType || input.screenshot_content_type || '',
-        screenshot_upload_status: screenshotUploadStatus,
-        screenshot_upload_error: screenshotUploadError,
-        browser_info: typeof navigator !== 'undefined' ? navigator.userAgent : '',
-        created_at: serverTimestamp(),
-        updated_at: serverTimestamp(),
-      });
+      const reportPayload = buildReportPayload(screenshotUpload, screenshotUploadStatus, screenshotUploadError);
+
+      try {
+        return await addDoc(collection(db, COLLECTION_NAME), {
+          ...reportPayload,
+          created_at: serverTimestamp(),
+          updated_at: serverTimestamp(),
+        });
+      } catch (primaryError) {
+        console.error('Primary bug report save failed, falling back to user profile storage:', primaryError);
+        const fallbackId = createFallbackId();
+        const timestamp = createClientTimestamp();
+        await updateDoc(doc(db, 'users', user.uid), {
+          [FALLBACK_USER_FIELD]: arrayUnion({
+            fallback_id: fallbackId,
+            ...reportPayload,
+            created_at: timestamp,
+            updated_at: timestamp,
+          }),
+          updated_at: serverTimestamp(),
+        });
+
+        return {
+          id: `fallback:${user.uid}:${fallbackId}`,
+        };
+      }
     } catch (error) {
       handleFirestoreError(error, OperationType.WRITE, COLLECTION_NAME);
     }
@@ -155,9 +225,17 @@ export const bugReportService = {
 
   subscribeToOwnBugReports: (callback: (reports: BugReport[]) => void) => {
     let unsubscribeReports = () => {};
+    let unsubscribeFallbacks = () => {};
+    let primaryReports: BugReport[] = [];
+    let fallbackReports: BugReport[] = [];
+
+    const emit = () => callback(sortReports([...fallbackReports, ...primaryReports]));
 
     const unsubscribeAuth = auth.onAuthStateChanged((user) => {
       unsubscribeReports();
+      unsubscribeFallbacks();
+      primaryReports = [];
+      fallbackReports = [];
 
       if (!user) {
         callback([]);
@@ -167,28 +245,69 @@ export const bugReportService = {
       unsubscribeReports = onSnapshot(
         query(collection(db, COLLECTION_NAME), where('ownerId', '==', user.uid), orderBy('created_at', 'desc')),
         (snapshot) => {
-          callback(snapshot.docs.map((entry) => ({ id: entry.id, ...entry.data() } as BugReport)));
+          primaryReports = snapshot.docs.map((entry) => ({ id: entry.id, ...entry.data(), source: 'primary' } as BugReport));
+          emit();
         },
-        (error) => handleFirestoreError(error, OperationType.GET, COLLECTION_NAME)
+        (error) => {
+          console.error('Primary own bug report subscription failed, using fallback only:', error);
+          primaryReports = [];
+          emit();
+        }
+      );
+
+      unsubscribeFallbacks = onSnapshot(
+        doc(db, 'users', user.uid),
+        (snapshot) => {
+          fallbackReports = snapshot.exists() ? extractFallbackReports(user.uid, snapshot.data()) : [];
+          emit();
+        },
+        (error) => {
+          console.error('Fallback own bug report subscription failed:', error);
+        }
       );
     });
 
     return () => {
       unsubscribeReports();
+      unsubscribeFallbacks();
       unsubscribeAuth();
     };
   },
 
   subscribeToAllBugReports: (callback: (reports: BugReport[]) => void) => {
-    const unsubscribe = onSnapshot(
+    let primaryReports: BugReport[] = [];
+    let fallbackReports: BugReport[] = [];
+
+    const emit = () => callback(sortReports([...fallbackReports, ...primaryReports]));
+
+    const unsubscribePrimary = onSnapshot(
       query(collection(db, COLLECTION_NAME), orderBy('created_at', 'desc')),
       (snapshot) => {
-        callback(snapshot.docs.map((entry) => ({ id: entry.id, ...entry.data() } as BugReport)));
+        primaryReports = snapshot.docs.map((entry) => ({ id: entry.id, ...entry.data(), source: 'primary' } as BugReport));
+        emit();
       },
-      (error) => handleFirestoreError(error, OperationType.GET, COLLECTION_NAME)
+      (error) => {
+        console.error('Primary bug report subscription failed, using fallback only:', error);
+        primaryReports = [];
+        emit();
+      }
     );
 
-    return () => unsubscribe();
+    const unsubscribeFallbacks = onSnapshot(
+      collection(db, 'users'),
+      (snapshot) => {
+        fallbackReports = snapshot.docs.flatMap((entry) => extractFallbackReports(entry.id, entry.data()));
+        emit();
+      },
+      (error) => {
+        console.error('Fallback bug report subscription failed:', error);
+      }
+    );
+
+    return () => {
+      unsubscribePrimary();
+      unsubscribeFallbacks();
+    };
   },
 
   updateBugReportStatus: async (reportId: string, status: BugReportStatus) => {
@@ -196,6 +315,24 @@ export const bugReportService = {
     if (!user) throw new Error('User not authenticated');
 
     try {
+      if (reportId.startsWith('fallback:')) {
+        const [, ownerId, fallbackId] = reportId.split(':');
+        const userDocRef = doc(db, 'users', ownerId);
+        const userDoc = await getDoc(userDocRef);
+        const existingFallbacks = Array.isArray(userDoc.data()?.[FALLBACK_USER_FIELD]) ? userDoc.data()?.[FALLBACK_USER_FIELD] : [];
+        const nextFallbacks = existingFallbacks.map((entry: any) =>
+          entry.fallback_id === fallbackId
+            ? { ...entry, status, updated_at: createClientTimestamp() }
+            : entry
+        );
+
+        await updateDoc(userDocRef, {
+          [FALLBACK_USER_FIELD]: nextFallbacks,
+          updated_at: serverTimestamp(),
+        });
+        return;
+      }
+
       await updateDoc(doc(db, COLLECTION_NAME, reportId), {
         status,
         updated_at: serverTimestamp(),
