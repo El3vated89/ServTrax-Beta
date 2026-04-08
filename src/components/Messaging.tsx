@@ -1,14 +1,22 @@
 import React, { useState, useEffect } from 'react';
-import { MessageSquare, Plus, Trash2, Edit2, Save, X, ChevronRight, Info, Smartphone, Mail, BellRing } from 'lucide-react';
+import { MessageSquare, Plus, Trash2, Edit2, Save, X, ChevronRight, Info, Smartphone, Mail, BellRing, Send } from 'lucide-react';
 import { templateService, MessageTemplate } from '../services/templateService';
 import { platformMessagingService, PlatformMessagingConfig } from '../services/platformMessagingService';
+import { messageDeliveryService, MessageDeliveryRecord } from '../services/messageDeliveryService';
 
 export default function Messaging() {
   const [templates, setTemplates] = useState<MessageTemplate[]>([]);
   const [providerConfig, setProviderConfig] = useState<PlatformMessagingConfig>(platformMessagingService.getDefaultConfig());
+  const [deliveries, setDeliveries] = useState<MessageDeliveryRecord[]>([]);
   const [isAdding, setIsAdding] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [formData, setFormData] = useState({ name: '', content: '' });
+  const [deliveryChannel, setDeliveryChannel] = useState<'sms' | 'email'>('sms');
+  const [deliveryRecipient, setDeliveryRecipient] = useState('');
+  const [deliveryRecipientLabel, setDeliveryRecipientLabel] = useState('');
+  const [deliveryTemplateId, setDeliveryTemplateId] = useState('');
+  const [deliverySubject, setDeliverySubject] = useState('ServTrax Update');
+  const [deliveryBody, setDeliveryBody] = useState('');
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
@@ -24,10 +32,22 @@ export default function Messaging() {
   }, []);
 
   useEffect(() => {
+    const unsubscribe = messageDeliveryService.subscribeToDeliveries(setDeliveries);
+    return () => unsubscribe();
+  }, []);
+
+  useEffect(() => {
     if (!successMessage) return undefined;
     const timeout = window.setTimeout(() => setSuccessMessage(null), 3000);
     return () => window.clearTimeout(timeout);
   }, [successMessage]);
+
+  useEffect(() => {
+    const selectedTemplate = templates.find((template) => template.id === deliveryTemplateId);
+    if (selectedTemplate) {
+      setDeliveryBody(selectedTemplate.content);
+    }
+  }, [deliveryTemplateId, templates]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -79,6 +99,44 @@ export default function Messaging() {
       } catch (e) {}
       setErrorMessage(msg);
       setConfirmDeleteId(null);
+    }
+  };
+
+  const handleSendDelivery = async (event: React.FormEvent) => {
+    event.preventDefault();
+    setErrorMessage(null);
+    setSuccessMessage(null);
+
+    const selectedTemplate = templates.find((template) => template.id === deliveryTemplateId);
+    if (!deliveryRecipient.trim()) {
+      setErrorMessage(`A ${deliveryChannel === 'sms' ? 'phone number' : 'recipient email'} is required.`);
+      return;
+    }
+
+    if (!deliveryBody.trim()) {
+      setErrorMessage('Message body is required.');
+      return;
+    }
+
+    try {
+      await messageDeliveryService.sendMessage({
+        channel: deliveryChannel,
+        recipient: deliveryRecipient.trim(),
+        recipient_label: deliveryRecipientLabel.trim() || deliveryRecipient.trim(),
+        template_id: selectedTemplate?.id,
+        template_name: selectedTemplate?.name,
+        subject: deliveryChannel === 'email' ? deliverySubject.trim() : undefined,
+        body: deliveryBody.trim(),
+      }, providerConfig);
+
+      setDeliveryRecipient('');
+      setDeliveryRecipientLabel('');
+      setDeliveryTemplateId('');
+      setDeliveryBody('');
+      setSuccessMessage(deliveryChannel === 'sms' ? 'SMS delivery logged.' : 'Email delivery logged.');
+    } catch (error) {
+      console.error('Error logging delivery:', error);
+      setErrorMessage('Failed to create delivery record.');
     }
   };
 
@@ -166,6 +224,153 @@ export default function Messaging() {
               {providerConfig.in_app_notifications_enabled ? 'In-app notifications are active as the shared alert foundation.' : 'In-app notification foundation is available and can be re-enabled.'}
             </p>
           </div>
+        </div>
+      </div>
+
+      <div className="bg-white rounded-[32px] p-6 shadow-sm border border-gray-100 mb-8">
+        <div className="flex items-center justify-between gap-4 mb-6">
+          <div>
+            <h3 className="text-xl font-black text-gray-900">Delivery Layers</h3>
+            <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mt-2">
+              Templates stay central while SMS and email flow through the same messaging system
+            </p>
+          </div>
+        </div>
+
+        <form onSubmit={handleSendDelivery} className="space-y-6">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <label className="block">
+              <span className="block text-[10px] font-black text-gray-400 uppercase tracking-widest ml-1 mb-2">Channel</span>
+              <select
+                value={deliveryChannel}
+                onChange={(event) => setDeliveryChannel(event.target.value as 'sms' | 'email')}
+                className="w-full bg-gray-50 border border-gray-100 rounded-2xl py-4 px-5 text-sm font-bold text-gray-900 outline-none focus:ring-4 focus:ring-blue-500/10 focus:border-blue-500 transition-all"
+              >
+                <option value="sms">SMS</option>
+                <option value="email">Email</option>
+              </select>
+            </label>
+            <label className="block">
+              <span className="block text-[10px] font-black text-gray-400 uppercase tracking-widest ml-1 mb-2">Template</span>
+              <select
+                value={deliveryTemplateId}
+                onChange={(event) => setDeliveryTemplateId(event.target.value)}
+                className="w-full bg-gray-50 border border-gray-100 rounded-2xl py-4 px-5 text-sm font-bold text-gray-900 outline-none focus:ring-4 focus:ring-blue-500/10 focus:border-blue-500 transition-all"
+              >
+                <option value="">Custom / No Template</option>
+                {templates.map((template) => (
+                  <option key={template.id} value={template.id}>{template.name}</option>
+                ))}
+              </select>
+            </label>
+            <label className="block">
+              <span className="block text-[10px] font-black text-gray-400 uppercase tracking-widest ml-1 mb-2">
+                {deliveryChannel === 'sms' ? 'Phone Number' : 'Email Address'}
+              </span>
+              <input
+                type={deliveryChannel === 'sms' ? 'text' : 'email'}
+                value={deliveryRecipient}
+                onChange={(event) => setDeliveryRecipient(event.target.value)}
+                className="w-full bg-gray-50 border border-gray-100 rounded-2xl py-4 px-5 text-sm font-bold text-gray-900 outline-none focus:ring-4 focus:ring-blue-500/10 focus:border-blue-500 transition-all"
+                placeholder={deliveryChannel === 'sms' ? '+1...' : 'customer@example.com'}
+              />
+            </label>
+            <label className="block">
+              <span className="block text-[10px] font-black text-gray-400 uppercase tracking-widest ml-1 mb-2">Recipient Label</span>
+              <input
+                type="text"
+                value={deliveryRecipientLabel}
+                onChange={(event) => setDeliveryRecipientLabel(event.target.value)}
+                className="w-full bg-gray-50 border border-gray-100 rounded-2xl py-4 px-5 text-sm font-bold text-gray-900 outline-none focus:ring-4 focus:ring-blue-500/10 focus:border-blue-500 transition-all"
+                placeholder="Customer name"
+              />
+            </label>
+            {deliveryChannel === 'email' && (
+              <label className="block md:col-span-2">
+                <span className="block text-[10px] font-black text-gray-400 uppercase tracking-widest ml-1 mb-2">Subject</span>
+                <input
+                  type="text"
+                  value={deliverySubject}
+                  onChange={(event) => setDeliverySubject(event.target.value)}
+                  className="w-full bg-gray-50 border border-gray-100 rounded-2xl py-4 px-5 text-sm font-bold text-gray-900 outline-none focus:ring-4 focus:ring-blue-500/10 focus:border-blue-500 transition-all"
+                />
+              </label>
+            )}
+            <label className="block md:col-span-2">
+              <span className="block text-[10px] font-black text-gray-400 uppercase tracking-widest ml-1 mb-2">Message Body</span>
+              <textarea
+                rows={5}
+                value={deliveryBody}
+                onChange={(event) => setDeliveryBody(event.target.value)}
+                className="w-full bg-gray-50 border border-gray-100 rounded-2xl py-4 px-5 text-sm font-bold text-gray-900 outline-none focus:ring-4 focus:ring-blue-500/10 focus:border-blue-500 transition-all resize-none"
+                placeholder="Message content"
+              />
+            </label>
+          </div>
+
+          <div className="rounded-2xl bg-gray-50 border border-gray-100 p-4">
+            <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Delivery Status</p>
+            <p className="text-sm font-bold text-gray-500 mt-2">
+              Twilio and SendGrid routing is logged here now. Live provider execution still requires a secure server endpoint before messages can be sent for real.
+            </p>
+          </div>
+
+          <button
+            type="submit"
+            className="w-full bg-gray-900 text-white py-4 rounded-2xl text-sm font-black uppercase tracking-widest hover:bg-gray-800 transition-all flex items-center justify-center gap-2"
+          >
+            <Send className="h-5 w-5" />
+            Log Delivery
+          </button>
+        </form>
+      </div>
+
+      <div className="bg-white rounded-[32px] p-6 shadow-sm border border-gray-100 mb-8">
+        <div className="flex items-center justify-between gap-4 mb-6">
+          <div>
+            <h3 className="text-xl font-black text-gray-900">Delivery Log</h3>
+            <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mt-2">
+              Shared delivery history for future SMS and email usage tracking
+            </p>
+          </div>
+        </div>
+
+        <div className="space-y-3">
+          {deliveries.length === 0 ? (
+            <p className="text-sm font-bold text-gray-400">No delivery records yet.</p>
+          ) : (
+            [...deliveries]
+              .sort((left, right) => {
+                const leftDate = left.created_at?.toDate ? left.created_at.toDate().getTime() : 0;
+                const rightDate = right.created_at?.toDate ? right.created_at.toDate().getTime() : 0;
+                return rightDate - leftDate;
+              })
+              .slice(0, 10)
+              .map((delivery) => (
+                <div key={delivery.id} className="rounded-2xl bg-gray-50 border border-gray-100 px-4 py-4">
+                  <div className="flex items-start justify-between gap-4">
+                    <div>
+                      <p className="text-sm font-black text-gray-900">{delivery.recipient_label}</p>
+                      <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mt-2">
+                        {delivery.channel} • {delivery.provider} • {delivery.recipient}
+                      </p>
+                    </div>
+                    <span className={`text-[10px] font-black px-2 py-1 rounded-full uppercase tracking-widest ${
+                      delivery.status === 'sent'
+                        ? 'bg-green-100 text-green-700'
+                        : delivery.status === 'queued'
+                        ? 'bg-blue-100 text-blue-700'
+                        : delivery.status === 'failed'
+                        ? 'bg-red-100 text-red-700'
+                        : 'bg-amber-100 text-amber-700'
+                    }`}>
+                      {delivery.status}
+                    </span>
+                  </div>
+                  <p className="text-xs font-bold text-gray-500 mt-3">{delivery.error_message || delivery.body}</p>
+                </div>
+              ))
+          )}
         </div>
       </div>
 

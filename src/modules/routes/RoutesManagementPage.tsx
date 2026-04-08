@@ -73,6 +73,23 @@ const formatRouteDateTime = (value: any) =>
     minute: '2-digit',
   });
 
+const getFriendlyErrorMessage = (error: unknown, fallback: string) => {
+  if (error instanceof Error) {
+    try {
+      const parsed = JSON.parse(error.message);
+      if (parsed?.error) {
+        return parsed.error;
+      }
+    } catch {
+      if (error.message) {
+        return error.message;
+      }
+    }
+  }
+
+  return fallback;
+};
+
 const cadenceLabels: Record<RouteTemplateCadence, string> = {
   weekly: 'Weekly',
   bi_weekly: 'Bi-weekly',
@@ -411,7 +428,7 @@ export default function RoutesManagementPage() {
       setIsTemplateModalOpen(false);
     } catch (error) {
       console.error('Error saving route template:', error);
-      setErrorMessage('Failed to save route template.');
+      setErrorMessage(getFriendlyErrorMessage(error, 'Failed to save route template.'));
     }
   };
 
@@ -425,7 +442,7 @@ export default function RoutesManagementPage() {
       setSaveMessage('Route template deleted');
     } catch (error) {
       console.error('Error deleting route template:', error);
-      setErrorMessage('Failed to delete route template.');
+      setErrorMessage(getFriendlyErrorMessage(error, 'Failed to delete route template.'));
     }
   };
 
@@ -453,7 +470,7 @@ export default function RoutesManagementPage() {
       setSaveMessage(currentRuns?.length ? 'Route runs refreshed' : 'Route runs generated');
     } catch (error) {
       console.error('Error syncing route run:', error);
-      setErrorMessage('Failed to generate this route run.');
+      setErrorMessage(getFriendlyErrorMessage(error, 'Failed to generate this route run.'));
     } finally {
       setIsSyncingRun(false);
     }
@@ -498,7 +515,7 @@ export default function RoutesManagementPage() {
       setSaveMessage('Route order saved');
     } catch (error) {
       console.error('Error saving route order:', error);
-      setErrorMessage('Failed to save route order.');
+      setErrorMessage(getFriendlyErrorMessage(error, 'Failed to save route order.'));
     } finally {
       setIsSavingOrder(false);
     }
@@ -531,7 +548,7 @@ export default function RoutesManagementPage() {
       setSaveMessage('Run details saved');
     } catch (error) {
       console.error('Error saving run details:', error);
-      setErrorMessage('Failed to save run details.');
+      setErrorMessage(getFriendlyErrorMessage(error, 'Failed to save run details.'));
     } finally {
       setIsSavingRunDetails(false);
     }
@@ -553,7 +570,7 @@ export default function RoutesManagementPage() {
       setSaveMessage('Stop removed from route run');
     } catch (error) {
       console.error('Error removing route stop:', error);
-      setErrorMessage('Failed to remove route stop.');
+      setErrorMessage(getFriendlyErrorMessage(error, 'Failed to remove route stop.'));
     }
   };
 
@@ -603,7 +620,7 @@ export default function RoutesManagementPage() {
       setSaveMessage('Job added to the current route run');
     } catch (error) {
       console.error('Error adding job to route run:', error);
-      setErrorMessage('Failed to add this job to the current route run.');
+      setErrorMessage(getFriendlyErrorMessage(error, 'Failed to add this job to the current route run.'));
     }
   };
 

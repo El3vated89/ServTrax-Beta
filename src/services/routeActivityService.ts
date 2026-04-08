@@ -1,6 +1,7 @@
 import { addDoc, collection, onSnapshot, query, serverTimestamp, where } from 'firebase/firestore';
 import { auth, db } from '../firebase';
 import { Route, RouteActivityLog, RouteActivityType, RouteStop } from '../modules/routes/types';
+import { waitForCurrentUser } from './authSessionService';
 import { handleFirestoreError, OperationType } from './verificationService';
 
 const COLLECTION_NAME = 'route_activity_logs';
@@ -22,22 +23,38 @@ export const routeActivityService = {
   subscribeToRouteActivity: (routeId: string, callback: (logs: RouteActivityLog[]) => void) => {
     if (!routeId) return () => {};
 
-    const q = query(
-      collection(db, COLLECTION_NAME),
-      where('route_id', '==', routeId)
-    );
+    let unsubscribeLogs = () => {};
 
-    return onSnapshot(q, (snapshot) => {
-      const logs = snapshot.docs.map((entry) => ({
-        id: entry.id,
-        ...entry.data(),
-      })) as RouteActivityLog[];
+    const unsubscribeAuth = auth.onAuthStateChanged((user) => {
+      unsubscribeLogs();
 
-      logs.sort((left, right) => toMillis(right.occurred_at) - toMillis(left.occurred_at));
-      callback(logs);
-    }, (error) => {
-      handleFirestoreError(error, OperationType.GET, `${COLLECTION_NAME}/${routeId}`);
+      if (!user) {
+        callback([]);
+        return;
+      }
+
+      const q = query(
+        collection(db, COLLECTION_NAME),
+        where('route_id', '==', routeId)
+      );
+
+      unsubscribeLogs = onSnapshot(q, (snapshot) => {
+        const logs = snapshot.docs.map((entry) => ({
+          id: entry.id,
+          ...entry.data(),
+        })) as RouteActivityLog[];
+
+        logs.sort((left, right) => toMillis(right.occurred_at) - toMillis(left.occurred_at));
+        callback(logs);
+      }, (error) => {
+        handleFirestoreError(error, OperationType.GET, `${COLLECTION_NAME}/${routeId}`);
+      });
     });
+
+    return () => {
+      unsubscribeLogs();
+      unsubscribeAuth();
+    };
   },
 
   addActivity: async ({
@@ -51,7 +68,7 @@ export const routeActivityService = {
     summary: string;
     stop?: RouteStop | null;
   }) => {
-    const user = auth.currentUser;
+    const user = await waitForCurrentUser();
     if (!user || !route.id) return null;
 
     const actor = actorSnapshot();

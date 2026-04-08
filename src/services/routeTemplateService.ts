@@ -1,6 +1,7 @@
 import { addDoc, collection, deleteDoc, doc, onSnapshot, query, serverTimestamp, updateDoc, where } from 'firebase/firestore';
 import { auth, db } from '../firebase';
 import { RouteTemplate } from '../modules/routes/types';
+import { waitForCurrentUser } from './authSessionService';
 import { handleFirestoreError, OperationType } from './verificationService';
 
 const COLLECTION_NAME = 'route_templates';
@@ -53,7 +54,7 @@ export const routeTemplateService = {
   },
 
   addTemplate: async (template: Omit<RouteTemplate, 'id' | 'ownerId' | 'created_at' | 'updated_at'>) => {
-    const user = auth.currentUser;
+    const user = await waitForCurrentUser();
     if (!user) throw new Error('User not authenticated');
 
     try {
@@ -69,6 +70,8 @@ export const routeTemplateService = {
   },
 
   updateTemplate: async (id: string, updates: Partial<RouteTemplate>) => {
+    const user = await waitForCurrentUser();
+    if (!user) throw new Error('User not authenticated');
     try {
       const docRef = doc(db, COLLECTION_NAME, id);
       const nextData = {
@@ -85,6 +88,8 @@ export const routeTemplateService = {
   },
 
   deleteTemplate: async (id: string) => {
+    const user = await waitForCurrentUser();
+    if (!user) throw new Error('User not authenticated');
     try {
       return await deleteDoc(doc(db, COLLECTION_NAME, id));
     } catch (error) {

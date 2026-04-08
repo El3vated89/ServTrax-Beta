@@ -6,6 +6,7 @@ import {
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { storageService, StorageAsset } from '../services/StorageService';
+import { usageTrackingService, UsageCounter } from '../services/usageTrackingService';
 import { jobService, Job } from '../services/jobService';
 import { customerService, Customer } from '../services/customerService';
 import { Timestamp } from 'firebase/firestore';
@@ -13,6 +14,7 @@ import { Timestamp } from 'firebase/firestore';
 export default function Storage() {
   const [assets, setAssets] = useState<StorageAsset[]>([]);
   const [summary, setSummary] = useState({ used_bytes: 0, limit_bytes: 0, asset_count: 0, plan_name: '', storage_cap: 0, retention_days: null as number | null });
+  const [usage, setUsage] = useState<UsageCounter | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [searchQuery, setSearchQuery] = useState('');
   const [filterType, setFilterType] = useState<'all' | 'expiring' | 'unassigned' | 'largest'>('all');
@@ -42,6 +44,7 @@ export default function Storage() {
         storageService.getUsageSummary(),
         storageService.getAssets()
       ]);
+      await usageTrackingService.syncStorageUsageForCurrentUser();
       setSummary(summaryData);
       setAssets(assetsData);
       return assetsData;
@@ -61,9 +64,11 @@ export default function Storage() {
   useEffect(() => {
     const unsubscribeJobs = jobService.subscribeToJobs(setJobs);
     const unsubscribeCustomers = customerService.subscribeToCustomers(setCustomers);
+    const unsubscribeUsage = usageTrackingService.subscribeToCurrentUsage(setUsage);
     return () => {
       unsubscribeJobs();
       unsubscribeCustomers();
+      unsubscribeUsage();
     };
   }, []);
 
@@ -247,6 +252,8 @@ export default function Storage() {
 
   const formatSize = (bytes: number) => {
     if (!bytes) return '0 KB';
+    if (bytes >= 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+    if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
     return `${(bytes / 1024).toFixed(1)} KB`;
   };
 
@@ -326,6 +333,32 @@ export default function Storage() {
               <option value="unassigned">Unassigned</option>
               <option value="largest">Largest</option>
             </select>
+          </div>
+        </div>
+      </div>
+
+      <div className="max-w-xl mx-auto px-4 pt-4">
+        <div className="grid grid-cols-3 gap-3">
+          <div className="rounded-2xl border border-gray-100 bg-white px-4 py-4 shadow-sm">
+            <p className="text-[10px] font-black uppercase tracking-widest text-gray-400">Storage Usage</p>
+            <p className="text-sm font-black text-gray-900 mt-2">{formatSize(usage?.storage_used_bytes || summary.used_bytes)}</p>
+            <p className="text-[10px] font-black uppercase tracking-widest text-gray-400 mt-2">
+              Limit {formatSize(usage?.storage_limit_bytes || summary.limit_bytes)}
+            </p>
+          </div>
+          <div className="rounded-2xl border border-gray-100 bg-white px-4 py-4 shadow-sm">
+            <p className="text-[10px] font-black uppercase tracking-widest text-gray-400">SMS Usage</p>
+            <p className="text-sm font-black text-gray-900 mt-2">{usage?.sms_used || 0}</p>
+            <p className="text-[10px] font-black uppercase tracking-widest text-gray-400 mt-2">
+              Limit {usage?.sms_limit || 0}
+            </p>
+          </div>
+          <div className="rounded-2xl border border-gray-100 bg-white px-4 py-4 shadow-sm">
+            <p className="text-[10px] font-black uppercase tracking-widest text-gray-400">Email Usage</p>
+            <p className="text-sm font-black text-gray-900 mt-2">{usage?.email_used || 0}</p>
+            <p className="text-[10px] font-black uppercase tracking-widest text-gray-400 mt-2">
+              Limit {usage?.email_limit || 0}
+            </p>
           </div>
         </div>
       </div>

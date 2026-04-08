@@ -1,5 +1,6 @@
 import { collection, addDoc, updateDoc, deleteDoc, doc, query, where, serverTimestamp, onSnapshot, Timestamp } from 'firebase/firestore';
 import { db, auth } from '../firebase';
+import { waitForCurrentUser } from './authSessionService';
 import { handleFirestoreError, OperationType } from './verificationService';
 import { BillingFrequency } from './recurringService';
 
@@ -54,7 +55,7 @@ export const quoteService = {
   },
 
   addQuote: async (quoteData: Omit<Quote, 'ownerId' | 'created_at'>) => {
-    const user = auth.currentUser;
+    const user = await waitForCurrentUser();
     if (!user) throw new Error('User not authenticated');
 
     try {
@@ -69,6 +70,8 @@ export const quoteService = {
   },
 
   updateQuote: async (id: string, data: Partial<Quote>) => {
+    const user = await waitForCurrentUser();
+    if (!user) throw new Error('User not authenticated');
     const docRef = doc(db, COLLECTION_NAME, id);
     try {
       return await updateDoc(docRef, data);
@@ -78,6 +81,8 @@ export const quoteService = {
   },
 
   deleteQuote: async (id: string) => {
+    const user = await waitForCurrentUser();
+    if (!user) throw new Error('User not authenticated');
     const docRef = doc(db, COLLECTION_NAME, id);
     try {
       return await deleteDoc(docRef);

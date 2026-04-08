@@ -19,6 +19,9 @@ import RoutesManagementPage from './modules/routes/RoutesManagementPage';
 import PublicJobProof from './components/PublicJobProof';
 import PublicCustomerPortal from './components/PublicCustomerPortal';
 import Messaging from './components/Messaging';
+import Billing from './components/Billing';
+import Expenses from './components/Expenses';
+import Supplies from './components/Supplies';
 import Storage from './components/Storage';
 import Settings from './components/Settings';
 import Alerts from './components/Alerts';
@@ -26,6 +29,8 @@ import Profile from './components/Profile';
 import AdminController from './components/AdminController';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { userProfileService } from './services/userProfileService';
+import { planConfigService } from './services/planConfigService';
+import { usageTrackingService } from './services/usageTrackingService';
 
 export default function App() {
   const [user, setUser] = useState<User | null>(null);
@@ -37,7 +42,9 @@ export default function App() {
       
       if (currentUser) {
         await userProfileService.ensureCurrentUserProfile();
+        await planConfigService.hydrateFramework();
         await servicePlanService.initializeDefaultServices();
+        await usageTrackingService.syncStorageUsageForCurrentUser();
       }
       
       setLoading(false);
@@ -73,6 +80,9 @@ export default function App() {
               <Route path="map" element={<ActiveRoutePage />} />
               <Route path="equip" element={<Equip />} />
               <Route path="messaging" element={<Messaging />} />
+              <Route path="billing" element={<Billing />} />
+              <Route path="expenses" element={<Expenses />} />
+              <Route path="supplies" element={<Supplies />} />
               <Route path="storage" element={<Storage />} />
               <Route path="settings" element={<Settings />} />
               <Route path="alerts" element={<Alerts />} />

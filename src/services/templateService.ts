@@ -1,6 +1,7 @@
 import { db, auth } from '../firebase';
 import { collection, addDoc, onSnapshot, query, where, serverTimestamp, updateDoc, deleteDoc, doc } from 'firebase/firestore';
 import { onAuthStateChanged } from 'firebase/auth';
+import { waitForCurrentUser } from './authSessionService';
 import { OperationType, handleFirestoreError } from './verificationService';
 
 export interface MessageTemplate {
@@ -72,7 +73,7 @@ export const templateService = {
   },
 
   addTemplate: async (template: Omit<MessageTemplate, 'id' | 'ownerId' | 'created_at'>) => {
-    const user = auth.currentUser;
+    const user = await waitForCurrentUser();
     if (!user) throw new Error('Must be logged in to add template');
 
     const newTemplate = {
@@ -89,6 +90,8 @@ export const templateService = {
   },
 
   updateTemplate: async (id: string, template: Partial<MessageTemplate>) => {
+    const user = await waitForCurrentUser();
+    if (!user) throw new Error('Must be logged in to update template');
     try {
       const templateRef = doc(db, COLLECTION_NAME, id);
       await updateDoc(templateRef, template);
@@ -98,6 +101,8 @@ export const templateService = {
   },
 
   deleteTemplate: async (id: string) => {
+    const user = await waitForCurrentUser();
+    if (!user) throw new Error('Must be logged in to delete template');
     try {
       const templateRef = doc(db, COLLECTION_NAME, id);
       await deleteDoc(templateRef);

@@ -1,5 +1,6 @@
 import { doc, getDoc, onSnapshot, serverTimestamp, setDoc, updateDoc, collection, getDocs } from 'firebase/firestore';
 import { auth, db } from '../firebase';
+import { waitForCurrentUser } from './authSessionService';
 import { handleFirestoreError, OperationType } from './verificationService';
 
 export interface UserProfile {
@@ -16,10 +17,12 @@ export interface UserProfile {
 }
 
 const PLATFORM_ADMIN_EMAIL = 'thomaslmiller89@gmail.com';
+const TEAM_PERMISSION_KEYS = ['route_access', 'customer_access', 'expense_entry_access', 'job_interaction_access'] as const;
+export type TeamPermissionKey = typeof TEAM_PERMISSION_KEYS[number];
 
 export const userProfileService = {
   getCurrentUserProfile: async (): Promise<UserProfile | null> => {
-    const user = auth.currentUser;
+    const user = await waitForCurrentUser();
     if (!user) return null;
 
     try {
@@ -57,7 +60,7 @@ export const userProfileService = {
   },
 
   ensureCurrentUserProfile: async () => {
-    const user = auth.currentUser;
+    const user = await waitForCurrentUser();
     if (!user) return;
 
     const docRef = doc(db, 'users', user.uid);
@@ -87,7 +90,7 @@ export const userProfileService = {
   },
 
   updateCurrentUserProfile: async (updates: Partial<UserProfile>) => {
-    const user = auth.currentUser;
+    const user = await waitForCurrentUser();
     if (!user) throw new Error('User not authenticated');
 
     try {
@@ -103,6 +106,12 @@ export const userProfileService = {
   isPlatformAdmin: (profile?: UserProfile | null) => {
     const email = auth.currentUser?.email || profile?.email || '';
     return email === PLATFORM_ADMIN_EMAIL;
+  },
+
+  hasPermission: (profile: UserProfile | null | undefined, permission: TeamPermissionKey) => {
+    if (!profile) return false;
+    if (profile.role === 'owner' || userProfileService.isPlatformAdmin(profile)) return true;
+    return profile.permissions?.includes(permission) || false;
   },
 
   getAllUsers: async (): Promise<UserProfile[]> => {

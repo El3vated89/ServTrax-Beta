@@ -2,6 +2,7 @@ import {
   collection,
   deleteDoc,
   doc,
+  getDoc,
   getDocs,
   query,
   serverTimestamp,
@@ -14,6 +15,8 @@ import { getPublicOrigin } from '../utils';
 import { Customer } from './customerService';
 import { Job } from './jobService';
 import { Quote } from './quoteService';
+import { waitForCurrentUser } from './authSessionService';
+import { planConfigService } from './planConfigService';
 
 export interface PortalCapabilities {
   allowsPortal: boolean;
@@ -40,6 +43,7 @@ export interface CustomerPortalHistoryItem {
   id?: string;
   customerId: string;
   ownerId: string;
+  portal_token?: string;
   portal_visible: boolean;
   proof_job_id: string;
   share_token: string;
@@ -58,6 +62,7 @@ export interface CustomerPortalQuoteItem {
   id?: string;
   customerId: string;
   ownerId: string;
+  portal_token?: string;
   portal_visible: boolean;
   source_type: 'job_quote' | 'quote';
   source_id: string;
@@ -70,7 +75,12 @@ export interface CustomerPortalQuoteItem {
   updated_at?: any;
 }
 
-const normalizePlanName = (planName?: string) => (planName || 'Free').trim().toLowerCase();
+const INTERNAL_PORTAL_COLLECTION = 'customer_portals';
+const INTERNAL_PORTAL_HISTORY_COLLECTION = 'customer_portal_job_history';
+const INTERNAL_PORTAL_QUOTES_COLLECTION = 'customer_portal_quotes';
+const PUBLIC_PORTAL_COLLECTION = 'public_customer_portals';
+const PUBLIC_PORTAL_HISTORY_COLLECTION = 'public_customer_portal_job_history';
+const PUBLIC_PORTAL_QUOTES_COLLECTION = 'public_customer_portal_quotes';
 
 const buildAddress = (customer: Customer) =>
   [customer.street, customer.line2, customer.city, customer.state, customer.zip].filter(Boolean).join(', ');
@@ -78,6 +88,7 @@ const buildAddress = (customer: Customer) =>
 const quoteItemFromJob = (customer: Customer, job: Job): CustomerPortalQuoteItem => ({
   customerId: customer.id || '',
   ownerId: customer.ownerId,
+  portal_token: customer.portal_token,
   portal_visible: true,
   source_type: 'job_quote',
   source_id: job.id || '',
@@ -93,6 +104,7 @@ const quoteItemFromJob = (customer: Customer, job: Job): CustomerPortalQuoteItem
 const quoteItemFromQuote = (customer: Customer, quote: Quote): CustomerPortalQuoteItem => ({
   customerId: customer.id || '',
   ownerId: customer.ownerId,
+  portal_token: customer.portal_token,
   portal_visible: true,
   source_type: 'quote',
   source_id: quote.id || '',
@@ -105,38 +117,46 @@ const quoteItemFromQuote = (customer: Customer, quote: Quote): CustomerPortalQuo
   updated_at: serverTimestamp(),
 });
 
+const deletePublicPortalSnapshots = async (portalToken?: string) => {
+  if (!portalToken) return;
+
+  const [portalSnap, historySnap, quoteSnap] = await Promise.all([
+    getDoc(doc(db, PUBLIC_PORTAL_COLLECTION, portalToken)),
+    getDocs(query(collection(db, PUBLIC_PORTAL_HISTORY_COLLECTION), where('portal_token', '==', portalToken))),
+    getDocs(query(collection(db, PUBLIC_PORTAL_QUOTES_COLLECTION), where('portal_token', '==', portalToken))),
+  ]);
+
+  const batch = writeBatch(db);
+  let operationCount = 0;
+
+  if (portalSnap.exists()) {
+    batch.delete(portalSnap.ref);
+    operationCount += 1;
+  }
+
+  historySnap.docs.forEach((entry) => {
+    batch.delete(entry.ref);
+    operationCount += 1;
+  });
+
+  quoteSnap.docs.forEach((entry) => {
+    batch.delete(entry.ref);
+    operationCount += 1;
+  });
+
+  if (operationCount > 0) {
+    await batch.commit();
+  }
+};
+
 export const customerPortalService = {
   getCapabilities: (planName?: string): PortalCapabilities => {
-    const normalized = normalizePlanName(planName);
-
-    if (normalized.includes('pro')) {
-      return {
-        allowsPortal: true,
-        allowsPersistentPortal: true,
-        planLabel: 'Pro',
-      };
-    }
-
-    if (normalized.includes('starter lite')) {
-      return {
-        allowsPortal: false,
-        allowsPersistentPortal: false,
-        planLabel: 'Starter Lite',
-      };
-    }
-
-    if (normalized === 'starter' || normalized.includes('starter')) {
-      return {
-        allowsPortal: true,
-        allowsPersistentPortal: true,
-        planLabel: 'Starter',
-      };
-    }
+    const resolvedPlan = planConfigService.resolveBusinessPlan({ plan_name: planName });
 
     return {
-      allowsPortal: false,
-      allowsPersistentPortal: false,
-      planLabel: normalized.includes('lite') ? 'Starter Lite' : 'Free',
+      allowsPortal: resolvedPlan.featureFlags.customer_portal,
+      allowsPersistentPortal: resolvedPlan.featureFlags.persistent_portal,
+      planLabel: resolvedPlan.planLabel,
     };
   },
 
@@ -147,21 +167,26 @@ export const customerPortalService = {
     `${Math.random().toString(36).slice(2, 15)}${Math.random().toString(36).slice(2, 15)}`,
 
   disablePortal: async (customerId: string) => {
-    if (!auth.currentUser || !customerId) return;
+    const user = await waitForCurrentUser();
+    if (!user || !customerId) return;
+
+    const portalSnap = await getDoc(doc(db, INTERNAL_PORTAL_COLLECTION, customerId));
+    const existingPortalToken = portalSnap.exists() ? String(portalSnap.data().portal_token || '') : '';
+    await deletePublicPortalSnapshots(existingPortalToken);
 
     const batch = writeBatch(db);
 
     const portalHistorySnapshot = await getDocs(
-      query(collection(db, 'customer_portal_job_history'), where('customerId', '==', customerId))
+      query(collection(db, INTERNAL_PORTAL_HISTORY_COLLECTION), where('customerId', '==', customerId))
     );
     portalHistorySnapshot.docs.forEach((entry) => batch.delete(entry.ref));
 
     const portalQuoteSnapshot = await getDocs(
-      query(collection(db, 'customer_portal_quotes'), where('customerId', '==', customerId))
+      query(collection(db, INTERNAL_PORTAL_QUOTES_COLLECTION), where('customerId', '==', customerId))
     );
     portalQuoteSnapshot.docs.forEach((entry) => batch.delete(entry.ref));
 
-    batch.delete(doc(db, 'customer_portals', customerId));
+    batch.delete(doc(db, INTERNAL_PORTAL_COLLECTION, customerId));
     await batch.commit();
   },
 
@@ -171,12 +196,21 @@ export const customerPortalService = {
     quotes: Quote[],
     planName?: string
   ) => {
-    const user = auth.currentUser;
+    const user = await waitForCurrentUser();
     if (!user || !customer.id) return;
 
     if (!customer.portal_enabled || !customer.portal_token) {
       await customerPortalService.disablePortal(customer.id);
       return;
+    }
+
+    const existingPortalSnap = await getDoc(doc(db, INTERNAL_PORTAL_COLLECTION, customer.id));
+    const previousPortalToken = existingPortalSnap.exists()
+      ? String(existingPortalSnap.data().portal_token || '')
+      : '';
+
+    if (previousPortalToken && previousPortalToken !== customer.portal_token) {
+      await deletePublicPortalSnapshots(previousPortalToken);
     }
 
     const portalDoc: CustomerPortalRecord = {
@@ -194,7 +228,7 @@ export const customerPortalService = {
       created_at: serverTimestamp(),
     };
 
-    await setDoc(doc(db, 'customer_portals', customer.id), portalDoc, { merge: true });
+    await setDoc(doc(db, INTERNAL_PORTAL_COLLECTION, customer.id), portalDoc, { merge: true });
 
     const historyDocs = jobs
       .filter((job) =>
@@ -207,6 +241,7 @@ export const customerPortalService = {
         id: job.id || '',
         customerId: customer.id || '',
         ownerId: customer.ownerId,
+        portal_token: customer.portal_token,
         portal_visible: !!customer.portal_show_history,
         proof_job_id: job.id || '',
         share_token: job.share_token || '',
@@ -231,10 +266,10 @@ export const customerPortalService = {
     ];
 
     const historySnapshot = await getDocs(
-      query(collection(db, 'customer_portal_job_history'), where('customerId', '==', customer.id))
+      query(collection(db, INTERNAL_PORTAL_HISTORY_COLLECTION), where('customerId', '==', customer.id))
     );
     const quoteSnapshot = await getDocs(
-      query(collection(db, 'customer_portal_quotes'), where('customerId', '==', customer.id))
+      query(collection(db, INTERNAL_PORTAL_QUOTES_COLLECTION), where('customerId', '==', customer.id))
     );
 
     const batch = writeBatch(db);
@@ -254,16 +289,63 @@ export const customerPortalService = {
     });
 
     historyDocs.forEach((item) => {
-      batch.set(doc(db, 'customer_portal_job_history', item.id), item);
+      batch.set(doc(db, INTERNAL_PORTAL_HISTORY_COLLECTION, item.id), item);
     });
 
     quoteDocs.forEach((item) => {
-      batch.set(doc(db, 'customer_portal_quotes', `${item.source_type}_${item.source_id}`), {
+      batch.set(doc(db, INTERNAL_PORTAL_QUOTES_COLLECTION, `${item.source_type}_${item.source_id}`), {
         ...item,
         portal_visible: !!customer.portal_show_quotes,
       });
     });
 
     await batch.commit();
+
+    const publicPortalDoc: CustomerPortalRecord = {
+      ...portalDoc,
+      created_at: existingPortalSnap.exists() ? existingPortalSnap.data().created_at || serverTimestamp() : serverTimestamp(),
+    };
+
+    await setDoc(doc(db, PUBLIC_PORTAL_COLLECTION, customer.portal_token), publicPortalDoc, { merge: true });
+
+    const publicHistorySnapshot = await getDocs(
+      query(collection(db, PUBLIC_PORTAL_HISTORY_COLLECTION), where('portal_token', '==', customer.portal_token))
+    );
+    const publicQuoteSnapshot = await getDocs(
+      query(collection(db, PUBLIC_PORTAL_QUOTES_COLLECTION), where('portal_token', '==', customer.portal_token))
+    );
+
+    const publicBatch = writeBatch(db);
+    const nextPublicHistoryIds = new Set(historyDocs.map((item) => `${customer.portal_token}_${item.id}`));
+    const nextPublicQuoteIds = new Set(quoteDocs.map((item) => `${customer.portal_token}_${item.source_type}_${item.source_id}`));
+
+    publicHistorySnapshot.docs.forEach((entry) => {
+      if (!nextPublicHistoryIds.has(entry.id)) {
+        publicBatch.delete(entry.ref);
+      }
+    });
+
+    publicQuoteSnapshot.docs.forEach((entry) => {
+      if (!nextPublicQuoteIds.has(entry.id)) {
+        publicBatch.delete(entry.ref);
+      }
+    });
+
+    historyDocs.forEach((item) => {
+      publicBatch.set(doc(db, PUBLIC_PORTAL_HISTORY_COLLECTION, `${customer.portal_token}_${item.id}`), {
+        ...item,
+        portal_token: customer.portal_token,
+      });
+    });
+
+    quoteDocs.forEach((item) => {
+      publicBatch.set(doc(db, PUBLIC_PORTAL_QUOTES_COLLECTION, `${customer.portal_token}_${item.source_type}_${item.source_id}`), {
+        ...item,
+        portal_token: customer.portal_token,
+        portal_visible: !!customer.portal_show_quotes,
+      });
+    });
+
+    await publicBatch.commit();
   },
 };

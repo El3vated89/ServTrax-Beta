@@ -1,5 +1,6 @@
 import { db, auth } from '../firebase';
 import { collection, addDoc, onSnapshot, query, where, serverTimestamp, updateDoc, doc, getDoc, Timestamp, getDocs, limit } from 'firebase/firestore';
+import { waitForCurrentUser } from './authSessionService';
 import { storagePolicyService } from './storagePolicyService';
 
 export enum OperationType {
@@ -105,7 +106,7 @@ export const verificationService = {
   },
 
   addVerification: async (record: Omit<VerificationRecord, 'id' | 'ownerId' | 'created_at'>) => {
-    const user = auth.currentUser;
+    const user = await waitForCurrentUser();
     if (!user) throw new Error('Must be logged in to add verification');
 
     const businessProfileSnap = await getDoc(doc(db, 'business_profiles', user.uid));
@@ -132,6 +133,8 @@ export const verificationService = {
   },
   
   updateVerification: async (id: string, data: Partial<VerificationRecord>) => {
+    const user = await waitForCurrentUser();
+    if (!user) throw new Error('Must be logged in to update verification');
     try {
       await updateDoc(doc(db, COLLECTION_NAME, id), data);
     } catch (error) {
@@ -173,7 +176,7 @@ export const verificationService = {
   },
 
   jobHasProofPhotos: async (jobId: string) => {
-    const user = auth.currentUser;
+    const user = await waitForCurrentUser();
     if (!user) return false;
 
     const snapshot = await getDocs(

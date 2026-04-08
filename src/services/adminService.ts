@@ -1,13 +1,17 @@
-import { collection, getDocs } from 'firebase/firestore';
+import { collection, doc, getDocs, updateDoc } from 'firebase/firestore';
 import { db } from '../firebase';
 import { handleFirestoreError, OperationType } from './verificationService';
 import { UserProfile } from './userProfileService';
+import { planConfigService, SubscriptionStatus } from './planConfigService';
 
 interface AdminBusinessProfile {
   id: string;
   business_name?: string;
   ownerId?: string;
+  plan_key?: string;
   plan_name?: string;
+  subscription_status?: SubscriptionStatus;
+  storage_add_on_quantity?: number;
   custom_storage_cap?: number;
 }
 
@@ -47,6 +51,18 @@ interface AdminRouteActivityRecord {
   occurred_at?: any;
 }
 
+interface AdminUsageCounterRecord {
+  id: string;
+  ownerId?: string;
+  period_key?: string;
+  sms_used?: number;
+  email_used?: number;
+  storage_used_bytes?: number;
+  sms_limit?: number;
+  email_limit?: number;
+  storage_limit_bytes?: number;
+}
+
 export interface AdminMetrics {
   totalUsers: number;
   activeBusinesses: number;
@@ -62,6 +78,27 @@ export interface AdminMetrics {
   routeRunsMissingCrewLabelToday: number;
   routeActivityLast7Days: number;
   routeActivityByBusiness: Array<{ ownerId: string; businessName: string; activityCount: number }>;
+  usageByBusiness: Array<{
+    ownerId: string;
+    businessName: string;
+    smsUsed: number;
+    smsLimit: number;
+    emailUsed: number;
+    emailLimit: number;
+    storageUsedBytes: number;
+    storageLimitBytes: number;
+  }>;
+  businessPlans: Array<{
+    ownerId: string;
+    businessName: string;
+    planKey: string;
+    planName: string;
+    subscriptionStatus: string;
+    storageAddOnQuantity: number;
+    storageLimitBytes: number;
+    activeJobCount: number;
+    todayRouteRuns: number;
+  }>;
   placeholders: {
     stripeStatus: string;
     platformRevenue: string;
@@ -79,7 +116,7 @@ const toDate = (value: any) => {
 export const adminService = {
   getMetrics: async (): Promise<AdminMetrics> => {
     try {
-      const [usersSnapshot, businessSnapshot, verificationSnapshot, jobsSnapshot, routeTemplatesSnapshot, routesSnapshot, routeActivitySnapshot] = await Promise.all([
+      const [usersSnapshot, businessSnapshot, verificationSnapshot, jobsSnapshot, routeTemplatesSnapshot, routesSnapshot, routeActivitySnapshot, usageSnapshot] = await Promise.all([
         getDocs(collection(db, 'users')),
         getDocs(collection(db, 'business_profiles')),
         getDocs(collection(db, 'verification_records')),
@@ -87,6 +124,7 @@ export const adminService = {
         getDocs(collection(db, 'route_templates')),
         getDocs(collection(db, 'routes')),
         getDocs(collection(db, 'route_activity_logs')),
+        getDocs(collection(db, 'usage_counters')),
       ]);
 
       const users = usersSnapshot.docs.map((entry) => ({ uid: entry.id, ...entry.data() } as UserProfile));
@@ -96,9 +134,10 @@ export const adminService = {
       const routeTemplates = routeTemplatesSnapshot.docs.map((entry) => ({ id: entry.id, ...entry.data() } as AdminRouteTemplateRecord));
       const routes = routesSnapshot.docs.map((entry) => ({ id: entry.id, ...entry.data() } as AdminRouteRecord));
       const routeActivity = routeActivitySnapshot.docs.map((entry) => ({ id: entry.id, ...entry.data() } as AdminRouteActivityRecord));
+      const usageCounters = usageSnapshot.docs.map((entry) => ({ id: entry.id, ...entry.data() } as AdminUsageCounterRecord));
 
       const planCounts = businesses.reduce<Record<string, number>>((counts, business) => {
-        const planName = business.plan_name || 'Free Tier';
+        const planName = planConfigService.resolveBusinessPlan(business).planLabel;
         counts[planName] = (counts[planName] || 0) + 1;
         return counts;
       }, {});
@@ -147,6 +186,57 @@ export const adminService = {
         routeDay.setHours(0, 0, 0, 0);
         return routeDay.getTime() === todayStart.getTime() && !route.assigned_team_name_snapshot;
       }).length;
+      const activeJobsByOwner = jobs.reduce<Record<string, number>>((totals, job) => {
+        if (['completed', 'canceled'].includes(job.status || '')) return totals;
+        const ownerId = job.ownerId || 'unknown';
+        totals[ownerId] = (totals[ownerId] || 0) + 1;
+        return totals;
+      }, {});
+      const todayRouteRunsByOwner = routes.reduce<Record<string, number>>((totals, route) => {
+        const routeDate = toDate(route.route_date);
+        if (!routeDate) return totals;
+        const routeDay = new Date(routeDate);
+        routeDay.setHours(0, 0, 0, 0);
+        if (routeDay.getTime() !== todayStart.getTime()) return totals;
+        const ownerId = route.ownerId || 'unknown';
+        totals[ownerId] = (totals[ownerId] || 0) + 1;
+        return totals;
+      }, {});
+      const businessPlans = businesses
+        .map((business) => {
+          const ownerId = business.ownerId || business.id;
+          const resolvedPlan = planConfigService.resolveBusinessPlan(business);
+
+          return {
+            ownerId,
+            businessName: business.business_name || 'Unnamed Business',
+            planKey: resolvedPlan.planKey,
+            planName: resolvedPlan.planLabel,
+            subscriptionStatus: business.subscription_status || 'active',
+            storageAddOnQuantity: Number(business.storage_add_on_quantity || 0),
+            storageLimitBytes: resolvedPlan.storageLimitBytes,
+            activeJobCount: activeJobsByOwner[ownerId] || 0,
+            todayRouteRuns: todayRouteRunsByOwner[ownerId] || 0,
+          };
+        })
+        .sort((left, right) => left.businessName.localeCompare(right.businessName));
+      const currentPeriodKey = new Date().toISOString().slice(0, 7);
+      const usageByBusiness = businessPlans
+        .map((business) => {
+          const usage = usageCounters.find((entry) => entry.ownerId === business.ownerId && entry.period_key === currentPeriodKey);
+          return {
+            ownerId: business.ownerId,
+            businessName: business.businessName,
+            smsUsed: Number(usage?.sms_used || 0),
+            smsLimit: Number(usage?.sms_limit || 0),
+            emailUsed: Number(usage?.email_used || 0),
+            emailLimit: Number(usage?.email_limit || 0),
+            storageUsedBytes: Number(usage?.storage_used_bytes || storageByOwner[business.ownerId] || 0),
+            storageLimitBytes: Number(usage?.storage_limit_bytes || business.storageLimitBytes || 0),
+          };
+        })
+        .sort((left, right) => right.storageUsedBytes - left.storageUsedBytes)
+        .slice(0, 8);
 
       return {
         totalUsers: users.length,
@@ -192,6 +282,8 @@ export const adminService = {
           }))
           .sort((left, right) => right.activityCount - left.activityCount)
           .slice(0, 8),
+        usageByBusiness,
+        businessPlans,
         placeholders: {
           stripeStatus: 'Placeholder until platform billing collections are connected.',
           platformRevenue: 'Placeholder until ServTrax Stripe revenue data is stored.',
@@ -216,6 +308,8 @@ export const adminService = {
         routeRunsMissingCrewLabelToday: 0,
         routeActivityLast7Days: 0,
         routeActivityByBusiness: [],
+        usageByBusiness: [],
+        businessPlans: [],
         placeholders: {
           stripeStatus: 'Unavailable',
           platformRevenue: 'Unavailable',
@@ -223,6 +317,22 @@ export const adminService = {
           planAdjustments: 'Unavailable',
         },
       };
+    }
+  },
+
+  updateBusinessPlan: async (
+    ownerId: string,
+    updates: {
+      plan_key: string;
+      plan_name: string;
+      subscription_status: string;
+      storage_add_on_quantity: number;
+    }
+  ) => {
+    try {
+      await updateDoc(doc(db, 'business_profiles', ownerId), updates);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, `business_profiles/${ownerId}`);
     }
   },
 };

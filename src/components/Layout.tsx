@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
-import { Outlet, Link, useLocation } from 'react-router-dom';
-import { Home, Users, ClipboardList, Wrench, Menu, Bell, LogOut, Settings as SettingsIcon, X, Search, Map, Plus, Camera, MessageSquare, HardDrive, Route as RouteIcon, User as UserIcon, Shield } from 'lucide-react';
+import { Outlet, Link, useLocation, useNavigate } from 'react-router-dom';
+import { Home, Users, ClipboardList, Wrench, Menu, Bell, LogOut, Settings as SettingsIcon, X, Search, Map, Plus, Camera, MessageSquare, HardDrive, Route as RouteIcon, User as UserIcon, Shield, CreditCard, Receipt, Package } from 'lucide-react';
 import { auth } from '../firebase';
 import { signOut } from 'firebase/auth';
 import PhotoCaptureFlow from './PhotoCaptureFlow';
@@ -14,24 +14,29 @@ import { quoteService, Quote } from '../services/quoteService';
 
 export default function Layout() {
   const location = useLocation();
+  const navigate = useNavigate();
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [isAddMenuOpen, setIsAddMenuOpen] = useState(false);
   const [isPhotoCaptureOpen, setIsPhotoCaptureOpen] = useState(false);
   const [alertCount, setAlertCount] = useState(0);
   const [isPlatformAdmin, setIsPlatformAdmin] = useState(false);
+  const [profile, setProfile] = useState<any>(null);
   
-  const bottomNavItems = [
+  const defaultBottomNavItems = [
     { path: '/', icon: Home, label: 'Home' },
     { path: '/jobs', icon: ClipboardList, label: 'Jobs' },
     { path: '/customers', icon: Users, label: 'Clients' },
     { path: '/routes', icon: RouteIcon, label: 'Routes' },
   ];
 
-  const menuItems = [
+  const defaultMenuItems = [
     { path: '/map', icon: Map, label: 'Daily Route' },
     { path: '/profile', icon: UserIcon, label: 'Profile' },
     { path: '/equip', icon: Wrench, label: 'Equipment' },
     { path: '/messaging', icon: MessageSquare, label: 'Messaging' },
+    { path: '/billing', icon: CreditCard, label: 'Billing' },
+    { path: '/expenses', icon: Receipt, label: 'Expenses' },
+    { path: '/supplies', icon: Package, label: 'Supplies' },
     { path: '/storage', icon: HardDrive, label: 'Storage' },
     { path: '/settings', icon: SettingsIcon, label: 'Settings' },
   ];
@@ -68,6 +73,7 @@ export default function Layout() {
     });
 
     const unsubscribeProfile = userProfileService.subscribeToCurrentUserProfile((profile) => {
+      setProfile(profile);
       setIsPlatformAdmin(userProfileService.isPlatformAdmin(profile));
     });
 
@@ -88,9 +94,52 @@ export default function Layout() {
     };
   }, []);
 
+  const isStaff = profile?.role === 'staff';
+  const canAccessRoutes = userProfileService.hasPermission(profile, 'route_access');
+  const canAccessCustomers = userProfileService.hasPermission(profile, 'customer_access');
+  const canAccessJobs = userProfileService.hasPermission(profile, 'job_interaction_access');
+  const canAccessExpenses = userProfileService.hasPermission(profile, 'expense_entry_access');
+
+  const bottomNavItems = isStaff
+    ? [
+        ...(canAccessJobs ? [{ path: '/jobs', icon: ClipboardList, label: 'Jobs' }] : []),
+        ...(canAccessCustomers ? [{ path: '/customers', icon: Users, label: 'Clients' }] : []),
+        ...(canAccessRoutes ? [{ path: '/map', icon: RouteIcon, label: 'Routes' }] : []),
+        { path: '/profile', icon: UserIcon, label: 'Profile' },
+      ]
+    : defaultBottomNavItems;
+
+  const menuItems = isStaff
+    ? [
+        ...(canAccessRoutes ? [{ path: '/map', icon: Map, label: 'Daily Route' }] : []),
+        ...(canAccessExpenses ? [{ path: '/expenses', icon: Receipt, label: 'Expenses' }] : []),
+        { path: '/profile', icon: UserIcon, label: 'Profile' },
+      ]
+    : defaultMenuItems;
+
   const allMenuItems = isPlatformAdmin
     ? [...menuItems, { path: '/controller', icon: Shield, label: 'Controller' }]
     : menuItems;
+  const sidebarItems = [...bottomNavItems, ...allMenuItems].filter(
+    (item, index, items) => items.findIndex((entry) => entry.path === item.path) === index
+  );
+
+  useEffect(() => {
+    if (!isStaff) return;
+
+    const allowedPaths = new Set<string>(['/profile']);
+    if (canAccessRoutes) {
+      allowedPaths.add('/map');
+      allowedPaths.add('/routes');
+    }
+    if (canAccessJobs) allowedPaths.add('/jobs');
+    if (canAccessCustomers) allowedPaths.add('/customers');
+    if (canAccessExpenses) allowedPaths.add('/expenses');
+
+    if (!allowedPaths.has(location.pathname)) {
+      navigate(canAccessRoutes ? '/map' : canAccessExpenses ? '/expenses' : '/profile', { replace: true });
+    }
+  }, [isStaff, canAccessRoutes, canAccessJobs, canAccessCustomers, canAccessExpenses, location.pathname, navigate]);
 
   const handleSignOut = () => {
     signOut(auth);
@@ -116,7 +165,7 @@ export default function Layout() {
           </div>
 
           <nav className="space-y-2">
-            {[...bottomNavItems, ...allMenuItems].map((item) => {
+            {sidebarItems.map((item) => {
               const Icon = item.icon;
               const isActive = location.pathname === item.path;
               return (
@@ -207,7 +256,7 @@ export default function Layout() {
               </div>
               <div className="flex-1 overflow-y-auto py-6 px-4">
                 <nav className="space-y-2">
-                  {[...bottomNavItems, ...allMenuItems].map((item) => {
+                  {sidebarItems.map((item) => {
                     const Icon = item.icon;
                     const isActive = location.pathname === item.path;
                     return (
@@ -310,6 +359,24 @@ export default function Layout() {
                       <Camera className="h-5 w-5 text-purple-600" />
                       <span className="text-sm font-bold">Take Photo</span>
                     </button>
+                    <Link
+                      to="/billing"
+                      state={{ openPaymentModal: true }}
+                      onClick={() => setIsAddMenuOpen(false)}
+                      className="flex items-center gap-3 px-4 py-3 rounded-2xl hover:bg-gray-50 text-gray-700 transition-colors"
+                    >
+                      <CreditCard className="h-5 w-5 text-blue-600" />
+                      <span className="text-sm font-bold">Quick Payment</span>
+                    </Link>
+                    <Link
+                      to="/expenses"
+                      state={{ openAddExpense: true }}
+                      onClick={() => setIsAddMenuOpen(false)}
+                      className="flex items-center gap-3 px-4 py-3 rounded-2xl hover:bg-gray-50 text-gray-700 transition-colors"
+                    >
+                      <Receipt className="h-5 w-5 text-amber-600" />
+                      <span className="text-sm font-bold">Quick Expense</span>
+                    </Link>
                   </div>
                 </>
               )}

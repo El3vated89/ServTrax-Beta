@@ -161,6 +161,16 @@ service cloud.firestore {
              (!('billing_frequency' in data) || data.billing_frequency is string);
     }
 
+    function isValidPublicCustomerPortalHistoryItem(data) {
+      return isValidCustomerPortalHistoryItem(data) &&
+             data.portal_token is string;
+    }
+
+    function isValidPublicCustomerPortalQuoteItem(data) {
+      return isValidCustomerPortalQuoteItem(data) &&
+             data.portal_token is string;
+    }
+
     function isValidVerificationRecord(data) {
       return data.ownerId is string &&
              (!('jobId' in data) || data.jobId is string) &&
@@ -244,6 +254,21 @@ service cloud.firestore {
              data.content is string;
     }
 
+    function isValidTeamMember(data) {
+      return data.ownerId is string &&
+             data.name is string &&
+             data.email is string &&
+             data.role in ['crew_member', 'crew_lead'] &&
+             data.account_status in ['pending', 'active', 'inactive'] &&
+             data.route_access is bool &&
+             data.customer_access is bool &&
+             data.expense_entry_access is bool &&
+             data.job_interaction_access is bool &&
+             (!('linked_user_id' in data) || data.linked_user_id is string) &&
+             (!('created_at' in data) || data.created_at is timestamp) &&
+             (!('updated_at' in data) || data.updated_at is timestamp);
+    }
+
     function isValidBusinessSettings(data) {
       return (!('recurrence' in data) || data.recurrence is map) &&
              (!('winter_mode' in data) || data.winter_mode is map) &&
@@ -269,6 +294,13 @@ service cloud.firestore {
              (!('updated_at' in data) || data.updated_at is timestamp);
     }
 
+    function isValidBillingFramework(data) {
+      return (!('plans' in data) || data.plans is list) &&
+             (!('storage_add_on' in data) || data.storage_add_on is map) &&
+             (!('created_at' in data) || data.created_at is timestamp) &&
+             (!('updated_at' in data) || data.updated_at is timestamp);
+    }
+
     function isValidRecurringPlan(data) {
       return data.ownerId is string &&
              data.customerId is string &&
@@ -282,6 +314,73 @@ service cloud.firestore {
              (!('interval_days' in data) || data.interval_days is number) &&
              (!('override_enabled' in data) || data.override_enabled is bool) &&
              (!('seasonal_rules' in data) || data.seasonal_rules is list);
+    }
+
+    function isValidBillingRecord(data) {
+      return data.ownerId is string &&
+             data.customerId is string &&
+             data.customer_name_snapshot is string &&
+             data.label is string &&
+             data.billing_type in ['one_time', 'auto_bill'] &&
+             data.billing_frequency is string &&
+             data.status in ['draft', 'scheduled', 'due', 'partial', 'paid', 'overdue', 'canceled'] &&
+             data.source in ['manual', 'auto_generated'] &&
+             data.total_amount is number &&
+             data.amount_paid is number &&
+             data.balance_due is number &&
+             data.covered_job_ids is list &&
+             data.covered_service_count is number &&
+             data.auto_bill_enabled is bool;
+    }
+
+    function isValidPaymentEntry(data) {
+      return data.ownerId is string &&
+             data.billing_record_id is string &&
+             data.customerId is string &&
+             data.customer_name_snapshot is string &&
+             data.amount is number &&
+             data.method in ['cash', 'check', 'card', 'bank_transfer', 'other'];
+    }
+
+    function isValidExpense(data) {
+      return data.ownerId is string &&
+             data.title is string &&
+             data.category in ['fuel', 'supplies', 'repair', 'software', 'dump_fees', 'labor', 'other'] &&
+             data.amount is number &&
+             data.is_recurring is bool &&
+             data.recurrence_frequency in ['none', 'weekly', 'monthly', 'quarterly', 'yearly'] &&
+             data.status in ['active', 'inactive'];
+    }
+
+    function isValidSupply(data) {
+      return data.ownerId is string &&
+             data.name is string &&
+             data.category is string &&
+             data.unit is string &&
+             data.quantity_on_hand is number &&
+             data.reorder_threshold is number &&
+             data.active is bool;
+    }
+
+    function isValidUsageCounter(data) {
+      return data.ownerId is string &&
+             data.period_key is string &&
+             (!('sms_used' in data) || data.sms_used is number) &&
+             (!('email_used' in data) || data.email_used is number) &&
+             (!('storage_used_bytes' in data) || data.storage_used_bytes is number) &&
+             (!('sms_limit' in data) || data.sms_limit is number) &&
+             (!('email_limit' in data) || data.email_limit is number) &&
+             (!('storage_limit_bytes' in data) || data.storage_limit_bytes is number);
+    }
+
+    function isValidMessageDelivery(data) {
+      return data.ownerId is string &&
+             data.channel in ['sms', 'email'] &&
+             data.provider in ['twilio', 'sendgrid'] &&
+             data.recipient is string &&
+             data.recipient_label is string &&
+             data.body is string &&
+             data.status in ['blocked', 'queued', 'sent', 'failed'];
     }
 
     // ===============================================================
@@ -302,23 +401,44 @@ service cloud.firestore {
     }
 
     match /customer_portals/{customerId} {
-      allow read: if resource != null && resource.data.portal_enabled == true;
+      allow read: if isDocOwner() || isAdmin();
       allow create: if isAuthenticated() && request.resource.data.ownerId == request.auth.uid && isValidCustomerPortal(request.resource.data);
       allow update: if (isDocOwner() || isAdmin()) && ownerIdNotModified() && isValidCustomerPortal(request.resource.data);
       allow delete: if isDocOwner() || isAdmin();
     }
 
     match /customer_portal_job_history/{itemId} {
-      allow read: if resource != null && resource.data.portal_visible == true;
+      allow read: if isDocOwner() || isAdmin();
       allow create: if isAuthenticated() && request.resource.data.ownerId == request.auth.uid && isValidCustomerPortalHistoryItem(request.resource.data);
       allow update: if (isDocOwner() || isAdmin()) && ownerIdNotModified() && isValidCustomerPortalHistoryItem(request.resource.data);
       allow delete: if isDocOwner() || isAdmin();
     }
 
     match /customer_portal_quotes/{itemId} {
-      allow read: if resource != null && resource.data.portal_visible == true;
+      allow read: if isDocOwner() || isAdmin();
       allow create: if isAuthenticated() && request.resource.data.ownerId == request.auth.uid && isValidCustomerPortalQuoteItem(request.resource.data);
       allow update: if (isDocOwner() || isAdmin()) && ownerIdNotModified() && isValidCustomerPortalQuoteItem(request.resource.data);
+      allow delete: if isDocOwner() || isAdmin();
+    }
+
+    match /public_customer_portals/{portalToken} {
+      allow read: if resource != null && resource.data.portal_enabled == true;
+      allow create: if isAuthenticated() && request.resource.data.ownerId == request.auth.uid && isValidCustomerPortal(request.resource.data);
+      allow update: if (isDocOwner() || isAdmin()) && ownerIdNotModified() && isValidCustomerPortal(request.resource.data);
+      allow delete: if isDocOwner() || isAdmin();
+    }
+
+    match /public_customer_portal_job_history/{itemId} {
+      allow read: if resource != null && resource.data.portal_visible == true;
+      allow create: if isAuthenticated() && request.resource.data.ownerId == request.auth.uid && isValidPublicCustomerPortalHistoryItem(request.resource.data);
+      allow update: if (isDocOwner() || isAdmin()) && ownerIdNotModified() && isValidPublicCustomerPortalHistoryItem(request.resource.data);
+      allow delete: if isDocOwner() || isAdmin();
+    }
+
+    match /public_customer_portal_quotes/{itemId} {
+      allow read: if resource != null && resource.data.portal_visible == true;
+      allow create: if isAuthenticated() && request.resource.data.ownerId == request.auth.uid && isValidPublicCustomerPortalQuoteItem(request.resource.data);
+      allow update: if (isDocOwner() || isAdmin()) && ownerIdNotModified() && isValidPublicCustomerPortalQuoteItem(request.resource.data);
       allow delete: if isDocOwner() || isAdmin();
     }
     
@@ -346,8 +466,8 @@ service cloud.firestore {
     match /business_profiles/{profileId} {
       allow read: if isOwner(profileId) || isDocOwner() || isAdmin();
       allow create: if isOwner(profileId) && request.resource.data.ownerId == request.auth.uid && isValidBusinessProfile(request.resource.data);
-      allow update: if isOwner(profileId) && ownerIdNotModified() && isValidBusinessProfile(request.resource.data);
-      allow delete: if isOwner(profileId);
+      allow update: if (isOwner(profileId) || isAdmin()) && ownerIdNotModified() && isValidBusinessProfile(request.resource.data);
+      allow delete: if isOwner(profileId) || isAdmin();
     }
 
     match /routes/{routeId} {
@@ -392,6 +512,13 @@ service cloud.firestore {
       allow delete: if isDocOwner();
     }
 
+    match /team_members/{memberId} {
+      allow read: if isDocOwner() || isAdmin() || (isAuthenticated() && resource.data.linked_user_id == request.auth.uid);
+      allow create: if isAuthenticated() && request.resource.data.ownerId == request.auth.uid && isValidTeamMember(request.resource.data);
+      allow update: if (isDocOwner() || isAdmin()) && ownerIdNotModified() && isValidTeamMember(request.resource.data);
+      allow delete: if isDocOwner() || isAdmin();
+    }
+
     match /business_settings/{settingsId} {
       allow read: if isOwner(settingsId) || isAdmin();
       allow create: if isOwner(settingsId) && isValidBusinessSettings(request.resource.data);
@@ -399,13 +526,19 @@ service cloud.firestore {
       allow delete: if isOwner(settingsId) || isAdmin();
     }
 
-    match /platform_settings/{settingsId} {
-      allow read: if isAdmin();
-      allow create, update: if isAdmin() && isValidPlatformSettings(request.resource.data);
-      allow delete: if isAdmin();
-    }
+      match /platform_settings/{settingsId} {
+        allow read: if isAdmin();
+        allow create, update: if isAdmin() && isValidPlatformSettings(request.resource.data);
+        allow delete: if isAdmin();
+      }
 
-    match /recurring_plans/{planId} {
+      match /platform_catalog/{catalogId} {
+        allow read: if isAuthenticated();
+        allow create, update: if isAdmin() && isValidBillingFramework(request.resource.data);
+        allow delete: if isAdmin();
+      }
+
+      match /recurring_plans/{planId} {
       allow read: if resource == null || isDocOwner() || isAdmin();
       allow create: if isAuthenticated() && request.resource.data.ownerId == request.auth.uid && isValidRecurringPlan(request.resource.data);
       allow update: if (isDocOwner() || isAdmin()) && ownerIdNotModified() && isValidRecurringPlan(request.resource.data);
@@ -416,6 +549,48 @@ service cloud.firestore {
       allow read: if resource == null || isDocOwner() || isAdmin();
       allow create: if isAuthenticated() && request.resource.data.ownerId == request.auth.uid && isValidQuote(request.resource.data);
       allow update: if (isDocOwner() || isAdmin()) && ownerIdNotModified() && isValidQuote(request.resource.data);
+      allow delete: if isDocOwner() || isAdmin();
+    }
+
+    match /billing_records/{recordId} {
+      allow read: if isDocOwner() || isAdmin();
+      allow create: if isAuthenticated() && request.resource.data.ownerId == request.auth.uid && isValidBillingRecord(request.resource.data);
+      allow update: if (isDocOwner() || isAdmin()) && ownerIdNotModified() && isValidBillingRecord(request.resource.data);
+      allow delete: if isDocOwner() || isAdmin();
+    }
+
+    match /payment_entries/{entryId} {
+      allow read: if isDocOwner() || isAdmin();
+      allow create: if isAuthenticated() && request.resource.data.ownerId == request.auth.uid && isValidPaymentEntry(request.resource.data);
+      allow update: if (isDocOwner() || isAdmin()) && ownerIdNotModified() && isValidPaymentEntry(request.resource.data);
+      allow delete: if isDocOwner() || isAdmin();
+    }
+
+    match /expenses/{expenseId} {
+      allow read: if isDocOwner() || isAdmin();
+      allow create: if isAuthenticated() && request.resource.data.ownerId == request.auth.uid && isValidExpense(request.resource.data);
+      allow update: if (isDocOwner() || isAdmin()) && ownerIdNotModified() && isValidExpense(request.resource.data);
+      allow delete: if isDocOwner() || isAdmin();
+    }
+
+    match /supplies/{supplyId} {
+      allow read: if isDocOwner() || isAdmin();
+      allow create: if isAuthenticated() && request.resource.data.ownerId == request.auth.uid && isValidSupply(request.resource.data);
+      allow update: if (isDocOwner() || isAdmin()) && ownerIdNotModified() && isValidSupply(request.resource.data);
+      allow delete: if isDocOwner() || isAdmin();
+    }
+
+    match /usage_counters/{counterId} {
+      allow read: if isDocOwner() || isAdmin();
+      allow create: if isAuthenticated() && request.resource.data.ownerId == request.auth.uid && isValidUsageCounter(request.resource.data);
+      allow update: if (isDocOwner() || isAdmin()) && ownerIdNotModified() && isValidUsageCounter(request.resource.data);
+      allow delete: if isDocOwner() || isAdmin();
+    }
+
+    match /message_deliveries/{deliveryId} {
+      allow read: if isDocOwner() || isAdmin();
+      allow create: if isAuthenticated() && request.resource.data.ownerId == request.auth.uid && isValidMessageDelivery(request.resource.data);
+      allow update: if (isDocOwner() || isAdmin()) && ownerIdNotModified() && isValidMessageDelivery(request.resource.data);
       allow delete: if isDocOwner() || isAdmin();
     }
   }

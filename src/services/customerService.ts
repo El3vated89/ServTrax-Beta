@@ -1,5 +1,6 @@
 import { collection, addDoc, updateDoc, deleteDoc, doc, getDocs, query, where, serverTimestamp, onSnapshot } from 'firebase/firestore';
 import { db, auth } from '../firebase';
+import { waitForCurrentUser } from './authSessionService';
 import { handleFirestoreError, OperationType } from './verificationService';
 
 export interface Customer {
@@ -61,7 +62,7 @@ export const customerService = {
   },
 
   addCustomer: async (customerData: Omit<Customer, 'ownerId' | 'created_at'>) => {
-    const user = auth.currentUser;
+    const user = await waitForCurrentUser();
     if (!user) throw new Error('User not authenticated');
 
     try {
@@ -76,6 +77,8 @@ export const customerService = {
   },
 
   updateCustomer: async (id: string, data: Partial<Customer>) => {
+    const user = await waitForCurrentUser();
+    if (!user) throw new Error('User not authenticated');
     const docRef = doc(db, 'customers', id);
     try {
       return await updateDoc(docRef, data);
@@ -85,6 +88,8 @@ export const customerService = {
   },
 
   deleteCustomer: async (id: string) => {
+    const user = await waitForCurrentUser();
+    if (!user) throw new Error('User not authenticated');
     const docRef = doc(db, 'customers', id);
     try {
       return await deleteDoc(docRef);

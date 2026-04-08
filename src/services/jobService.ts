@@ -1,5 +1,6 @@
 import { collection, addDoc, updateDoc, deleteDoc, doc, query, where, serverTimestamp, onSnapshot } from 'firebase/firestore';
 import { db, auth } from '../firebase';
+import { waitForCurrentUser } from './authSessionService';
 import { handleFirestoreError, OperationType } from './verificationService';
 
 export interface Job {
@@ -69,7 +70,7 @@ export const jobService = {
   },
 
   addJob: async (jobData: Omit<Job, 'ownerId' | 'created_at'>) => {
-    const user = auth.currentUser;
+    const user = await waitForCurrentUser();
     if (!user) throw new Error('User not authenticated');
 
     try {
@@ -84,6 +85,8 @@ export const jobService = {
   },
 
   updateJob: async (id: string, data: Partial<Job>) => {
+    const user = await waitForCurrentUser();
+    if (!user) throw new Error('User not authenticated');
     const docRef = doc(db, 'jobs', id);
     try {
       return await updateDoc(docRef, data);
@@ -93,6 +96,8 @@ export const jobService = {
   },
 
   deleteJob: async (id: string) => {
+    const user = await waitForCurrentUser();
+    if (!user) throw new Error('User not authenticated');
     const docRef = doc(db, 'jobs', id);
     try {
       return await deleteDoc(docRef);

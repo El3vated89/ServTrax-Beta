@@ -32,7 +32,7 @@ export default function PublicCustomerPortal() {
       }
 
       try {
-        const portalSnap = await getDoc(doc(db, 'customer_portals', customerId));
+        const portalSnap = await getDoc(doc(db, 'public_customer_portals', portalToken));
         if (!portalSnap.exists()) {
           setError('Customer portal not found.');
           setLoading(false);
@@ -40,7 +40,7 @@ export default function PublicCustomerPortal() {
         }
 
         const portalData = { customerId: portalSnap.id, ...portalSnap.data() } as CustomerPortalRecord;
-        if (!portalData.portal_enabled || portalData.portal_token !== portalToken) {
+        if (!portalData.portal_enabled || portalData.portal_token !== portalToken || portalData.customerId !== customerId) {
           setError('This customer portal link is invalid.');
           setLoading(false);
           return;
@@ -51,15 +51,15 @@ export default function PublicCustomerPortal() {
         const [jobsSnap, quotesSnap] = await Promise.all([
           getDocs(
             query(
-              collection(db, 'customer_portal_job_history'),
-              where('customerId', '==', customerId),
+              collection(db, 'public_customer_portal_job_history'),
+              where('portal_token', '==', portalToken),
               where('portal_visible', '==', true)
             )
           ),
           getDocs(
             query(
-              collection(db, 'customer_portal_quotes'),
-              where('customerId', '==', customerId),
+              collection(db, 'public_customer_portal_quotes'),
+              where('portal_token', '==', portalToken),
               where('portal_visible', '==', true)
             )
           ),

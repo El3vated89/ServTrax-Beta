@@ -1,5 +1,6 @@
 import { collection, addDoc, updateDoc, deleteDoc, doc, query, where, serverTimestamp, onSnapshot, orderBy, Timestamp, getDoc, getDocs } from 'firebase/firestore';
 import { db, auth } from '../firebase';
+import { waitForCurrentUser } from './authSessionService';
 import { handleFirestoreError, OperationType } from './verificationService';
 import { Route, RouteStop, RouteTemplate } from '../modules/routes/types';
 
@@ -12,7 +13,7 @@ export const routeService = {
   }),
 
   getBusinessProfile: async () => {
-    const user = auth.currentUser;
+    const user = await waitForCurrentUser();
     if (!user) return null;
     try {
       const docRef = doc(db, 'business_profiles', user.uid);
@@ -25,7 +26,7 @@ export const routeService = {
   },
 
   getRouteByDate: async (date: Date) => {
-    const user = auth.currentUser;
+    const user = await waitForCurrentUser();
     if (!user) return null;
 
     // Set start and end of day
@@ -61,7 +62,7 @@ export const routeService = {
   },
 
   getRoutesByDate: async (date: Date) => {
-    const user = auth.currentUser;
+    const user = await waitForCurrentUser();
     if (!user) return [];
 
     const start = new Date(date);
@@ -232,7 +233,7 @@ export const routeService = {
   },
 
   createRoute: async (routeData: Omit<Route, 'id' | 'ownerId' | 'created_by' | 'created_at' | 'updated_at'>) => {
-    const user = auth.currentUser;
+    const user = await waitForCurrentUser();
     if (!user) throw new Error('User not authenticated');
 
     try {
@@ -250,6 +251,8 @@ export const routeService = {
   },
 
   updateRoute: async (id: string, data: Partial<Route>) => {
+    const user = await waitForCurrentUser();
+    if (!user) throw new Error('User not authenticated');
     const docRef = doc(db, 'routes', id);
     try {
       return await updateDoc(docRef, {
@@ -262,7 +265,8 @@ export const routeService = {
   },
 
   addRouteStop: async (stopData: Omit<RouteStop, 'id' | 'created_at' | 'updated_at'>) => {
-    const user = auth.currentUser;
+    const user = await waitForCurrentUser();
+    if (!user) throw new Error('User not authenticated');
     try {
       return await addDoc(collection(db, 'route_stops'), {
         ...stopData,
@@ -276,6 +280,8 @@ export const routeService = {
   },
 
   updateRouteStop: async (id: string, data: Partial<RouteStop>) => {
+    const user = await waitForCurrentUser();
+    if (!user) throw new Error('User not authenticated');
     const docRef = doc(db, 'route_stops', id);
     try {
       return await updateDoc(docRef, {
@@ -288,6 +294,8 @@ export const routeService = {
   },
 
   deleteRouteStop: async (id: string) => {
+    const user = await waitForCurrentUser();
+    if (!user) throw new Error('User not authenticated');
     const docRef = doc(db, 'route_stops', id);
     try {
       return await deleteDoc(docRef);
@@ -297,6 +305,8 @@ export const routeService = {
   },
 
   deleteRoute: async (id: string) => {
+    const user = await waitForCurrentUser();
+    if (!user) throw new Error('User not authenticated');
     const docRef = doc(db, 'routes', id);
     try {
       return await deleteDoc(docRef);
@@ -413,7 +423,7 @@ export const routeService = {
   },
 
   seedSampleData: async () => {
-    const user = auth.currentUser;
+    const user = await waitForCurrentUser();
     if (!user) return;
 
     const today = new Date();

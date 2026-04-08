@@ -5,6 +5,7 @@ import { equipmentService, Equipment } from '../services/equipmentService';
 export default function Equip() {
   const [equipmentList, setEquipmentList] = useState<Equipment[]>([]);
   const [isAdding, setIsAdding] = useState(false);
+  const [activeModalTab, setActiveModalTab] = useState<'details' | 'history'>('details');
   const [editingEquipment, setEditingEquipment] = useState<Equipment | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
@@ -126,6 +127,7 @@ export default function Equip() {
 
   const openEditModal = (equip: Equipment) => {
     setEditingEquipment(equip);
+    setActiveModalTab('details');
     setName(equip.name);
     setBrand(equip.brand || '');
     setModel(equip.model || '');
@@ -147,6 +149,7 @@ export default function Equip() {
     setEditingEquipment(null);
     setIsAdding(false);
     setIsAddingService(false);
+    setActiveModalTab('details');
     resetForm();
   };
 
@@ -248,8 +251,34 @@ export default function Equip() {
               </button>
             </div>
 
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-12">
-              {/* Left Column: Details Form */}
+            <div className="mb-8">
+              <div className="grid grid-cols-2 gap-2 bg-gray-50 p-2 rounded-3xl border border-gray-100">
+                <button
+                  type="button"
+                  onClick={() => setActiveModalTab('details')}
+                  className={`flex items-center justify-center gap-2 px-4 py-4 rounded-2xl text-xs font-black uppercase tracking-widest transition-all ${
+                    activeModalTab === 'details' ? 'bg-blue-600 text-white shadow-lg shadow-blue-100' : 'text-gray-500 hover:bg-white'
+                  }`}
+                >
+                  <Settings className="h-4 w-4" />
+                  Details
+                </button>
+                <button
+                  type="button"
+                  onClick={() => editingEquipment && setActiveModalTab('history')}
+                  disabled={!editingEquipment}
+                  className={`flex items-center justify-center gap-2 px-4 py-4 rounded-2xl text-xs font-black uppercase tracking-widest transition-all ${
+                    activeModalTab === 'history' ? 'bg-blue-600 text-white shadow-lg shadow-blue-100' : 'text-gray-500 hover:bg-white'
+                  } ${!editingEquipment ? 'opacity-50 cursor-not-allowed' : ''}`}
+                >
+                  <FileText className="h-4 w-4" />
+                  Service History
+                </button>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 gap-12">
+              {activeModalTab === 'details' && (
               <div className="space-y-6">
                 <h4 className="text-[10px] font-black text-blue-600 uppercase tracking-[0.2em] mb-4">Specifications</h4>
                 <form onSubmit={handleAddEquipment} className="space-y-4">
@@ -288,9 +317,9 @@ export default function Equip() {
                   </div>
                 </form>
               </div>
+              )}
 
-              {/* Right Column: Service History (Only visible when editing) */}
-              {editingEquipment && (
+              {activeModalTab === 'history' && editingEquipment && (
                 <div className="space-y-6">
                   <div className="flex justify-between items-center border-b border-gray-50 pb-4">
                     <h4 className="text-[10px] font-black text-blue-600 uppercase tracking-[0.2em]">Service History</h4>
@@ -344,7 +373,10 @@ export default function Equip() {
 
       {/* Floating Action Button */}
       <button 
-        onClick={() => setIsAdding(true)}
+        onClick={() => {
+          setActiveModalTab('details');
+          setIsAdding(true);
+        }}
         className="fixed bottom-24 right-6 sm:bottom-12 sm:right-12 bg-blue-600 text-white rounded-3xl p-5 shadow-2xl shadow-blue-200 hover:bg-blue-700 hover:scale-110 transition-all z-30 group active:scale-95"
       >
         <Plus className="h-8 w-8 group-hover:rotate-90 transition-transform duration-300" />

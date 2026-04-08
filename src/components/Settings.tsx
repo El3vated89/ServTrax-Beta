@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Settings as SettingsIcon, Plus, X, Save, AlertCircle, CheckCircle, Trash2, Briefcase, Upload, Snowflake, MessageSquare, HardDrive } from 'lucide-react';
 import { servicePlanService, ServicePlan } from '../services/servicePlanService';
 import { settingsService, BusinessSettings, DEFAULT_SETTINGS } from '../services/settingsService';
+import { planConfigService } from '../services/planConfigService';
 import { db, auth } from '../firebase';
 import { doc, getDoc, setDoc, updateDoc } from 'firebase/firestore';
 
@@ -51,6 +52,7 @@ const getPlanFrequencyLabel = (frequency?: string) => {
 
 export default function Settings() {
   const [servicePlans, setServicePlans] = useState<ServicePlan[]>([]);
+  const [activeTab, setActiveTab] = useState<'profile' | 'services' | 'system' | 'messaging' | 'storage'>('profile');
   const [isAddingPlan, setIsAddingPlan] = useState(false);
   const [editingPlanId, setEditingPlanId] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -300,7 +302,7 @@ export default function Settings() {
     try {
       const docRef = doc(db, 'business_profiles', auth.currentUser.uid);
       const docSnap = await getDoc(docRef);
-      const data = {
+      const profileFields = {
         ownerId: auth.currentUser.uid,
         business_name: businessName,
         phone: businessPhone,
@@ -314,9 +316,12 @@ export default function Settings() {
         base_camp_lng: baseCampLng === '' ? null : Number(baseCampLng)
       };
       if (docSnap.exists()) {
-        await updateDoc(docRef, data);
+        await updateDoc(docRef, profileFields);
       } else {
-        await setDoc(docRef, data);
+        await setDoc(docRef, {
+          ...planConfigService.getDefaultBusinessPlanFields(),
+          ...profileFields,
+        });
       }
       setSuccessMessage('Business profile saved successfully!');
       setTimeout(() => setSuccessMessage(null), 3000);
@@ -357,7 +362,37 @@ export default function Settings() {
         </div>
       )}
 
-      <div className="space-y-8">
+      <div className="space-y-6">
+        <div className="bg-white p-3 rounded-3xl border border-gray-100 shadow-sm">
+          <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
+            {[
+              { id: 'profile', label: 'Profile', icon: Briefcase },
+              { id: 'services', label: 'Services', icon: Snowflake },
+              { id: 'system', label: 'System', icon: SettingsIcon },
+              { id: 'messaging', label: 'Messaging', icon: MessageSquare },
+              { id: 'storage', label: 'Storage', icon: HardDrive },
+            ].map((tab) => {
+              const Icon = tab.icon;
+              const isActive = activeTab === tab.id;
+              return (
+                <button
+                  key={tab.id}
+                  type="button"
+                  onClick={() => setActiveTab(tab.id as typeof activeTab)}
+                  className={`flex items-center justify-center gap-2 px-4 py-4 rounded-2xl text-xs font-black uppercase tracking-widest transition-all ${
+                    isActive ? 'bg-blue-600 text-white shadow-lg shadow-blue-100' : 'bg-gray-50 text-gray-500 hover:bg-blue-50 hover:text-blue-600'
+                  }`}
+                >
+                  <Icon className="h-4 w-4" />
+                  {tab.label}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        {activeTab === 'profile' && (
+        <>
         {/* Business Profile */}
         <section className="bg-white p-8 rounded-3xl border border-gray-100 shadow-sm">
           <div className="flex items-center gap-3 mb-8">
@@ -453,7 +488,11 @@ export default function Settings() {
             </div>
           </form>
         </section>
+        </>
+        )}
 
+        {activeTab === 'services' && (
+        <>
         {/* Services */}
         <section className="bg-white p-8 rounded-3xl border border-gray-100 shadow-sm">
           <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-8">
@@ -525,7 +564,11 @@ export default function Settings() {
           </div>
 
         </section>
+        </>
+        )}
 
+        {activeTab === 'system' && (
+        <>
         {/* System Preferences */}
         <section className="bg-white p-8 rounded-3xl border border-gray-100 shadow-sm">
           <div className="flex items-center gap-3 mb-8">
@@ -578,7 +621,11 @@ export default function Settings() {
             </div>
           </form>
         </section>
+        </>
+        )}
 
+        {activeTab === 'messaging' && (
+        <>
         {/* Messaging Settings */}
         <section className="bg-white p-8 rounded-3xl border border-gray-100 shadow-sm">
           <div className="flex items-center gap-3 mb-8">
@@ -605,7 +652,11 @@ export default function Settings() {
             </div>
           </div>
         </section>
+        </>
+        )}
 
+        {activeTab === 'storage' && (
+        <>
         {/* Storage Settings */}
         <section className="bg-white p-8 rounded-3xl border border-gray-100 shadow-sm">
           <div className="flex items-center gap-3 mb-8">
@@ -655,6 +706,8 @@ export default function Settings() {
             </div>
           </form>
         </section>
+        </>
+        )}
       </div>
 
       {/* Add Plan Modal */}

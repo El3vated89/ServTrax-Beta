@@ -6,6 +6,7 @@ import { customerService, Customer } from '../services/customerService';
 import { routeService } from '../services/RouteService';
 import { Route, RouteStop } from '../modules/routes/types';
 import { quoteService, Quote } from '../services/quoteService';
+import { billingService, BillingRecord } from '../services/billingService';
 import { 
   AlertTriangle,
   ClipboardList, 
@@ -38,6 +39,7 @@ export default function Dashboard() {
   const [routes, setRoutes] = useState<Route[]>([]);
   const [routeStops, setRouteStops] = useState<RouteStop[]>([]);
   const [quotes, setQuotes] = useState<Quote[]>([]);
+  const [billingRecords, setBillingRecords] = useState<BillingRecord[]>([]);
 
   useEffect(() => {
     const unsubscribeJobs = jobService.subscribeToJobs((data) => {
@@ -49,12 +51,14 @@ export default function Dashboard() {
     const unsubscribeRoutes = routeService.subscribeToRoutes(setRoutes);
     const unsubscribeRouteStops = routeService.subscribeToAllRouteStops(setRouteStops);
     const unsubscribeQuotes = quoteService.subscribeToQuotes(setQuotes);
+    const unsubscribeBilling = billingService.subscribeToBillingRecords(setBillingRecords);
     return () => {
       unsubscribeJobs();
       unsubscribeCustomers();
       unsubscribeRoutes();
       unsubscribeRouteStops();
       unsubscribeQuotes();
+      unsubscribeBilling();
     };
   }, []);
 
@@ -99,9 +103,8 @@ export default function Dashboard() {
     collection.findIndex((entry) => entry.id === job.id) === index
   );
   
-  // Calculate total unpaid amount for all jobs
-  const toCollect = jobs.filter(job => job.payment_status === 'unpaid' && job.status === 'completed')
-                        .reduce((sum, job) => sum + (job.price_snapshot || 0), 0);
+  const openBilling = billingRecords.filter((record) => ['due', 'partial', 'overdue'].includes(record.status));
+  const toCollect = openBilling.reduce((sum, record) => sum + (record.balance_due || 0), 0);
 
   return (
     <div className="space-y-8 pb-24">
@@ -145,11 +148,11 @@ export default function Dashboard() {
           <div className="absolute -right-4 -bottom-4 w-24 h-24 bg-orange-50 rounded-full blur-2xl group-hover:scale-110 transition-transform" />
         </Link>
 
-        <Link to="/jobs" className="bg-white rounded-3xl p-6 border border-gray-100 shadow-sm relative overflow-hidden group hover:border-blue-200 hover:shadow-md transition-all">
+        <Link to="/billing" className="bg-white rounded-3xl p-6 border border-gray-100 shadow-sm relative overflow-hidden group hover:border-blue-200 hover:shadow-md transition-all">
           <div className="relative z-10">
             <DollarSign className="h-6 w-6 mb-4 text-blue-600" />
             <p className="text-3xl font-black text-gray-900">${toCollect.toFixed(0)}</p>
-            <p className="text-[10px] font-bold uppercase tracking-widest text-gray-400">To Collect</p>
+            <p className="text-[10px] font-bold uppercase tracking-widest text-gray-400">Outstanding Billing</p>
           </div>
           <div className="absolute -right-4 -bottom-4 w-24 h-24 bg-blue-50 rounded-full blur-2xl group-hover:scale-110 transition-transform" />
         </Link>

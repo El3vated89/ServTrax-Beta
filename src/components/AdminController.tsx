@@ -3,6 +3,7 @@ import { BarChart3, DollarSign, HardDrive, Shield, Users, Activity, AlertTriangl
 import { adminService, AdminMetrics } from '../services/adminService';
 import { userProfileService } from '../services/userProfileService';
 import { platformMessagingService, PlatformMessagingConfig } from '../services/platformMessagingService';
+import { BillingFramework, BillingPlanDefinition, planConfigService } from '../services/planConfigService';
 
 const formatBytes = (bytes: number) => {
   if (!bytes) return '0 KB';
@@ -11,11 +12,17 @@ const formatBytes = (bytes: number) => {
   return `${(bytes / 1024).toFixed(1)} KB`;
 };
 
+const formatCurrency = (amount: number) =>
+  amount.toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 });
+
 export default function AdminController() {
   const [metrics, setMetrics] = useState<AdminMetrics | null>(null);
   const [isAdmin, setIsAdmin] = useState(false);
   const [providerConfig, setProviderConfig] = useState<PlatformMessagingConfig>(platformMessagingService.getDefaultConfig());
+  const [billingFramework, setBillingFramework] = useState<BillingFramework>(planConfigService.getDefaultFramework());
   const [isSavingProviders, setIsSavingProviders] = useState(false);
+  const [isSavingPlans, setIsSavingPlans] = useState(false);
+  const [savingBusinessOwnerId, setSavingBusinessOwnerId] = useState<string | null>(null);
   const [saveMessage, setSaveMessage] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
@@ -43,6 +50,16 @@ export default function AdminController() {
 
   useEffect(() => {
     if (!isAdmin) {
+      setBillingFramework(planConfigService.getDefaultFramework());
+      return;
+    }
+
+    planConfigService.ensureFramework();
+    return planConfigService.subscribeToFramework(setBillingFramework);
+  }, [isAdmin]);
+
+  useEffect(() => {
+    if (!isAdmin) {
       setProviderConfig(platformMessagingService.getDefaultConfig());
       return;
     }
@@ -62,6 +79,13 @@ export default function AdminController() {
     [metrics]
   );
 
+  const updatePlan = (planKey: BillingPlanDefinition['key'], updater: (plan: BillingPlanDefinition) => BillingPlanDefinition) => {
+    setBillingFramework((prev) => ({
+      ...prev,
+      plans: prev.plans.map((plan) => (plan.key === planKey ? updater(plan) : plan)),
+    }));
+  };
+
   const handleSaveProviders = async () => {
     setIsSavingProviders(true);
     setErrorMessage(null);
@@ -73,6 +97,47 @@ export default function AdminController() {
       setErrorMessage('Failed to save provider foundation.');
     } finally {
       setIsSavingProviders(false);
+    }
+  };
+
+  const handleSavePlans = async () => {
+    setIsSavingPlans(true);
+    setErrorMessage(null);
+
+    try {
+      await planConfigService.saveFramework(billingFramework);
+      const nextMetrics = await adminService.getMetrics();
+      setMetrics(nextMetrics);
+      setSaveMessage('Plan framework saved');
+    } catch (error) {
+      console.error('Error saving billing framework:', error);
+      setErrorMessage('Failed to save plan framework.');
+    } finally {
+      setIsSavingPlans(false);
+    }
+  };
+
+  const handleSaveBusinessPlan = async (ownerId: string, planKey: string, subscriptionStatus: string, storageAddOnQuantity: number) => {
+    setSavingBusinessOwnerId(ownerId);
+    setErrorMessage(null);
+
+    try {
+      const selectedPlan = billingFramework.plans.find((plan) => plan.key === planKey) || billingFramework.plans[0];
+      await adminService.updateBusinessPlan(ownerId, {
+        plan_key: selectedPlan.key,
+        plan_name: selectedPlan.label,
+        subscription_status: subscriptionStatus,
+        storage_add_on_quantity: Math.max(0, storageAddOnQuantity),
+      });
+
+      const nextMetrics = await adminService.getMetrics();
+      setMetrics(nextMetrics);
+      setSaveMessage(`Updated ${nextMetrics.businessPlans.find((entry) => entry.ownerId === ownerId)?.businessName || 'business'} plan`);
+    } catch (error) {
+      console.error('Error saving business plan:', error);
+      setErrorMessage('Failed to save business plan.');
+    } finally {
+      setSavingBusinessOwnerId(null);
     }
   };
 
@@ -149,6 +214,394 @@ export default function AdminController() {
         </div>
       </div>
 
+      <section className="bg-white rounded-[40px] border border-gray-100 shadow-sm p-6">
+        <div className="flex items-center justify-between gap-4 mb-6">
+          <div>
+            <h3 className="text-lg font-black text-gray-900">Plan Framework</h3>
+            <p className="text-[10px] font-black uppercase tracking-widest text-gray-400 mt-2">
+              One source of truth for pricing, limits, feature gates, and storage add-ons
+            </p>
+          </div>
+          <button
+            onClick={handleSavePlans}
+            disabled={isSavingPlans}
+            className={`px-5 py-3 rounded-2xl text-xs font-black uppercase tracking-widest transition-all flex items-center gap-2 ${
+              isSavingPlans ? 'bg-gray-200 text-gray-400' : 'bg-blue-600 text-white hover:bg-blue-700'
+            }`}
+          >
+            <Save className="h-4 w-4" />
+            {isSavingPlans ? 'Saving...' : 'Save Plan Framework'}
+          </button>
+        </div>
+
+        <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
+          {billingFramework.plans.map((plan) => (
+            <div key={plan.key} className="rounded-3xl border border-gray-100 bg-gray-50 p-5 space-y-4">
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <p className="text-lg font-black text-gray-900">{plan.label}</p>
+                  <p className="text-sm font-bold text-gray-500 mt-1">{plan.description}</p>
+                </div>
+                <label className="flex items-center gap-2 rounded-full bg-white px-3 py-2 border border-gray-200">
+                  <span className="text-[10px] font-black uppercase tracking-widest text-gray-400">Active</span>
+                  <input
+                    type="checkbox"
+                    checked={plan.active}
+                    onChange={(event) => updatePlan(plan.key, (current) => ({ ...current, active: event.target.checked }))}
+                    className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                  />
+                </label>
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <label className="block">
+                  <span className="block text-[10px] font-black uppercase tracking-widest text-gray-400 mb-2">Monthly Price</span>
+                  <input
+                    type="number"
+                    min="0"
+                    value={plan.monthly_price}
+                    onChange={(event) => updatePlan(plan.key, (current) => ({ ...current, monthly_price: Number(event.target.value || 0) }))}
+                    className="w-full px-4 py-3 rounded-2xl border border-gray-200 bg-white text-sm font-bold text-gray-900 outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                </label>
+                <label className="block">
+                  <span className="block text-[10px] font-black uppercase tracking-widest text-gray-400 mb-2">Annual Price</span>
+                  <input
+                    type="number"
+                    min="0"
+                    value={plan.annual_price}
+                    onChange={(event) => updatePlan(plan.key, (current) => ({ ...current, annual_price: Number(event.target.value || 0) }))}
+                    className="w-full px-4 py-3 rounded-2xl border border-gray-200 bg-white text-sm font-bold text-gray-900 outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                </label>
+                <label className="block">
+                  <span className="block text-[10px] font-black uppercase tracking-widest text-gray-400 mb-2">Storage (MB)</span>
+                  <input
+                    type="number"
+                    min="0"
+                    value={Math.round(plan.limits.storage_limit_bytes / (1024 * 1024))}
+                    onChange={(event) => updatePlan(plan.key, (current) => ({
+                      ...current,
+                      limits: {
+                        ...current.limits,
+                        storage_limit_bytes: Number(event.target.value || 0) * 1024 * 1024,
+                      },
+                    }))}
+                    className="w-full px-4 py-3 rounded-2xl border border-gray-200 bg-white text-sm font-bold text-gray-900 outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                </label>
+                <label className="block">
+                  <span className="block text-[10px] font-black uppercase tracking-widest text-gray-400 mb-2">Retention (Days)</span>
+                  <input
+                    type="number"
+                    min="0"
+                    value={plan.limits.retention_days ?? 0}
+                    onChange={(event) => updatePlan(plan.key, (current) => ({
+                      ...current,
+                      limits: {
+                        ...current.limits,
+                        retention_days: Number(event.target.value || 0),
+                      },
+                    }))}
+                    className="w-full px-4 py-3 rounded-2xl border border-gray-200 bg-white text-sm font-bold text-gray-900 outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                </label>
+                <label className="block">
+                  <span className="block text-[10px] font-black uppercase tracking-widest text-gray-400 mb-2">Max Active Jobs</span>
+                  <input
+                    type="number"
+                    min="0"
+                    value={plan.limits.max_active_jobs}
+                    onChange={(event) => updatePlan(plan.key, (current) => ({
+                      ...current,
+                      limits: {
+                        ...current.limits,
+                        max_active_jobs: Number(event.target.value || 0),
+                      },
+                    }))}
+                    className="w-full px-4 py-3 rounded-2xl border border-gray-200 bg-white text-sm font-bold text-gray-900 outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                </label>
+                <label className="block">
+                  <span className="block text-[10px] font-black uppercase tracking-widest text-gray-400 mb-2">Route Runs / Day</span>
+                  <input
+                    type="number"
+                    min="0"
+                    value={plan.limits.max_route_runs_per_day}
+                    onChange={(event) => updatePlan(plan.key, (current) => ({
+                      ...current,
+                      limits: {
+                        ...current.limits,
+                        max_route_runs_per_day: Number(event.target.value || 0),
+                      },
+                    }))}
+                    className="w-full px-4 py-3 rounded-2xl border border-gray-200 bg-white text-sm font-bold text-gray-900 outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                </label>
+                <label className="block">
+                  <span className="block text-[10px] font-black uppercase tracking-widest text-gray-400 mb-2">SMS / Month</span>
+                  <input
+                    type="number"
+                    min="0"
+                    value={plan.limits.monthly_sms_limit}
+                    onChange={(event) => updatePlan(plan.key, (current) => ({
+                      ...current,
+                      limits: {
+                        ...current.limits,
+                        monthly_sms_limit: Number(event.target.value || 0),
+                      },
+                    }))}
+                    className="w-full px-4 py-3 rounded-2xl border border-gray-200 bg-white text-sm font-bold text-gray-900 outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                </label>
+                <label className="block">
+                  <span className="block text-[10px] font-black uppercase tracking-widest text-gray-400 mb-2">Email / Month</span>
+                  <input
+                    type="number"
+                    min="0"
+                    value={plan.limits.monthly_email_limit}
+                    onChange={(event) => updatePlan(plan.key, (current) => ({
+                      ...current,
+                      limits: {
+                        ...current.limits,
+                        monthly_email_limit: Number(event.target.value || 0),
+                      },
+                    }))}
+                    className="w-full px-4 py-3 rounded-2xl border border-gray-200 bg-white text-sm font-bold text-gray-900 outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                </label>
+                <label className="block">
+                  <span className="block text-[10px] font-black uppercase tracking-widest text-gray-400 mb-2">Team Members</span>
+                  <input
+                    type="number"
+                    min="0"
+                    value={plan.limits.max_team_members}
+                    onChange={(event) => updatePlan(plan.key, (current) => ({
+                      ...current,
+                      limits: {
+                        ...current.limits,
+                        max_team_members: Number(event.target.value || 0),
+                      },
+                    }))}
+                    className="w-full px-4 py-3 rounded-2xl border border-gray-200 bg-white text-sm font-bold text-gray-900 outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                </label>
+              </div>
+
+              <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+                {[
+                  ['customer_portal', 'Portal'],
+                  ['persistent_portal', 'Persistent Portal'],
+                  ['team_mode', 'Teams'],
+                  ['storage_add_on', 'Storage Add-On'],
+                  ['sms_delivery', 'SMS'],
+                  ['email_delivery', 'Email'],
+                ].map(([featureKey, label]) => (
+                  <label key={featureKey} className="flex items-center justify-between gap-3 rounded-2xl border border-gray-200 bg-white px-4 py-3">
+                    <span className="text-sm font-black text-gray-900">{label}</span>
+                    <input
+                      type="checkbox"
+                      checked={plan.feature_flags[featureKey as keyof BillingPlanDefinition['feature_flags']]}
+                      onChange={(event) => updatePlan(plan.key, (current) => ({
+                        ...current,
+                        feature_flags: {
+                          ...current.feature_flags,
+                          [featureKey]: event.target.checked,
+                        },
+                      }))}
+                      className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                    />
+                  </label>
+                ))}
+              </div>
+
+              <div className="rounded-2xl bg-white border border-gray-200 px-4 py-3">
+                <p className="text-[10px] font-black uppercase tracking-widest text-gray-400">Effective Pricing</p>
+                <p className="text-sm font-black text-gray-900 mt-2">
+                  {formatCurrency(plan.monthly_price)} monthly / {formatCurrency(plan.annual_price)} annual
+                </p>
+              </div>
+            </div>
+          ))}
+        </div>
+
+        <div className="mt-6 rounded-3xl border border-gray-100 bg-gray-50 p-5">
+          <div className="flex items-center gap-3 mb-4">
+            <HardDrive className="h-5 w-5 text-blue-600" />
+            <div>
+              <p className="text-sm font-black text-gray-900">Storage Add-On</p>
+              <p className="text-[10px] font-black uppercase tracking-widest text-gray-400 mt-1">
+                Global add-on increments that can be attached per business
+              </p>
+            </div>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+            <label className="flex items-center justify-between gap-4 rounded-2xl border border-gray-200 bg-white px-4 py-3">
+              <span className="text-sm font-black text-gray-900">Enabled</span>
+              <input
+                type="checkbox"
+                checked={billingFramework.storage_add_on.enabled}
+                onChange={(event) => setBillingFramework((prev) => ({
+                  ...prev,
+                  storage_add_on: {
+                    ...prev.storage_add_on,
+                    enabled: event.target.checked,
+                  },
+                }))}
+                className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+              />
+            </label>
+            <label className="block">
+              <span className="block text-[10px] font-black uppercase tracking-widest text-gray-400 mb-2">Increment (GB)</span>
+              <input
+                type="number"
+                min="1"
+                value={Math.max(1, Math.round(billingFramework.storage_add_on.increment_bytes / (1024 * 1024 * 1024)))}
+                onChange={(event) => setBillingFramework((prev) => ({
+                  ...prev,
+                  storage_add_on: {
+                    ...prev.storage_add_on,
+                    increment_bytes: Number(event.target.value || 1) * 1024 * 1024 * 1024,
+                  },
+                }))}
+                className="w-full px-4 py-3 rounded-2xl border border-gray-200 bg-white text-sm font-bold text-gray-900 outline-none focus:ring-2 focus:ring-blue-500"
+              />
+            </label>
+            <label className="block">
+              <span className="block text-[10px] font-black uppercase tracking-widest text-gray-400 mb-2">Price / Increment</span>
+              <input
+                type="number"
+                min="0"
+                value={billingFramework.storage_add_on.price_per_increment}
+                onChange={(event) => setBillingFramework((prev) => ({
+                  ...prev,
+                  storage_add_on: {
+                    ...prev.storage_add_on,
+                    price_per_increment: Number(event.target.value || 0),
+                  },
+                }))}
+                className="w-full px-4 py-3 rounded-2xl border border-gray-200 bg-white text-sm font-bold text-gray-900 outline-none focus:ring-2 focus:ring-blue-500"
+              />
+            </label>
+            <label className="block">
+              <span className="block text-[10px] font-black uppercase tracking-widest text-gray-400 mb-2">Max Increments</span>
+              <input
+                type="number"
+                min="0"
+                value={billingFramework.storage_add_on.max_increments}
+                onChange={(event) => setBillingFramework((prev) => ({
+                  ...prev,
+                  storage_add_on: {
+                    ...prev.storage_add_on,
+                    max_increments: Number(event.target.value || 0),
+                  },
+                }))}
+                className="w-full px-4 py-3 rounded-2xl border border-gray-200 bg-white text-sm font-bold text-gray-900 outline-none focus:ring-2 focus:ring-blue-500"
+              />
+            </label>
+          </div>
+        </div>
+      </section>
+
+      <section className="bg-white rounded-[40px] border border-gray-100 shadow-sm p-6">
+        <div className="flex items-center gap-3 mb-6">
+          <DollarSign className="h-5 w-5 text-blue-600" />
+          <div>
+            <h3 className="text-lg font-black text-gray-900">Business Plans</h3>
+            <p className="text-[10px] font-black uppercase tracking-widest text-gray-400 mt-2">
+              Upgrade, downgrade, pause, and attach storage add-ons without hardcoded limits
+            </p>
+          </div>
+        </div>
+
+        <div className="space-y-4">
+          {metrics?.businessPlans.length ? metrics.businessPlans.map((business) => (
+            <div key={business.ownerId} className="rounded-3xl border border-gray-100 bg-gray-50 p-5">
+              <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1.4fr)_220px_220px_180px_160px] gap-4 items-end">
+                <div>
+                  <p className="text-sm font-black text-gray-900">{business.businessName}</p>
+                  <p className="text-[10px] font-black uppercase tracking-widest text-gray-400 mt-2">
+                    {formatBytes(business.storageLimitBytes)} storage limit • {business.activeJobCount} active jobs • {business.todayRouteRuns} runs today
+                  </p>
+                </div>
+                <label className="block">
+                  <span className="block text-[10px] font-black uppercase tracking-widest text-gray-400 mb-2">Plan</span>
+                  <select
+                    value={business.planKey}
+                    onChange={(event) => setMetrics((prev) => prev ? ({
+                      ...prev,
+                      businessPlans: prev.businessPlans.map((entry) => entry.ownerId === business.ownerId ? {
+                        ...entry,
+                        planKey: event.target.value,
+                        planName: billingFramework.plans.find((plan) => plan.key === event.target.value)?.label || entry.planName,
+                      } : entry),
+                    }) : prev)}
+                    className="w-full px-4 py-3 rounded-2xl border border-gray-200 bg-white text-sm font-bold text-gray-900 outline-none focus:ring-2 focus:ring-blue-500"
+                  >
+                    {billingFramework.plans.filter((plan) => plan.active).map((plan) => (
+                      <option key={plan.key} value={plan.key}>{plan.label}</option>
+                    ))}
+                  </select>
+                </label>
+                <label className="block">
+                  <span className="block text-[10px] font-black uppercase tracking-widest text-gray-400 mb-2">Status</span>
+                  <select
+                    value={business.subscriptionStatus}
+                    onChange={(event) => setMetrics((prev) => prev ? ({
+                      ...prev,
+                      businessPlans: prev.businessPlans.map((entry) => entry.ownerId === business.ownerId ? {
+                        ...entry,
+                        subscriptionStatus: event.target.value,
+                      } : entry),
+                    }) : prev)}
+                    className="w-full px-4 py-3 rounded-2xl border border-gray-200 bg-white text-sm font-bold text-gray-900 outline-none focus:ring-2 focus:ring-blue-500"
+                  >
+                    <option value="trialing">Trialing</option>
+                    <option value="active">Active</option>
+                    <option value="past_due">Past Due</option>
+                    <option value="paused">Paused</option>
+                    <option value="canceled">Canceled</option>
+                  </select>
+                </label>
+                <label className="block">
+                  <span className="block text-[10px] font-black uppercase tracking-widest text-gray-400 mb-2">Storage Add-Ons</span>
+                  <input
+                    type="number"
+                    min="0"
+                    value={business.storageAddOnQuantity}
+                    onChange={(event) => setMetrics((prev) => prev ? ({
+                      ...prev,
+                      businessPlans: prev.businessPlans.map((entry) => entry.ownerId === business.ownerId ? {
+                        ...entry,
+                        storageAddOnQuantity: Number(event.target.value || 0),
+                      } : entry),
+                    }) : prev)}
+                    className="w-full px-4 py-3 rounded-2xl border border-gray-200 bg-white text-sm font-bold text-gray-900 outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                </label>
+                <button
+                  onClick={() => handleSaveBusinessPlan(
+                    business.ownerId,
+                    business.planKey,
+                    business.subscriptionStatus,
+                    business.storageAddOnQuantity
+                  )}
+                  disabled={savingBusinessOwnerId === business.ownerId}
+                  className={`px-5 py-3 rounded-2xl text-xs font-black uppercase tracking-widest transition-all flex items-center justify-center gap-2 ${
+                    savingBusinessOwnerId === business.ownerId ? 'bg-gray-200 text-gray-400' : 'bg-blue-600 text-white hover:bg-blue-700'
+                  }`}
+                >
+                  <Save className="h-4 w-4" />
+                  {savingBusinessOwnerId === business.ownerId ? 'Saving...' : 'Save'}
+                </button>
+              </div>
+            </div>
+          )) : (
+            <p className="text-sm font-bold text-gray-400">No business plans available yet.</p>
+          )}
+        </div>
+      </section>
+
       <div className="grid grid-cols-1 xl:grid-cols-4 gap-6">
         <section className="bg-white rounded-[40px] border border-gray-100 shadow-sm p-6">
           <h3 className="text-lg font-black text-gray-900 mb-6">Plan Distribution</h3>
@@ -224,6 +677,26 @@ export default function AdminController() {
                 <p className="text-[10px] font-black uppercase tracking-widest text-gray-400 mt-2">{entry.activityCount} route events in the last week</p>
               </div>
             )) : <p className="text-sm font-bold text-gray-400">No route activity logged yet</p>}
+          </div>
+        </section>
+
+        <section className="bg-white rounded-[40px] border border-gray-100 shadow-sm p-6">
+          <h3 className="text-lg font-black text-gray-900 mb-2">Usage Tracking</h3>
+          <p className="text-[10px] font-black uppercase tracking-widest text-gray-400 mb-6">
+            Current month SMS, email, and storage usage by business
+          </p>
+          <div className="space-y-3">
+            {metrics?.usageByBusiness.length ? metrics.usageByBusiness.map((entry) => (
+              <div key={entry.ownerId} className="rounded-2xl bg-gray-50 px-4 py-3">
+                <p className="text-sm font-black text-gray-900">{entry.businessName}</p>
+                <p className="text-[10px] font-black uppercase tracking-widest text-gray-400 mt-2">
+                  SMS {entry.smsUsed}/{entry.smsLimit || 0} • Email {entry.emailUsed}/{entry.emailLimit || 0}
+                </p>
+                <p className="text-[10px] font-black uppercase tracking-widest text-gray-400 mt-2">
+                  Storage {formatBytes(entry.storageUsedBytes)} / {formatBytes(entry.storageLimitBytes)}
+                </p>
+              </div>
+            )) : <p className="text-sm font-bold text-gray-400">No usage data recorded yet</p>}
           </div>
         </section>
       </div>

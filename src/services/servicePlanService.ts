@@ -1,5 +1,6 @@
 import { db, auth } from '../firebase';
 import { collection, addDoc, onSnapshot, query, where, serverTimestamp, updateDoc, doc, deleteDoc, getDocs, getDoc } from 'firebase/firestore';
+import { waitForCurrentUser } from './authSessionService';
 
 export interface ServicePlan {
   id?: string;
@@ -80,7 +81,7 @@ export const servicePlanService = {
   },
 
   addServicePlan: async (plan: Omit<ServicePlan, 'id' | 'ownerId' | 'created_at'>) => {
-    const user = auth.currentUser;
+    const user = await waitForCurrentUser();
     if (!user) throw new Error('Must be logged in to add service plan');
 
     const newPlan = {
@@ -95,6 +96,8 @@ export const servicePlanService = {
   },
 
   updateServicePlan: async (id: string, updates: Partial<ServicePlan>) => {
+    const user = await waitForCurrentUser();
+    if (!user) throw new Error('Must be logged in to update service plan');
     const docRef = doc(db, COLLECTION_NAME, id);
     const docSnap = await getDoc(docRef);
     const currentPlan: Partial<ServicePlan> = docSnap.exists() ? docSnap.data() as ServicePlan : {};
@@ -111,12 +114,14 @@ export const servicePlanService = {
   },
 
   deleteServicePlan: async (id: string) => {
+    const user = await waitForCurrentUser();
+    if (!user) throw new Error('Must be logged in to delete service plan');
     const docRef = doc(db, COLLECTION_NAME, id);
     return await deleteDoc(docRef);
   },
 
   initializeDefaultServices: async () => {
-    const user = auth.currentUser;
+    const user = await waitForCurrentUser();
     if (!user) return;
 
     const q = query(collection(db, COLLECTION_NAME), where('ownerId', '==', user.uid), where('name', '==', 'Lawn Service (basic)'));
