@@ -5,7 +5,7 @@ import { customerService, Customer } from '../services/customerService';
 import { jobService, Job } from '../services/jobService';
 import { quoteService, Quote } from '../services/quoteService';
 import { customerPortalService } from '../services/customerPortalService';
-import { Timestamp, doc, getDoc } from 'firebase/firestore';
+import { Timestamp, doc, onSnapshot } from 'firebase/firestore';
 import { auth, db } from '../firebase';
 
 export default function Customers() {
@@ -64,22 +64,33 @@ export default function Customers() {
     const unsubscribe = customerService.subscribeToCustomers(setCustomers);
     const unsubscribeJobs = jobService.subscribeToJobs(setAllJobs);
     const unsubscribeQuotes = quoteService.subscribeToQuotes(setQuotes);
-    const unsubscribeAuth = auth.onAuthStateChanged(async (user) => {
+    let unsubscribeProfile = () => {};
+
+    const unsubscribeAuth = auth.onAuthStateChanged((user) => {
+      unsubscribeProfile();
+
       if (!user) {
         setBusinessPlanName('Free');
         return;
       }
 
-      const profileSnap = await getDoc(doc(db, 'business_profiles', user.uid));
-      if (profileSnap.exists()) {
+      unsubscribeProfile = onSnapshot(doc(db, 'business_profiles', user.uid), (profileSnap) => {
+        if (!profileSnap.exists()) {
+          setBusinessPlanName('Free');
+          return;
+        }
+
         setBusinessPlanName((profileSnap.data().plan_name as string) || 'Free');
-      }
+      }, () => {
+        setBusinessPlanName('Free');
+      });
     });
 
     return () => {
       unsubscribe();
       unsubscribeJobs();
       unsubscribeQuotes();
+      unsubscribeProfile();
       unsubscribeAuth();
     };
   }, []);

@@ -419,7 +419,7 @@ export default function Settings() {
       )}
 
       <div className="space-y-6">
-        <div className="sticky top-24 z-20 space-y-3">
+        <div className="space-y-3">
           <div className="bg-white p-4 rounded-3xl border border-gray-100 shadow-sm">
             <div className="flex items-center justify-between gap-4 mb-4">
               <div>
@@ -431,7 +431,7 @@ export default function Settings() {
               </span>
             </div>
 
-            <div className="flex gap-2 overflow-x-auto pb-1 sm:grid sm:grid-cols-5 sm:overflow-visible">
+            <div className="grid grid-cols-2 gap-2 lg:grid-cols-5">
               {settingsTabs.map((tab) => {
                 const Icon = tab.icon;
                 const isActive = activeTab === tab.id;
@@ -440,7 +440,7 @@ export default function Settings() {
                     key={tab.id}
                     type="button"
                     onClick={() => setActiveTab(tab.id)}
-                    className={`min-w-[150px] sm:min-w-0 flex items-center justify-center gap-2 px-4 py-4 rounded-2xl text-xs font-black uppercase tracking-widest transition-all ${
+                    className={`min-w-0 flex items-center justify-center gap-2 px-4 py-4 rounded-2xl text-xs font-black uppercase tracking-widest transition-all ${
                       isActive ? 'bg-blue-600 text-white shadow-lg shadow-blue-100' : 'bg-gray-50 text-gray-500 hover:bg-blue-50 hover:text-blue-600'
                     }`}
                   >
@@ -452,7 +452,7 @@ export default function Settings() {
             </div>
           </div>
 
-          <div className="bg-blue-50 border border-blue-100 rounded-3xl px-5 py-4">
+          <div className="hidden sm:block bg-blue-50 border border-blue-100 rounded-3xl px-5 py-4">
             <div className="flex items-center gap-3">
               <div className="w-10 h-10 rounded-2xl bg-white border border-blue-100 flex items-center justify-center">
                 <activeTabMeta.icon className="h-5 w-5 text-blue-600" />
