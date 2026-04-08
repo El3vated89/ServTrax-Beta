@@ -387,8 +387,6 @@ export default function Settings() {
     }
   };
 
-  const activeTabMeta = settingsTabs.find((tab) => tab.id === activeTab) || settingsTabs[0];
-
   return (
     <div className="space-y-8 pb-24">
       <header className="flex justify-between items-end px-2">
@@ -419,51 +417,22 @@ export default function Settings() {
       )}
 
       <div className="space-y-6">
-        <div className="space-y-3">
-          <div className="bg-white p-4 rounded-3xl border border-gray-100 shadow-sm">
-            <div className="flex items-center justify-between gap-4 mb-4">
-              <div>
-                <p className="text-[10px] font-black text-blue-600 uppercase tracking-[0.2em]">Settings Sections</p>
-                <p className="text-sm font-bold text-gray-500 mt-2">Settings now live in clear sections instead of one long screen.</p>
-              </div>
-              <span className="px-3 py-1 rounded-full bg-blue-50 text-blue-700 text-[10px] font-black uppercase tracking-widest">
-                {settingsTabs.findIndex((tab) => tab.id === activeTab) + 1} of {settingsTabs.length}
-              </span>
-            </div>
-
-            <div className="grid grid-cols-2 gap-2 lg:grid-cols-5">
-              {settingsTabs.map((tab) => {
-                const Icon = tab.icon;
-                const isActive = activeTab === tab.id;
-                return (
-                  <button
-                    key={tab.id}
-                    type="button"
-                    onClick={() => setActiveTab(tab.id)}
-                    className={`min-w-0 flex items-center justify-center gap-2 px-4 py-4 rounded-2xl text-xs font-black uppercase tracking-widest transition-all ${
-                      isActive ? 'bg-blue-600 text-white shadow-lg shadow-blue-100' : 'bg-gray-50 text-gray-500 hover:bg-blue-50 hover:text-blue-600'
-                    }`}
-                  >
-                    <Icon className="h-4 w-4" />
-                    {tab.label}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-
-          <div className="hidden sm:block bg-blue-50 border border-blue-100 rounded-3xl px-5 py-4">
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-2xl bg-white border border-blue-100 flex items-center justify-center">
-                <activeTabMeta.icon className="h-5 w-5 text-blue-600" />
-              </div>
-              <div>
-                <p className="text-[10px] font-black text-blue-600 uppercase tracking-[0.2em]">Current Section</p>
-                <h3 className="text-lg font-black text-gray-900">{activeTabMeta.title}</h3>
-                <p className="text-xs font-bold text-gray-500">{activeTabMeta.description}</p>
-              </div>
-            </div>
-          </div>
+        <div className="mx-2 flex flex-wrap gap-2 bg-white p-1.5 rounded-2xl border border-gray-100 shadow-sm">
+          {settingsTabs.map((tab) => {
+            const isActive = activeTab === tab.id;
+            return (
+              <button
+                key={tab.id}
+                type="button"
+                onClick={() => setActiveTab(tab.id)}
+                className={`flex-1 min-w-[92px] px-4 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all whitespace-nowrap ${
+                  isActive ? 'bg-blue-600 text-white shadow-lg shadow-blue-200' : 'text-gray-400 hover:text-gray-600'
+                }`}
+              >
+                {tab.label}
+              </button>
+            );
+          })}
         </div>
 
         {activeTab === 'profile' && (
