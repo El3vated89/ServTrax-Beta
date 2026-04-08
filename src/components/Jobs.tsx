@@ -9,6 +9,7 @@ import { renderProofMessage, templateService, MessageTemplate } from '../service
 import { recurringService, RecurringPlan, BillingFrequency } from '../services/recurringService';
 import { settingsService, BusinessSettings } from '../services/settingsService';
 import { quoteService, Quote } from '../services/quoteService';
+import { customerPortalService } from '../services/customerPortalService';
 import { Timestamp, serverTimestamp, doc, getDoc } from 'firebase/firestore';
 import { compressImage } from '../utils/imageCompression';
 import { getPublicOrigin } from '../utils';
@@ -58,6 +59,7 @@ export default function Jobs() {
   const [verifyingJobId, setVerifyingJobId] = useState<string | null>(null);
   const [verificationPhotoUrl, setVerificationPhotoUrl] = useState('');
   const [verificationThumbnailUrl, setVerificationThumbnailUrl] = useState('');
+  const [verificationFileSizeBytes, setVerificationFileSizeBytes] = useState(0);
   const [verificationNotes, setVerificationNotes] = useState('');
   const [isCompressing, setIsCompressing] = useState(false);
 
@@ -161,6 +163,30 @@ export default function Jobs() {
     }
   };
 
+  const syncCustomerPortal = async (customerId?: string, nextJobs?: Job[], nextQuotes?: Quote[]) => {
+    if (!customerId) return;
+
+    const customer = customers.find((entry) => entry.id === customerId);
+    if (!customer?.portal_enabled || !customer.portal_token) return;
+
+    await customerPortalService.syncPortalContent(
+      customer,
+      nextJobs || jobs,
+      nextQuotes || quotes,
+      customer.portal_plan_name_snapshot
+    );
+  };
+
+  const confirmNoPhotoShareIfRequired = async (job: Job) => {
+    const plan = servicePlans.find((entry) => entry.id === job.servicePlanId);
+    if (!plan?.requires_photos || !job.id) return true;
+
+    const hasProofPhotos = await verificationService.jobHasProofPhotos(job.id);
+    if (hasProofPhotos) return true;
+
+    return window.confirm('This service requires a photo, but no proof photo is attached yet. Continue creating a customer-facing proof link without a photo?');
+  };
+
   const handleAddJob = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMessage(null);
@@ -249,6 +275,7 @@ export default function Jobs() {
       const compressed = await compressImage(file);
       setVerificationPhotoUrl(compressed.dataUrl);
       setVerificationThumbnailUrl(compressed.thumbnailUrl);
+      setVerificationFileSizeBytes(compressed.size);
     } catch (error) {
       console.error('Error compressing image:', error);
       setErrorMessage('Failed to process image. Please try another photo.');
@@ -267,6 +294,7 @@ export default function Jobs() {
       await verificationService.addVerification({
         jobId: verifyingJobId,
         photo_url: verificationPhotoUrl || 'https://picsum.photos/seed/verification/400/300', // Placeholder if empty
+        file_size_bytes: verificationFileSizeBytes,
         notes: verificationNotes
       });
 
@@ -320,10 +348,13 @@ export default function Jobs() {
       }
 
       const updatedJob = { ...currentJob, ...updateData } as Job;
+      const nextJobs = jobs.map((job) => (job.id === verifyingJobId ? updatedJob : job));
       setVerifyingJobId(null);
       setVerificationPhotoUrl('');
       setVerificationThumbnailUrl('');
+      setVerificationFileSizeBytes(0);
       setVerificationNotes('');
+      await syncCustomerPortal(currentJob?.customerId, nextJobs);
       
       // Show share success modal
       setShowShareSuccess(updatedJob);
@@ -343,23 +374,31 @@ export default function Jobs() {
   const handleShareJob = async (job: Job) => {
     setErrorMessage(null);
     try {
+      const canShareWithoutPhoto = await confirmNoPhotoShareIfRequired(job);
+      if (!canShareWithoutPhoto) return;
+
       const expiresAt = new Date();
-      expiresAt.setHours(expiresAt.getHours() + 24); // Expire in 24 hours
+      const tempLinkDays = businessSettings?.storage_settings?.temporary_link_duration_days || 1;
+      expiresAt.setDate(expiresAt.getDate() + tempLinkDays);
 
       if (job.visibility_mode === 'internal_only' || !job.share_token) {
         const shareToken = Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
+        const updatedJob = { ...job, visibility_mode: 'shareable', share_token: shareToken, share_expires_at: Timestamp.fromDate(expiresAt) } as Job;
         await jobService.updateJob(job.id!, {
           visibility_mode: 'shareable',
           share_token: shareToken,
           share_expires_at: Timestamp.fromDate(expiresAt)
         });
-        setSharingJob({ ...job, visibility_mode: 'shareable', share_token: shareToken, share_expires_at: Timestamp.fromDate(expiresAt) });
+        await syncCustomerPortal(job.customerId, jobs.map((entry) => (entry.id === job.id ? updatedJob : entry)));
+        setSharingJob(updatedJob);
       } else {
         // Even if it has a token, we should probably refresh the expiration if they share it again
+        const updatedJob = { ...job, share_expires_at: Timestamp.fromDate(expiresAt) } as Job;
         await jobService.updateJob(job.id!, {
           share_expires_at: Timestamp.fromDate(expiresAt)
         });
-        setSharingJob({ ...job, share_expires_at: Timestamp.fromDate(expiresAt) });
+        await syncCustomerPortal(job.customerId, jobs.map((entry) => (entry.id === job.id ? updatedJob : entry)));
+        setSharingJob(updatedJob);
       }
     } catch (error) {
       console.error('Error sharing job:', error);
@@ -381,6 +420,13 @@ export default function Jobs() {
     setErrorMessage(null);
     try {
       await jobService.updateJob(jobId, { status: 'approved' });
+      const approvedJob = jobs.find((job) => job.id === jobId);
+      if (approvedJob) {
+        await syncCustomerPortal(
+          approvedJob.customerId,
+          jobs.map((job) => (job.id === jobId ? { ...job, status: 'approved' as const } : job))
+        );
+      }
     } catch (error: any) {
       console.error('Error approving job:', error);
       let msg = 'Failed to approve job. Please check your permissions and try again.';
@@ -481,7 +527,11 @@ export default function Jobs() {
         created_at: serverTimestamp()
       };
 
-      await jobService.addJob(quotePayload);
+      const quoteRef = await jobService.addJob(quotePayload);
+      const nextQuoteJob = quoteRef ? ({ id: quoteRef.id, ...quotePayload, ownerId: auth.currentUser?.uid || '' } as Job) : null;
+      if (nextQuoteJob) {
+        await syncCustomerPortal(customerId, [...jobs, nextQuoteJob], quotes);
+      }
       setIsAdding(false);
       resetForm();
     } catch (error: any) {
@@ -1433,6 +1483,7 @@ export default function Jobs() {
                         onClick={() => {
                           setVerificationPhotoUrl('');
                           setVerificationThumbnailUrl('');
+                          setVerificationFileSizeBytes(0);
                         }}
                         className="absolute top-2 right-2 bg-white/90 backdrop-blur-sm text-red-600 rounded-full p-1.5 shadow-sm hover:bg-white"
                       >

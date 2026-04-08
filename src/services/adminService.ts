@@ -16,6 +16,7 @@ interface AdminVerificationRecord {
   ownerId?: string;
   photo_urls?: string[];
   photo_url?: string;
+  file_size_bytes?: number;
 }
 
 interface AdminJobRecord {
@@ -105,7 +106,7 @@ export const adminService = {
       const storageByOwner = records.reduce<Record<string, number>>((totals, record) => {
         const ownerId = record.ownerId || 'unknown';
         const photoUrls = record.photo_urls || (record.photo_url ? [record.photo_url] : []);
-        const estimatedBytes = photoUrls.reduce((sum, url) => sum + (url?.length || 0), 0) * 0.75;
+        const estimatedBytes = record.file_size_bytes || (photoUrls.reduce((sum, url) => sum + (url?.length || 0), 0) * 0.75);
         totals[ownerId] = (totals[ownerId] || 0) + estimatedBytes;
         return totals;
       }, {});

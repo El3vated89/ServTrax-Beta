@@ -45,6 +45,10 @@ import { getPublicOrigin } from '../../utils';
 
 import { verificationService } from '../../services/verificationService';
 import { renderProofMessage, templateService, MessageTemplate } from '../../services/templateService';
+import { settingsService, BusinessSettings } from '../../services/settingsService';
+import { servicePlanService, ServicePlan } from '../../services/servicePlanService';
+import { quoteService, Quote } from '../../services/quoteService';
+import { customerPortalService } from '../../services/customerPortalService';
 
 const formatRouteDateTime = (value: any) => {
   if (!value) return '';
@@ -97,13 +101,15 @@ export default function ActiveRoutePage() {
         const newPhotoUrls = [...(showShareSuccess.photo_urls || []), newUrl];
         setShowShareSuccess(prev => ({
           ...prev,
-          photo_urls: newPhotoUrls
+          photo_urls: newPhotoUrls,
+          file_size_bytes: (prev?.file_size_bytes || 0) + compressed.size,
         }));
         
         // Update the verification record in Firestore if it exists
         if (showShareSuccess.verification_id && !showShareSuccess.verification_id.startsWith('sample-')) {
           await verificationService.updateVerification(showShareSuccess.verification_id, {
-            photo_urls: newPhotoUrls
+            photo_urls: newPhotoUrls,
+            file_size_bytes: (showShareSuccess.file_size_bytes || 0) + compressed.size,
           });
         }
       } else {
@@ -124,9 +130,12 @@ export default function ActiveRoutePage() {
   const [copied, setCopied] = useState(false);
   const [availableJobs, setAvailableJobs] = useState<Job[]>([]);
   const [availableCustomers, setAvailableCustomers] = useState<Customer[]>([]);
+  const [servicePlans, setServicePlans] = useState<ServicePlan[]>([]);
+  const [quotes, setQuotes] = useState<Quote[]>([]);
   const [selectedDate, setSelectedDate] = useState<Date>(new Date());
   const [stopFilter, setStopFilter] = useState<'open' | 'completed' | 'overdue' | 'delayed' | 'all'>('open');
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [businessSettings, setBusinessSettings] = useState<BusinessSettings | null>(null);
 
   const getShareProofLink = (job: any) => `${getPublicOrigin()}/#/proof/${job.id}/${job.share_token}`;
   const getCurrentShareMessage = (includePaymentDue = paymentDue) => {
@@ -141,25 +150,57 @@ export default function ActiveRoutePage() {
     });
   };
 
+  const syncCustomerPortal = async (customerId?: string, nextJobs?: Job[]) => {
+    if (!customerId) return;
+
+    const customer = availableCustomers.find((entry) => entry.id === customerId);
+    if (!customer?.portal_enabled || !customer.portal_token) return;
+
+    await customerPortalService.syncPortalContent(
+      customer,
+      nextJobs || availableJobs,
+      quotes,
+      customer.portal_plan_name_snapshot
+    );
+  };
+
+  const confirmNoPhotoShareIfRequired = async (job: Job) => {
+    const plan = servicePlans.find((entry) => entry.id === job.servicePlanId);
+    if (!plan?.requires_photos || !job.id) return true;
+
+    const hasProofPhotos = await verificationService.jobHasProofPhotos(job.id);
+    if (hasProofPhotos) return true;
+
+    return window.confirm('This service requires a photo, but no proof photo is attached yet. Continue creating a customer-facing proof link without a photo?');
+  };
+
   useEffect(() => {
     let unsubscribeJobs: () => void = () => {};
     let unsubscribeCustomers: () => void = () => {};
     let unsubscribeTemplates: () => void = () => {};
+    let unsubscribePlans: () => void = () => {};
+    let unsubscribeQuotes: () => void = () => {};
 
     const setupSubscriptions = () => {
       unsubscribeJobs = jobService.subscribeToJobs(setAvailableJobs);
       unsubscribeCustomers = customerService.subscribeToCustomers(setAvailableCustomers);
       unsubscribeTemplates = templateService.subscribeToTemplates(setTemplates);
+      unsubscribePlans = servicePlanService.subscribeToServicePlans(setServicePlans);
+      unsubscribeQuotes = quoteService.subscribeToQuotes(setQuotes);
     };
 
     // Use onAuthStateChanged to ensure we have a user before subscribing
     const authUnsubscribe = auth.onAuthStateChanged((user) => {
       if (user) {
         setupSubscriptions();
+        settingsService.getSettings().then(setBusinessSettings);
       } else {
         setAvailableJobs([]);
         setAvailableCustomers([]);
         setTemplates([]);
+        setServicePlans([]);
+        setQuotes([]);
+        setBusinessSettings(null);
       }
     });
 
@@ -168,6 +209,8 @@ export default function ActiveRoutePage() {
       unsubscribeJobs();
       unsubscribeCustomers();
       unsubscribeTemplates();
+      unsubscribePlans();
+      unsubscribeQuotes();
     };
   }, []);
 
@@ -475,7 +518,7 @@ export default function ActiveRoutePage() {
     }
   };
 
-  const handleVerifyStop = async (stop: RouteStop, notes: string, photoUrls: string[]) => {
+  const handleVerifyStop = async (stop: RouteStop, notes: string, photoUrls: string[], fileSizeBytes: number = 0) => {
     if (!stop.id || !activeRoute) return;
     setErrorMessage(null);
 
@@ -526,6 +569,7 @@ export default function ActiveRoutePage() {
         const vRef = await verificationService.addVerification({
           jobId: currentJobId,
           photo_urls: photoUrls,
+          file_size_bytes: fileSizeBytes,
           notes: notes || 'Service completed and verified via route.'
         });
         if (vRef) verificationId = vRef.id;
@@ -561,11 +605,45 @@ export default function ActiveRoutePage() {
       setStopToVerify(null);
       setVerificationPhotoUrls([]);
       
-      const fullJob = currentJobId ? availableJobs.find(j => j.id === currentJobId) : null;
+      const fullJob = currentJobId
+        ? availableJobs.find(j => j.id === currentJobId)
+        : null;
+      const nextJob = currentJobId
+        ? ({
+            ...(fullJob || {
+              id: currentJobId,
+              customerId: stop.customer_id || '',
+              customer_name_snapshot: stop.customer_name_snapshot,
+              address_snapshot: stop.address_snapshot,
+              phone_snapshot: '',
+              service_snapshot: stop.service_type_snapshot,
+              price_snapshot: stop.price_snapshot || 0,
+              payment_status: 'unpaid',
+              visibility_mode: 'internal_only',
+              is_billable: true,
+              is_recurring: false,
+              internal_notes: notes || '',
+              customer_notes: '',
+            }),
+            id: currentJobId,
+            customerId: stop.customer_id || fullJob?.customerId || '',
+            status: 'completed' as const,
+            completed_date: completedAt,
+          } as Job)
+        : null;
+
+      if (nextJob) {
+        await syncCustomerPortal(
+          nextJob.customerId,
+          availableJobs.some((entry) => entry.id === nextJob.id)
+            ? availableJobs.map((entry) => (entry.id === nextJob.id ? nextJob : entry))
+            : [...availableJobs, nextJob]
+        );
+      }
       
       // Show share success modal
       setShowShareSuccess({
-        ...(fullJob || {
+        ...(nextJob || {
           id: currentJobId || null,
           customer_name_snapshot: stop.customer_name_snapshot,
           service_type_snapshot: stop.service_type_snapshot,
@@ -574,6 +652,7 @@ export default function ActiveRoutePage() {
           payment_status: 'unpaid'
         }),
         photo_urls: photoUrls,
+        file_size_bytes: fileSizeBytes,
         verification_id: verificationId
       });
     } catch (error: any) {
@@ -592,11 +671,16 @@ export default function ActiveRoutePage() {
     const isPaymentDue = job.payment_status === 'unpaid' && (job.price_snapshot || 0) > 0;
     setPaymentDue(isPaymentDue);
     try {
+      const canShareWithoutPhoto = await confirmNoPhotoShareIfRequired(job as Job);
+      if (!canShareWithoutPhoto) return;
+
       const expiresAt = new Date();
-      expiresAt.setHours(expiresAt.getHours() + 24); // Expire in 24 hours
+      const tempLinkDays = businessSettings?.storage_settings?.temporary_link_duration_days || 1;
+      expiresAt.setDate(expiresAt.getDate() + tempLinkDays);
 
       if (job.visibility_mode === 'internal_only' || !job.share_token) {
         const shareToken = Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
+        const updatedJob = { ...job, visibility_mode: 'shareable', share_token: shareToken, share_expires_at: Timestamp.fromDate(expiresAt) } as Job;
         if (job.id && !job.id.startsWith('sample-')) {
           await jobService.updateJob(job.id, {
             visibility_mode: 'shareable',
@@ -604,14 +688,27 @@ export default function ActiveRoutePage() {
             share_expires_at: Timestamp.fromDate(expiresAt)
           });
         }
-        setSharingJob({ ...job, visibility_mode: 'shareable', share_token: shareToken, share_expires_at: Timestamp.fromDate(expiresAt) });
+        await syncCustomerPortal(
+          job.customerId,
+          availableJobs.some((entry) => entry.id === job.id)
+            ? availableJobs.map((entry) => (entry.id === job.id ? updatedJob : entry))
+            : [...availableJobs, updatedJob]
+        );
+        setSharingJob(updatedJob);
       } else {
+        const updatedJob = { ...job, share_expires_at: Timestamp.fromDate(expiresAt) } as Job;
         if (job.id && !job.id.startsWith('sample-')) {
           await jobService.updateJob(job.id, {
             share_expires_at: Timestamp.fromDate(expiresAt)
           });
         }
-        setSharingJob({ ...job, share_expires_at: Timestamp.fromDate(expiresAt) });
+        await syncCustomerPortal(
+          job.customerId,
+          availableJobs.some((entry) => entry.id === job.id)
+            ? availableJobs.map((entry) => (entry.id === job.id ? updatedJob : entry))
+            : [...availableJobs, updatedJob]
+        );
+        setSharingJob(updatedJob);
       }
     } catch (error: any) {
       console.error('Error sharing job:', error);
@@ -1236,7 +1333,7 @@ export default function ActiveRoutePage() {
         <VerifyStopModal
           stop={stopToVerify}
           onClose={() => setStopToVerify(null)}
-          onVerify={(stop, notes, photoUrls) => handleVerifyStop(stop, notes, photoUrls)}
+          onVerify={(stop, notes, photoUrls, fileSizeBytes) => handleVerifyStop(stop, notes, photoUrls, fileSizeBytes)}
         />
       )}
 

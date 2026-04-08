@@ -1,5 +1,6 @@
 import { db, auth } from '../firebase';
-import { collection, addDoc, onSnapshot, query, where, serverTimestamp, updateDoc, doc } from 'firebase/firestore';
+import { collection, addDoc, onSnapshot, query, where, serverTimestamp, updateDoc, doc, getDoc, Timestamp, getDocs, limit } from 'firebase/firestore';
+import { storagePolicyService } from './storagePolicyService';
 
 export enum OperationType {
   CREATE = 'create',
@@ -59,8 +60,10 @@ export interface VerificationRecord {
   ownerId?: string;
   photo_url?: string;
   photo_urls?: string[];
+  file_size_bytes?: number;
   notes: string;
   visibility?: string;
+  expires_at?: any;
   created_at?: any;
 }
 
@@ -105,10 +108,19 @@ export const verificationService = {
     const user = auth.currentUser;
     if (!user) throw new Error('Must be logged in to add verification');
 
+    const businessProfileSnap = await getDoc(doc(db, 'business_profiles', user.uid));
+    const storagePolicy = storagePolicyService.resolvePolicy(
+      businessProfileSnap.exists() ? businessProfileSnap.data() : null
+    );
+    const expiresAt = storagePolicy.retentionDays != null
+      ? Timestamp.fromMillis(Date.now() + storagePolicy.retentionDays * 24 * 60 * 60 * 1000)
+      : null;
+
     const newRecord = {
       ...record,
       ownerId: user.uid,
       visibility: 'shareable', // Default to shareable so the public proof page can read it
+      expires_at: expiresAt,
       created_at: serverTimestamp()
     };
 
@@ -158,5 +170,24 @@ export const verificationService = {
       unsubscribeRecords();
       unsubscribeAuth();
     };
+  },
+
+  jobHasProofPhotos: async (jobId: string) => {
+    const user = auth.currentUser;
+    if (!user) return false;
+
+    const snapshot = await getDocs(
+      query(
+        collection(db, COLLECTION_NAME),
+        where('ownerId', '==', user.uid),
+        where('jobId', '==', jobId),
+        limit(5)
+      )
+    );
+
+    return snapshot.docs.some((entry) => {
+      const data = entry.data() as VerificationRecord;
+      return !!data.photo_url || !!data.photo_urls?.length;
+    });
   }
 };

@@ -1,9 +1,12 @@
 import React, { useState, useEffect } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { Search, Plus, MapPin, Phone, X, Map, History, Briefcase, Calendar, CheckCircle, Clock, Trash2 } from 'lucide-react';
+import { Search, Plus, MapPin, Phone, X, Map, History, CheckCircle, Clock, Copy, Link as LinkIcon, RefreshCcw } from 'lucide-react';
 import { customerService, Customer } from '../services/customerService';
 import { jobService, Job } from '../services/jobService';
-import { Timestamp } from 'firebase/firestore';
+import { quoteService, Quote } from '../services/quoteService';
+import { customerPortalService } from '../services/customerPortalService';
+import { Timestamp, doc, getDoc } from 'firebase/firestore';
+import { auth, db } from '../firebase';
 
 export default function Customers() {
   const location = useLocation();
@@ -24,8 +27,20 @@ export default function Customers() {
   const [notes, setNotes] = useState('');
   const [customerJobs, setCustomerJobs] = useState<Job[]>([]);
   const [allJobs, setAllJobs] = useState<Job[]>([]);
+  const [quotes, setQuotes] = useState<Quote[]>([]);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
+  const [businessPlanName, setBusinessPlanName] = useState('Free');
+  const [portalEnabled, setPortalEnabled] = useState(false);
+  const [portalShowHistory, setPortalShowHistory] = useState(true);
+  const [portalShowPaymentStatus, setPortalShowPaymentStatus] = useState(false);
+  const [portalShowQuotes, setPortalShowQuotes] = useState(true);
+  const [portalToken, setPortalToken] = useState('');
+  const [portalCopied, setPortalCopied] = useState(false);
+  const portalCapabilities = customerPortalService.getCapabilities(businessPlanName);
+  const portalLink = editingCustomer?.id && portalToken
+    ? customerPortalService.buildPortalLink(editingCustomer.id, portalToken)
+    : '';
 
   const openEditModal = (customer: Customer) => {
     setEditingCustomer(customer);
@@ -37,15 +52,35 @@ export default function Customers() {
     setState(customer.state || '');
     setZip(customer.zip || '');
     setNotes(customer.notes || '');
+    setPortalEnabled(!!customer.portal_enabled);
+    setPortalShowHistory(customer.portal_show_history ?? true);
+    setPortalShowPaymentStatus(!!customer.portal_show_payment_status);
+    setPortalShowQuotes(customer.portal_show_quotes ?? true);
+    setPortalToken(customer.portal_token || '');
+    setPortalCopied(false);
   };
 
   useEffect(() => {
     const unsubscribe = customerService.subscribeToCustomers(setCustomers);
     const unsubscribeJobs = jobService.subscribeToJobs(setAllJobs);
+    const unsubscribeQuotes = quoteService.subscribeToQuotes(setQuotes);
+    const unsubscribeAuth = auth.onAuthStateChanged(async (user) => {
+      if (!user) {
+        setBusinessPlanName('Free');
+        return;
+      }
+
+      const profileSnap = await getDoc(doc(db, 'business_profiles', user.uid));
+      if (profileSnap.exists()) {
+        setBusinessPlanName((profileSnap.data().plan_name as string) || 'Free');
+      }
+    });
 
     return () => {
       unsubscribe();
       unsubscribeJobs();
+      unsubscribeQuotes();
+      unsubscribeAuth();
     };
   }, []);
 
@@ -84,13 +119,26 @@ export default function Customers() {
     return () => window.clearTimeout(timeout);
   }, [successMessage]);
 
+  useEffect(() => {
+    if (!portalCopied) return undefined;
+    const timeout = window.setTimeout(() => setPortalCopied(false), 2000);
+    return () => window.clearTimeout(timeout);
+  }, [portalCopied]);
+
+  useEffect(() => {
+    if (!editingCustomer || !portalCapabilities.allowsPortal || !portalEnabled || portalToken) return;
+    setPortalToken(customerPortalService.createPortalToken());
+  }, [editingCustomer, portalCapabilities.allowsPortal, portalEnabled, portalToken]);
+
   const handleAddCustomer = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMessage(null);
     setSuccessMessage(null);
     try {
       if (editingCustomer && editingCustomer.id) {
-        await customerService.updateCustomer(editingCustomer.id, {
+        const nextPortalEnabled = portalCapabilities.allowsPortal ? portalEnabled : false;
+        const nextPortalToken = nextPortalEnabled ? (portalToken || customerPortalService.createPortalToken()) : '';
+        const updates: Partial<Customer> = {
           name,
           phone,
           email,
@@ -99,7 +147,39 @@ export default function Customers() {
           state,
           zip,
           notes,
-        });
+          portal_enabled: nextPortalEnabled,
+          portal_token: nextPortalToken || undefined,
+          portal_plan_name_snapshot: portalCapabilities.planLabel,
+          portal_persistent_allowed: portalCapabilities.allowsPersistentPortal,
+          portal_show_history: nextPortalEnabled ? portalShowHistory : false,
+          portal_show_payment_status: nextPortalEnabled ? portalShowPaymentStatus : false,
+          portal_show_quotes: nextPortalEnabled ? portalShowQuotes : false,
+        };
+
+        await customerService.updateCustomer(editingCustomer.id, updates);
+
+        const updatedCustomer: Customer = {
+          ...editingCustomer,
+          ...updates,
+          ownerId: editingCustomer.ownerId,
+          name,
+          phone,
+          email,
+          street,
+          city,
+          state,
+          zip,
+          notes,
+          portal_token: nextPortalToken || undefined,
+        };
+
+        if (nextPortalEnabled) {
+          setPortalToken(nextPortalToken);
+          await customerPortalService.syncPortalContent(updatedCustomer, allJobs, quotes, portalCapabilities.planLabel);
+        } else {
+          await customerPortalService.disablePortal(editingCustomer.id);
+        }
+
         setEditingCustomer(null);
         setSuccessMessage('Client updated successfully.');
       } else {
@@ -142,6 +222,12 @@ export default function Customers() {
     setState('');
     setZip('');
     setNotes('');
+    setPortalEnabled(false);
+    setPortalShowHistory(true);
+    setPortalShowPaymentStatus(false);
+    setPortalShowQuotes(true);
+    setPortalToken('');
+    setPortalCopied(false);
   };
 
   const filteredCustomers = customers.filter(c => {
@@ -323,6 +409,129 @@ export default function Customers() {
                 <div>
                   <label className="block text-xs font-black text-gray-400 uppercase tracking-widest mb-2 ml-1">Internal Notes</label>
                   <textarea value={notes} onChange={e => setNotes(e.target.value)} rows={2} placeholder="Gate codes, pet info, etc..." className="w-full bg-gray-50 border-gray-100 rounded-2xl py-4 px-5 text-sm font-bold text-gray-900 focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all outline-none" />
+                </div>
+
+                <div className="pt-6 border-t border-gray-50 space-y-4">
+                  <div>
+                    <h4 className="text-[10px] font-black text-blue-600 uppercase tracking-[0.2em] mb-2">Customer Portal</h4>
+                    <p className="text-xs font-bold text-gray-500">
+                      Temporary proof links stay per-job. The customer portal is a separate persistent customer-facing history view.
+                    </p>
+                  </div>
+
+                  {!editingCustomer ? (
+                    <div className="bg-gray-50 rounded-2xl p-4 border border-gray-100">
+                      <p className="text-xs font-bold text-gray-500">Save this client first to enable portal access.</p>
+                    </div>
+                  ) : !portalCapabilities.allowsPortal ? (
+                    <div className="bg-amber-50 rounded-2xl p-4 border border-amber-100">
+                      <p className="text-xs font-bold text-amber-700">
+                        {portalCapabilities.planLabel} uses temporary proof links only. Persistent customer portal access starts on Starter or Pro.
+                      </p>
+                    </div>
+                  ) : (
+                    <div className="space-y-4">
+                      <div className="bg-gray-50 rounded-2xl p-4 border border-gray-100 space-y-4">
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <p className="text-sm font-black text-gray-900">Enable Customer Portal</p>
+                            <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">
+                              Persistent portal access for this customer
+                            </p>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => setPortalEnabled((prev) => !prev)}
+                            className={`w-12 h-6 rounded-full transition-all relative ${portalEnabled ? 'bg-blue-600' : 'bg-gray-200'}`}
+                          >
+                            <div className={`absolute top-1 w-4 h-4 bg-white rounded-full transition-all ${portalEnabled ? 'left-7' : 'left-1'}`} />
+                          </button>
+                        </div>
+
+                        <div className={`${portalEnabled ? '' : 'opacity-50 pointer-events-none'} space-y-3`}>
+                          <div className="flex items-center justify-between">
+                            <div>
+                              <p className="text-sm font-black text-gray-900">Show Job History</p>
+                              <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Completed shareable proof history</p>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => setPortalShowHistory((prev) => !prev)}
+                              className={`w-12 h-6 rounded-full transition-all relative ${portalShowHistory ? 'bg-blue-600' : 'bg-gray-200'}`}
+                            >
+                              <div className={`absolute top-1 w-4 h-4 bg-white rounded-full transition-all ${portalShowHistory ? 'left-7' : 'left-1'}`} />
+                            </button>
+                          </div>
+
+                          <div className="flex items-center justify-between">
+                            <div>
+                              <p className="text-sm font-black text-gray-900">Show Payment Status</p>
+                              <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Paid vs unpaid visibility</p>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => setPortalShowPaymentStatus((prev) => !prev)}
+                              className={`w-12 h-6 rounded-full transition-all relative ${portalShowPaymentStatus ? 'bg-blue-600' : 'bg-gray-200'}`}
+                            >
+                              <div className={`absolute top-1 w-4 h-4 bg-white rounded-full transition-all ${portalShowPaymentStatus ? 'left-7' : 'left-1'}`} />
+                            </button>
+                          </div>
+
+                          <div className="flex items-center justify-between">
+                            <div>
+                              <p className="text-sm font-black text-gray-900">Show Quotes</p>
+                              <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Customer-visible quote snapshots</p>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => setPortalShowQuotes((prev) => !prev)}
+                              className={`w-12 h-6 rounded-full transition-all relative ${portalShowQuotes ? 'bg-blue-600' : 'bg-gray-200'}`}
+                            >
+                              <div className={`absolute top-1 w-4 h-4 bg-white rounded-full transition-all ${portalShowQuotes ? 'left-7' : 'left-1'}`} />
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+
+                      {portalEnabled && portalLink && (
+                        <div className="space-y-3">
+                          <div className="flex items-center justify-between">
+                            <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Portal Link</p>
+                            <button
+                              type="button"
+                              onClick={() => setPortalToken(customerPortalService.createPortalToken())}
+                              className="inline-flex items-center gap-2 text-[10px] font-black uppercase tracking-widest text-blue-600 hover:text-blue-700"
+                            >
+                              <RefreshCcw className="h-3 w-3" />
+                              Regenerate
+                            </button>
+                          </div>
+                          <div className="flex gap-2">
+                            <div className="flex-1 bg-gray-50 border border-gray-100 rounded-2xl py-4 px-5 text-[10px] font-bold text-gray-600 break-all leading-tight">
+                              {portalLink}
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                navigator.clipboard.writeText(portalLink);
+                                setPortalCopied(true);
+                              }}
+                              className={`px-5 rounded-2xl font-black text-xs uppercase tracking-widest transition-all ${
+                                portalCopied ? 'bg-green-600 text-white' : 'bg-gray-900 text-white hover:bg-gray-800'
+                              }`}
+                            >
+                              {portalCopied ? 'Copied' : 'Copy'}
+                            </button>
+                          </div>
+                          <div className="bg-blue-50 rounded-2xl p-4 border border-blue-100">
+                            <p className="text-xs font-bold text-blue-700">
+                              Portal access is persistent on {portalCapabilities.planLabel}. Temporary proof links stay separate and still expire by your storage settings.
+                            </p>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
 
                 {editingCustomer && (

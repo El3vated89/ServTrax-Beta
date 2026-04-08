@@ -7,6 +7,7 @@ export default function Profile() {
   const [name, setName] = useState('');
   const [phone, setPhone] = useState('');
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   useEffect(() => {
     const unsubscribe = userProfileService.subscribeToCurrentUserProfile((nextProfile) => {
@@ -20,12 +21,18 @@ export default function Profile() {
 
   const handleSave = async (event: React.FormEvent) => {
     event.preventDefault();
-    await userProfileService.updateCurrentUserProfile({
-      name: name.trim(),
-      phone: phone.trim(),
-    });
-    setSuccessMessage('Profile saved');
-    window.setTimeout(() => setSuccessMessage(null), 2500);
+    setErrorMessage(null);
+    try {
+      await userProfileService.updateCurrentUserProfile({
+        name: name.trim(),
+        phone: phone.trim(),
+      });
+      setSuccessMessage('Profile saved');
+      window.setTimeout(() => setSuccessMessage(null), 2500);
+    } catch (error) {
+      console.error('Error saving profile:', error);
+      setErrorMessage('Failed to save profile.');
+    }
   };
 
   return (
@@ -36,6 +43,12 @@ export default function Profile() {
           <p className="text-sm font-bold text-gray-400 uppercase tracking-widest">User foundation for permissions and teams</p>
         </div>
       </header>
+
+      {errorMessage && (
+        <div className="rounded-2xl border border-red-100 bg-red-50 px-5 py-4">
+          <p className="text-sm font-bold text-red-700">{errorMessage}</p>
+        </div>
+      )}
 
       <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_360px] gap-6">
         <form onSubmit={handleSave} className="bg-white rounded-[40px] border border-gray-100 shadow-sm p-8 space-y-6">

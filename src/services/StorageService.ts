@@ -1,5 +1,6 @@
 import { db, auth } from '../firebase';
 import { collection, query, getDocs, deleteDoc, doc, Timestamp, orderBy, where, getDoc, updateDoc } from 'firebase/firestore';
+import { storagePolicyService } from './storagePolicyService';
 
 export interface StorageAsset {
   id: string;
@@ -15,6 +16,11 @@ export interface StorageAsset {
   ownerId: string;
 }
 
+const getBusinessProfile = async (userId: string) => {
+  const profileSnap = await getDoc(doc(db, 'business_profiles', userId));
+  return profileSnap.exists() ? profileSnap.data() : null;
+};
+
 const waitForCurrentUser = async () => {
   if (auth.currentUser) return auth.currentUser;
 
@@ -29,24 +35,35 @@ const waitForCurrentUser = async () => {
 export const storageService = {
   getUsageSummary: async () => {
     const user = await waitForCurrentUser();
-    if (!user) return { used_bytes: 0, limit_bytes: 300 * 1024 * 1024, asset_count: 0, plan_name: 'Free Tier', storage_cap: 300 * 1024 * 1024 };
+    const fallbackPolicy = storagePolicyService.resolvePolicy();
+    if (!user) return {
+      used_bytes: 0,
+      limit_bytes: fallbackPolicy.limitBytes,
+      asset_count: 0,
+      plan_name: fallbackPolicy.planName,
+      storage_cap: fallbackPolicy.limitBytes,
+      retention_days: fallbackPolicy.retentionDays,
+    };
 
     const q = query(collection(db, 'verification_records'), where('ownerId', '==', user.uid));
+    const businessProfile = await getBusinessProfile(user.uid);
+    const policy = storagePolicyService.resolvePolicy(businessProfile);
     const assetsSnapshot = await getDocs(q);
     let totalBytes = 0;
     assetsSnapshot.forEach(doc => {
       const data = doc.data();
       const urls = data.photo_urls || (data.photo_url ? [data.photo_url] : []);
-      const size = urls.reduce((sum: number, url: string) => sum + (url.length || 0), 0) * 0.75;
+      const size = data.file_size_bytes || (urls.reduce((sum: number, url: string) => sum + (url.length || 0), 0) * 0.75);
       totalBytes += size;
     });
 
     return {
       used_bytes: totalBytes,
-      limit_bytes: 300 * 1024 * 1024, // 300MB
+      limit_bytes: policy.limitBytes,
       asset_count: assetsSnapshot.size,
-      plan_name: 'Free Tier',
-      storage_cap: 300 * 1024 * 1024
+      plan_name: policy.planName,
+      storage_cap: policy.limitBytes,
+      retention_days: policy.retentionDays,
     };
   },
   getAssets: async () => {
@@ -92,6 +109,7 @@ export const storageService = {
       return {
         id: docSnap.id,
         ...data,
+        file_size_bytes: data.file_size_bytes || 0,
         customer_name,
         jobId,
         customerId,

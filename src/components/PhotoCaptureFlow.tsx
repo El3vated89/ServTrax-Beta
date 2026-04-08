@@ -11,6 +11,7 @@ interface PhotoCaptureFlowProps {
 
 export default function PhotoCaptureFlow({ onClose }: PhotoCaptureFlowProps) {
   const [photoUrl, setPhotoUrl] = useState<string | null>(null);
+  const [photoFileSizeBytes, setPhotoFileSizeBytes] = useState(0);
   const [isCompressing, setIsCompressing] = useState(false);
   const [assignmentType, setAssignmentType] = useState<'job' | 'customer' | null>(null);
   const [jobs, setJobs] = useState<Job[]>([]);
@@ -53,10 +54,10 @@ export default function PhotoCaptureFlow({ onClose }: PhotoCaptureFlowProps) {
     try {
       const compressed = await compressImage(file);
       setPhotoUrl(compressed.dataUrl);
+      setPhotoFileSizeBytes(compressed.size);
     } catch (error) {
       console.error('Error compressing image:', error);
-      alert('Failed to process image.');
-      onClose();
+      setErrorMessage('Failed to process image. Please try another photo.');
     } finally {
       setIsCompressing(false);
     }
@@ -72,6 +73,7 @@ export default function PhotoCaptureFlow({ onClose }: PhotoCaptureFlowProps) {
         jobId: assignmentType === 'job' ? selectedId : undefined,
         customerId: assignmentType === 'customer' ? selectedId : undefined,
         photo_url: photoUrl,
+        file_size_bytes: photoFileSizeBytes,
         notes: notes
       });
       onClose();
@@ -93,6 +95,31 @@ export default function PhotoCaptureFlow({ onClose }: PhotoCaptureFlowProps) {
           className="sr-only" 
           onChange={handlePhotoUpload}
         />
+        {errorMessage && !isCompressing && (
+          <div className="fixed inset-0 bg-gray-900/40 backdrop-blur-sm z-[200] flex justify-center items-center p-4">
+            <div className="bg-white w-full max-w-sm rounded-[32px] p-6 shadow-2xl space-y-5">
+              <p className="text-lg font-black text-gray-900">Photo Error</p>
+              <p className="text-sm font-bold text-red-700">{errorMessage}</p>
+              <div className="flex gap-3">
+                <button
+                  onClick={onClose}
+                  className="flex-1 py-3 bg-gray-100 text-gray-900 rounded-2xl text-xs font-black uppercase tracking-widest hover:bg-gray-200 transition-all"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={() => {
+                    setErrorMessage(null);
+                    fileInputRef.current?.click();
+                  }}
+                  className="flex-1 py-3 bg-blue-600 text-white rounded-2xl text-xs font-black uppercase tracking-widest hover:bg-blue-700 transition-all"
+                >
+                  Try Again
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
         {isCompressing && (
           <div className="fixed inset-0 bg-gray-900/40 backdrop-blur-sm z-[200] flex justify-center items-center">
             <div className="bg-white p-6 rounded-3xl shadow-2xl flex flex-col items-center">

@@ -12,7 +12,7 @@ import { Timestamp } from 'firebase/firestore';
 
 export default function Storage() {
   const [assets, setAssets] = useState<StorageAsset[]>([]);
-  const [summary, setSummary] = useState({ used_bytes: 0, limit_bytes: 0, asset_count: 0, plan_name: '', storage_cap: 0 });
+  const [summary, setSummary] = useState({ used_bytes: 0, limit_bytes: 0, asset_count: 0, plan_name: '', storage_cap: 0, retention_days: null as number | null });
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [searchQuery, setSearchQuery] = useState('');
   const [filterType, setFilterType] = useState<'all' | 'expiring' | 'unassigned' | 'largest'>('all');
@@ -168,8 +168,7 @@ export default function Storage() {
     setErrorMessage(null);
     setSuccessMessage(null);
     try {
-      const days = parseInt(editExpirationDays);
-      const expirationDate = Timestamp.fromMillis(Date.now() + days * 24 * 60 * 60 * 1000);
+      const expirationDate = getBoundedExpirationDate(editExpirationDays);
       
       const idsToUpdate = Array.from(selectedIds);
       await Promise.all(idsToUpdate.map(id => 
@@ -215,8 +214,7 @@ export default function Storage() {
     setErrorMessage(null);
     setSuccessMessage(null);
     try {
-      const days = parseInt(editExpirationDays);
-      const expirationDate = Timestamp.fromMillis(Date.now() + days * 24 * 60 * 60 * 1000);
+      const expirationDate = getBoundedExpirationDate(editExpirationDays);
       await storageService.updateAsset(selectedAsset.id, { expires_at: expirationDate });
       const refreshedAssets = await loadData();
       setIsSettingExpiration(false);
@@ -230,6 +228,10 @@ export default function Storage() {
 
   const handleRemoveExpiration = async () => {
     if (!selectedAsset) return;
+    if (summary.retention_days) {
+      setErrorMessage(`This plan requires automatic expiration after ${summary.retention_days} days.`);
+      return;
+    }
     setErrorMessage(null);
     setSuccessMessage(null);
     try {
@@ -251,6 +253,13 @@ export default function Storage() {
   const formatDate = (timestamp?: Timestamp) => {
     if (!timestamp) return 'N/A';
     return new Date(timestamp.seconds * 1000).toLocaleDateString();
+  };
+
+  const getBoundedExpirationDate = (requestedDays: string) => {
+    const parsedDays = parseInt(requestedDays, 10);
+    const safeDays = Number.isNaN(parsedDays) || parsedDays <= 0 ? 1 : parsedDays;
+    const boundedDays = summary.retention_days ? Math.min(safeDays, summary.retention_days) : safeDays;
+    return Timestamp.fromMillis(Date.now() + boundedDays * 24 * 60 * 60 * 1000);
   };
 
   const percentageUsed = (summary.used_bytes / summary.limit_bytes) * 100;
@@ -283,6 +292,9 @@ export default function Storage() {
             </div>
             <div className="flex flex-col items-end">
               <span className="text-[10px] font-black text-blue-600 uppercase tracking-widest mb-1">{summary.plan_name}</span>
+              <span className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-2">
+                {summary.retention_days ? `${summary.retention_days} Day Retention` : 'No Auto Expiration'}
+              </span>
               <div className="flex items-center gap-2 bg-gray-100 px-3 py-1.5 rounded-full">
                 <HardDrive className="h-4 w-4 text-gray-500" />
                 <span className="text-xs font-black text-gray-600 uppercase tracking-widest">
@@ -574,7 +586,7 @@ export default function Storage() {
                           </p>
                         </div>
                       </div>
-                      {selectedAsset.expires_at && (
+                      {selectedAsset.expires_at && !summary.retention_days && (
                         <button 
                           onClick={handleRemoveExpiration}
                           className="text-[10px] font-black text-orange-600 uppercase tracking-widest hover:underline"

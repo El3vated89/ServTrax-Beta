@@ -15,6 +15,7 @@ export interface Quote {
   billing_frequency: BillingFrequency;
   status: 'draft' | 'sent' | 'approved' | 'rejected';
   notes: string;
+  portal_visible?: boolean;
   created_at?: any;
   approved_at?: any;
 }

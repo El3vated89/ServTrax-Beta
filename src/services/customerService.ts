@@ -20,6 +20,13 @@ export interface Customer {
   created_at?: any;
   off_season_enabled?: boolean;
   off_season_rules?: any[]; // Using any[] to avoid circular dependency or complex imports if SeasonalRule is only in settings
+  portal_enabled?: boolean;
+  portal_token?: string;
+  portal_plan_name_snapshot?: string;
+  portal_persistent_allowed?: boolean;
+  portal_show_history?: boolean;
+  portal_show_payment_status?: boolean;
+  portal_show_quotes?: boolean;
 }
 
 export const customerService = {

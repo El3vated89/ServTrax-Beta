@@ -34,6 +34,7 @@ export interface Job {
   override_enabled?: boolean;
   seasonal_enabled?: boolean;
   seasonal_rules?: any[];
+  portal_visible?: boolean;
 }
 
 export const jobService = {

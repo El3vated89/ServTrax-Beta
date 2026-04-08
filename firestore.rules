@@ -52,7 +52,14 @@ service cloud.firestore {
     function isValidCustomer(data) {
       return data.ownerId is string &&
              data.name is string &&
-             data.status in ['active', 'inactive'];
+             data.status in ['active', 'inactive'] &&
+             (!('portal_enabled' in data) || data.portal_enabled is bool) &&
+             (!('portal_token' in data) || data.portal_token is string) &&
+             (!('portal_plan_name_snapshot' in data) || data.portal_plan_name_snapshot is string) &&
+             (!('portal_persistent_allowed' in data) || data.portal_persistent_allowed is bool) &&
+             (!('portal_show_history' in data) || data.portal_show_history is bool) &&
+             (!('portal_show_payment_status' in data) || data.portal_show_payment_status is bool) &&
+             (!('portal_show_quotes' in data) || data.portal_show_quotes is bool);
     }
 
     function isValidServicePlan(data) {
@@ -91,6 +98,7 @@ service cloud.firestore {
              (!('recurringPlanId' in data) || data.recurringPlanId is string) &&
              (!('service_setup_type' in data) || data.service_setup_type in ['one-time', 'recurring', 'flexible']) &&
              (!('billing_frequency' in data) || data.billing_frequency is string) &&
+             (!('portal_visible' in data) || data.portal_visible is bool) &&
              (!('interval_days' in data) || data.interval_days is number) &&
              (!('override_enabled' in data) || data.override_enabled is bool) &&
              (!('seasonal_enabled' in data) || data.seasonal_enabled is bool) &&
@@ -108,9 +116,49 @@ service cloud.firestore {
              (!('address_snapshot' in data) || data.address_snapshot is string) &&
              (!('phone_snapshot' in data) || data.phone_snapshot is string) &&
              (!('billing_frequency' in data) || data.billing_frequency is string) &&
+             (!('portal_visible' in data) || data.portal_visible is bool) &&
              (!('notes' in data) || data.notes is string) &&
              (!('created_at' in data) || data.created_at is timestamp) &&
              (!('approved_at' in data) || data.approved_at is timestamp || data.approved_at is string || data.approved_at == null);
+    }
+
+    function isValidCustomerPortal(data) {
+      return data.customerId is string &&
+             data.ownerId is string &&
+             data.portal_enabled is bool &&
+             data.portal_token is string &&
+             data.portal_show_history is bool &&
+             data.portal_show_payment_status is bool &&
+             data.portal_show_quotes is bool &&
+             data.portal_plan_name_snapshot is string &&
+             data.customer_name_snapshot is string &&
+             data.address_snapshot is string;
+    }
+
+    function isValidCustomerPortalHistoryItem(data) {
+      return data.customerId is string &&
+             data.ownerId is string &&
+             data.portal_visible is bool &&
+             data.proof_job_id is string &&
+             data.share_token is string &&
+             data.service_snapshot is string &&
+             data.address_snapshot is string &&
+             data.status is string &&
+             data.payment_status is string &&
+             data.price_snapshot is number;
+    }
+
+    function isValidCustomerPortalQuoteItem(data) {
+      return data.customerId is string &&
+             data.ownerId is string &&
+             data.portal_visible is bool &&
+             data.source_type in ['job_quote', 'quote'] &&
+             data.source_id is string &&
+             data.service_snapshot is string &&
+             data.address_snapshot is string &&
+             data.status is string &&
+             data.price_snapshot is number &&
+             (!('billing_frequency' in data) || data.billing_frequency is string);
     }
 
     function isValidVerificationRecord(data) {
@@ -119,8 +167,10 @@ service cloud.firestore {
              (!('visibility' in data) || data.visibility in ['internal_only', 'shareable']) &&
              (!('photo_url' in data) || data.photo_url is string) &&
              (!('photo_urls' in data) || data.photo_urls is list) &&
+             (!('file_size_bytes' in data) || data.file_size_bytes is number) &&
              (!('thumbnail_url' in data) || data.thumbnail_url is string) &&
              (!('notes' in data) || data.notes is string) &&
+             (!('expires_at' in data) || data.expires_at is timestamp || data.expires_at == null) &&
              (!('timestamp' in data) || data.timestamp is timestamp) &&
              (!('gps_location' in data) || data.gps_location is map || data.gps_location == null) &&
              (!('created_at' in data) || data.created_at is timestamp);
@@ -248,6 +298,27 @@ service cloud.firestore {
       allow read: if resource == null || isDocOwner() || isAdmin();
       allow create: if isAuthenticated() && request.resource.data.ownerId == request.auth.uid && isValidCustomer(request.resource.data);
       allow update: if (isDocOwner() || isAdmin()) && ownerIdNotModified() && isValidCustomer(request.resource.data);
+      allow delete: if isDocOwner() || isAdmin();
+    }
+
+    match /customer_portals/{customerId} {
+      allow read: if resource != null && resource.data.portal_enabled == true;
+      allow create: if isAuthenticated() && request.resource.data.ownerId == request.auth.uid && isValidCustomerPortal(request.resource.data);
+      allow update: if (isDocOwner() || isAdmin()) && ownerIdNotModified() && isValidCustomerPortal(request.resource.data);
+      allow delete: if isDocOwner() || isAdmin();
+    }
+
+    match /customer_portal_job_history/{itemId} {
+      allow read: if resource != null && resource.data.portal_visible == true;
+      allow create: if isAuthenticated() && request.resource.data.ownerId == request.auth.uid && isValidCustomerPortalHistoryItem(request.resource.data);
+      allow update: if (isDocOwner() || isAdmin()) && ownerIdNotModified() && isValidCustomerPortalHistoryItem(request.resource.data);
+      allow delete: if isDocOwner() || isAdmin();
+    }
+
+    match /customer_portal_quotes/{itemId} {
+      allow read: if resource != null && resource.data.portal_visible == true;
+      allow create: if isAuthenticated() && request.resource.data.ownerId == request.auth.uid && isValidCustomerPortalQuoteItem(request.resource.data);
+      allow update: if (isDocOwner() || isAdmin()) && ownerIdNotModified() && isValidCustomerPortalQuoteItem(request.resource.data);
       allow delete: if isDocOwner() || isAdmin();
     }
     

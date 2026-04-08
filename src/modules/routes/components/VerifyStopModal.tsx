@@ -7,12 +7,13 @@ import { compressImage } from '../../../utils/imageCompression';
 interface VerifyStopModalProps {
   stop: RouteStop;
   onClose: () => void;
-  onVerify: (stop: RouteStop, notes: string, photoUrls: string[]) => void;
+  onVerify: (stop: RouteStop, notes: string, photoUrls: string[], fileSizeBytes: number) => void;
 }
 
 export default function VerifyStopModal({ stop, onClose, onVerify }: VerifyStopModalProps) {
   const [notes, setNotes] = useState('');
   const [photoUrls, setPhotoUrls] = useState<string[]>([]);
+  const [photoFileSizeBytes, setPhotoFileSizeBytes] = useState(0);
   const [isCompressing, setIsCompressing] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -24,6 +25,7 @@ export default function VerifyStopModal({ stop, onClose, onVerify }: VerifyStopM
     try {
       const compressed = await compressImage(file);
       setPhotoUrls(prev => [...prev, compressed.dataUrl]);
+      setPhotoFileSizeBytes(compressed.size);
     } catch (error) {
       console.error('Error compressing image:', error);
     } finally {
@@ -121,7 +123,10 @@ export default function VerifyStopModal({ stop, onClose, onVerify }: VerifyStopM
                   className="w-full h-full object-cover rounded-2xl border-2 border-blue-100 shadow-sm" 
                 />
                 <button
-                  onClick={() => setPhotoUrls([])}
+                  onClick={() => {
+                    setPhotoUrls([]);
+                    setPhotoFileSizeBytes(0);
+                  }}
                   className="absolute -top-2 -right-2 bg-red-500 text-white p-1.5 rounded-full shadow-lg hover:bg-red-600 transition-all scale-90 group-hover:scale-100"
                 >
                   <X className="h-3 w-3" />
@@ -152,7 +157,7 @@ export default function VerifyStopModal({ stop, onClose, onVerify }: VerifyStopM
             Cancel
           </button>
           <button
-            onClick={() => onVerify(stop, notes, photoUrls)}
+            onClick={() => onVerify(stop, notes, photoUrls, photoFileSizeBytes)}
             className="flex-1 px-4 py-3 text-sm font-bold text-white bg-green-600 rounded-xl hover:bg-green-700 transition-colors flex items-center justify-center gap-2 shadow-lg shadow-green-200"
           >
             <CheckCircle className="h-4 w-4" />

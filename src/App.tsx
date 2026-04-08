@@ -17,6 +17,7 @@ import Equip from './components/Equip';
 import ActiveRoutePage from './modules/routes/ActiveRoutePage';
 import RoutesManagementPage from './modules/routes/RoutesManagementPage';
 import PublicJobProof from './components/PublicJobProof';
+import PublicCustomerPortal from './components/PublicCustomerPortal';
 import Messaging from './components/Messaging';
 import Storage from './components/Storage';
 import Settings from './components/Settings';
@@ -55,6 +56,7 @@ export default function App() {
         <Routes>
           {/* Public Routes */}
           <Route path="/proof/:jobId/:shareToken" element={<PublicJobProof />} />
+          <Route path="/portal/:customerId/:portalToken" element={<PublicCustomerPortal />} />
           
           {/* Auth Routes */}
           {!user ? (
