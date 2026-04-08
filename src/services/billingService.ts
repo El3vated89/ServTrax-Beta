@@ -56,6 +56,16 @@ export interface PaymentEntry {
   created_at?: any;
 }
 
+export interface ManualPaymentInput {
+  customerId: string;
+  customer_name_snapshot: string;
+  amount: number;
+  method: PaymentMethod;
+  note?: string;
+  received_at: any;
+  label?: string;
+}
+
 const BILLING_COLLECTION = 'billing_records';
 const PAYMENT_COLLECTION = 'payment_entries';
 
@@ -243,6 +253,58 @@ export const billingService = {
         ...billingRecord,
         ...updates,
       } as BillingRecord);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.WRITE, PAYMENT_COLLECTION);
+    }
+  },
+
+  recordManualPayment: async (payment: ManualPaymentInput) => {
+    const user = await waitForCurrentUser();
+    if (!user) throw new Error('User not authenticated');
+
+    const amount = Number(payment.amount || 0);
+    if (amount <= 0) {
+      throw new Error('Payment amount must be greater than zero.');
+    }
+
+    const receivedAt = payment.received_at || Timestamp.fromDate(new Date());
+
+    try {
+      const billingRef = await addDoc(collection(db, BILLING_COLLECTION), {
+        ownerId: user.uid,
+        customerId: payment.customerId,
+        customer_name_snapshot: payment.customer_name_snapshot,
+        label: payment.label?.trim() || `Manual Payment - ${payment.customer_name_snapshot}`,
+        billing_type: 'one_time',
+        billing_frequency: 'manual_payment',
+        status: 'paid',
+        source: 'manual',
+        total_amount: amount,
+        amount_paid: amount,
+        balance_due: 0,
+        covered_job_ids: [],
+        covered_service_count: 0,
+        auto_bill_enabled: false,
+        due_date: receivedAt,
+        paid_at: receivedAt,
+        notes: payment.note?.trim() || 'Manual payment recorded before an open billing record existed.',
+        created_at: serverTimestamp(),
+        updated_at: serverTimestamp(),
+      });
+
+      await addDoc(collection(db, PAYMENT_COLLECTION), {
+        ownerId: user.uid,
+        billing_record_id: billingRef.id,
+        customerId: payment.customerId,
+        customer_name_snapshot: payment.customer_name_snapshot,
+        amount,
+        method: payment.method,
+        note: payment.note?.trim() || '',
+        received_at: receivedAt,
+        created_at: serverTimestamp(),
+      });
+
+      return billingRef;
     } catch (error) {
       handleFirestoreError(error, OperationType.WRITE, PAYMENT_COLLECTION);
     }

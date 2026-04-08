@@ -30,6 +30,7 @@ export default function Billing() {
   const [lastAutoSyncKey, setLastAutoSyncKey] = useState('');
   const [hasBillingLoaded, setHasBillingLoaded] = useState(false);
   const [pendingQuickPayment, setPendingQuickPayment] = useState(false);
+  const [isManualPayment, setIsManualPayment] = useState(false);
 
   const [customerId, setCustomerId] = useState('');
   const [billingType, setBillingType] = useState<'one_time' | 'auto_bill'>('one_time');
@@ -46,6 +47,8 @@ export default function Billing() {
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('card');
   const [paymentNote, setPaymentNote] = useState('');
   const [paymentDate, setPaymentDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [manualPaymentCustomerId, setManualPaymentCustomerId] = useState('');
+  const [manualPaymentLabel, setManualPaymentLabel] = useState('');
 
   useEffect(() => {
     const unsubscribeBilling = billingService.subscribeToBillingRecords((records) => {
@@ -105,10 +108,12 @@ export default function Billing() {
 
     const firstOpenBilling = billingRecords.find((record) => ['due', 'partial', 'overdue'].includes(record.status));
     if (firstOpenBilling) {
+      setIsManualPayment(false);
       setPaymentTarget(firstOpenBilling);
       setPaymentAmount(String(firstOpenBilling.balance_due || firstOpenBilling.total_amount || 0));
     } else {
-      setErrorMessage('No open billing records are available for a quick payment entry.');
+      setPaymentTarget(null);
+      setIsManualPayment(true);
     }
     setPendingQuickPayment(false);
   }, [pendingQuickPayment, hasBillingLoaded, billingRecords]);
@@ -175,6 +180,17 @@ export default function Billing() {
     setSelectedJobIds([]);
   };
 
+  const resetPaymentForm = () => {
+    setPaymentTarget(null);
+    setIsManualPayment(false);
+    setPaymentAmount('');
+    setPaymentMethod('card');
+    setPaymentNote('');
+    setPaymentDate(new Date().toISOString().slice(0, 10));
+    setManualPaymentCustomerId('');
+    setManualPaymentLabel('');
+  };
+
   const handleCreateBilling = async (event: React.FormEvent) => {
     event.preventDefault();
     setErrorMessage(null);
@@ -222,7 +238,6 @@ export default function Billing() {
 
   const handleRecordPayment = async (event: React.FormEvent) => {
     event.preventDefault();
-    if (!paymentTarget?.id) return;
 
     const amount = Number(paymentAmount || 0);
     if (amount <= 0) {
@@ -231,24 +246,40 @@ export default function Billing() {
     }
 
     try {
-      await billingService.addPaymentEntry(
-        {
-          billing_record_id: paymentTarget.id,
-          customerId: paymentTarget.customerId,
-          customer_name_snapshot: paymentTarget.customer_name_snapshot,
+      if (isManualPayment) {
+        const customer = customers.find((entry) => entry.id === manualPaymentCustomerId);
+        if (!customer?.id) {
+          setErrorMessage('Choose a customer before saving a manual payment.');
+          return;
+        }
+
+        await billingService.recordManualPayment({
+          customerId: customer.id,
+          customer_name_snapshot: customer.name,
           amount,
           method: paymentMethod,
           note: paymentNote.trim(),
           received_at: Timestamp.fromDate(new Date(paymentDate)),
-        },
-        paymentTarget
-      );
+          label: manualPaymentLabel.trim(),
+        });
+      } else {
+        if (!paymentTarget?.id) return;
 
-      setPaymentTarget(null);
-      setPaymentAmount('');
-      setPaymentMethod('card');
-      setPaymentNote('');
-      setPaymentDate(new Date().toISOString().slice(0, 10));
+        await billingService.addPaymentEntry(
+          {
+            billing_record_id: paymentTarget.id,
+            customerId: paymentTarget.customerId,
+            customer_name_snapshot: paymentTarget.customer_name_snapshot,
+            amount,
+            method: paymentMethod,
+            note: paymentNote.trim(),
+            received_at: Timestamp.fromDate(new Date(paymentDate)),
+          },
+          paymentTarget
+        );
+      }
+
+      resetPaymentForm();
       setSuccessMessage('Payment recorded');
     } catch (error) {
       console.error('Error recording payment:', error);
@@ -316,6 +347,17 @@ export default function Billing() {
               Payments stay separate from job completion and can cover multiple service visits
             </p>
           </div>
+          <button
+            onClick={() => {
+              setErrorMessage(null);
+              setIsManualPayment(true);
+              setPaymentTarget(null);
+            }}
+            className="px-4 py-3 rounded-2xl bg-gray-100 text-gray-700 text-xs font-black uppercase tracking-widest hover:bg-gray-200 transition-all flex items-center gap-2"
+          >
+            <CreditCard className="h-4 w-4" />
+            Manual Payment
+          </button>
         </div>
 
         <div className="space-y-4">
@@ -367,6 +409,7 @@ export default function Billing() {
                     {record.status !== 'paid' && (
                       <button
                         onClick={() => {
+                          setIsManualPayment(false);
                           setPaymentTarget(record);
                           setPaymentAmount(String(record.balance_due || record.total_amount || 0));
                         }}
@@ -585,26 +628,65 @@ export default function Billing() {
         </div>
       )}
 
-      {paymentTarget && (
+      {(paymentTarget || isManualPayment) && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-gray-900/50 p-4">
           <div className="bg-white rounded-[32px] w-full max-w-xl shadow-2xl">
             <div className="flex items-center justify-between px-8 py-6 border-b border-gray-100">
               <div>
                 <h3 className="text-xl font-black text-gray-900">Record Payment</h3>
-                <p className="text-xs font-bold text-gray-400 uppercase tracking-widest mt-2">{paymentTarget.customer_name_snapshot}</p>
+                <p className="text-xs font-bold text-gray-400 uppercase tracking-widest mt-2">
+                  {isManualPayment ? 'Manual payment entry' : paymentTarget?.customer_name_snapshot}
+                </p>
               </div>
-              <button onClick={() => setPaymentTarget(null)} className="p-2 hover:bg-gray-100 rounded-xl transition-colors">
+              <button onClick={resetPaymentForm} className="p-2 hover:bg-gray-100 rounded-xl transition-colors">
                 <X className="h-5 w-5 text-gray-500" />
               </button>
             </div>
 
             <form onSubmit={handleRecordPayment} className="p-8 space-y-6">
-              <div className="rounded-3xl bg-gray-50 border border-gray-100 px-5 py-4">
-                <p className="text-[10px] font-black uppercase tracking-widest text-gray-400">Balance Due</p>
-                <p className="text-lg font-black text-gray-900 mt-2">{formatCurrency(paymentTarget.balance_due || 0)}</p>
-              </div>
+              {isManualPayment ? (
+                <div className="rounded-3xl bg-blue-50 border border-blue-100 px-5 py-4">
+                  <p className="text-[10px] font-black uppercase tracking-widest text-blue-600">Manual Payment</p>
+                  <p className="text-sm font-black text-gray-900 mt-2">
+                    Record a payment even when there is no open billing record yet. ServTrax will track it inside Billing.
+                  </p>
+                </div>
+              ) : (
+                <div className="rounded-3xl bg-gray-50 border border-gray-100 px-5 py-4">
+                  <p className="text-[10px] font-black uppercase tracking-widest text-gray-400">Balance Due</p>
+                  <p className="text-lg font-black text-gray-900 mt-2">{formatCurrency(paymentTarget?.balance_due || 0)}</p>
+                </div>
+              )}
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {isManualPayment && (
+                  <>
+                    <label className="block md:col-span-2">
+                      <span className="block text-[10px] font-black uppercase tracking-widest text-gray-400 mb-2">Customer</span>
+                      <select
+                        required
+                        value={manualPaymentCustomerId}
+                        onChange={(event) => setManualPaymentCustomerId(event.target.value)}
+                        className="w-full px-5 py-4 bg-gray-50 rounded-2xl border-none text-sm font-bold text-gray-900 focus:ring-2 focus:ring-blue-500 outline-none"
+                      >
+                        <option value="">Choose customer</option>
+                        {customers.map((customer) => (
+                          <option key={customer.id} value={customer.id}>{customer.name}</option>
+                        ))}
+                      </select>
+                    </label>
+                    <label className="block md:col-span-2">
+                      <span className="block text-[10px] font-black uppercase tracking-widest text-gray-400 mb-2">Label</span>
+                      <input
+                        type="text"
+                        value={manualPaymentLabel}
+                        onChange={(event) => setManualPaymentLabel(event.target.value)}
+                        className="w-full px-5 py-4 bg-gray-50 rounded-2xl border-none text-sm font-bold text-gray-900 focus:ring-2 focus:ring-blue-500 outline-none"
+                        placeholder="Early payment, prepayment, deposit..."
+                      />
+                    </label>
+                  </>
+                )}
                 <label className="block">
                   <span className="block text-[10px] font-black uppercase tracking-widest text-gray-400 mb-2">Amount</span>
                   <input
@@ -654,7 +736,7 @@ export default function Billing() {
               <div className="flex justify-end gap-3">
                 <button
                   type="button"
-                  onClick={() => setPaymentTarget(null)}
+                  onClick={resetPaymentForm}
                   className="px-5 py-3 rounded-2xl bg-gray-100 text-gray-600 text-xs font-black uppercase tracking-widest hover:bg-gray-200 transition-all"
                 >
                   Cancel
