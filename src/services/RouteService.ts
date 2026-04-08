@@ -322,6 +322,9 @@ export const routeService = {
   },
 
   ensureRouteForDate: async (date: Date, baseCamp: { label: string; address: string; lat: number; lng: number }) => {
+    const user = await waitForCurrentUser();
+    if (!user) return null;
+
     const existingRoute = await routeService.getRouteByDate(date);
     if (existingRoute) return existingRoute;
 
@@ -343,8 +346,8 @@ export const routeService = {
 
     return {
       id: newRouteRef.id,
-      ownerId: auth.currentUser?.uid || '',
-      created_by: auth.currentUser?.uid || '',
+      ownerId: user.uid,
+      created_by: user.uid,
       created_by_name: getActorNameSnapshot(),
       created_at: Timestamp.now(),
       updated_at: Timestamp.now(),
@@ -359,6 +362,9 @@ export const routeService = {
     runIndex: number = 1,
     runTotal: number = 1
   ) => {
+    const user = await waitForCurrentUser();
+    if (!user) return null;
+
     if (!template.id) return null;
 
     const existingRoute = await routeService.getRouteByTemplateAndDate(template.id, date, runIndex);
@@ -396,8 +402,8 @@ export const routeService = {
 
     return {
       id: newRouteRef.id,
-      ownerId: auth.currentUser?.uid || '',
-      created_by: auth.currentUser?.uid || '',
+      ownerId: user.uid,
+      created_by: user.uid,
       created_by_name: getActorNameSnapshot(),
       created_at: Timestamp.now(),
       updated_at: Timestamp.now(),
@@ -406,6 +412,9 @@ export const routeService = {
   },
 
   batchUpdateStopOrders: async (stops: { id: string, stop_order: number, manual_order: number }[]) => {
+    const user = await waitForCurrentUser();
+    if (!user) throw new Error('User not authenticated');
+
     // In a real app we might use a writeBatch, but for MVP we can do individual updates or a simple loop
     // Firestore writeBatch is better for atomicity
     try {

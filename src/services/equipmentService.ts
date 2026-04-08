@@ -1,5 +1,7 @@
 import { collection, addDoc, updateDoc, deleteDoc, doc, query, where, serverTimestamp, onSnapshot } from 'firebase/firestore';
 import { db, auth } from '../firebase';
+import { waitForCurrentUser } from './authSessionService';
+import { handleFirestoreError, OperationType } from './verificationService';
 
 export interface Equipment {
   id?: string;
@@ -49,23 +51,39 @@ export const equipmentService = {
   },
 
   addEquipment: async (equipmentData: Omit<Equipment, 'ownerId' | 'created_at'>) => {
-    const user = auth.currentUser;
+    const user = await waitForCurrentUser();
     if (!user) throw new Error('User not authenticated');
 
-    return addDoc(collection(db, 'equipment'), {
-      ...equipmentData,
-      ownerId: user.uid,
-      created_at: serverTimestamp()
-    });
+    try {
+      return await addDoc(collection(db, 'equipment'), {
+        ...equipmentData,
+        ownerId: user.uid,
+        created_at: serverTimestamp()
+      });
+    } catch (error) {
+      handleFirestoreError(error, OperationType.WRITE, 'equipment');
+    }
   },
 
   updateEquipment: async (id: string, data: Partial<Equipment>) => {
+    const user = await waitForCurrentUser();
+    if (!user) throw new Error('User not authenticated');
     const docRef = doc(db, 'equipment', id);
-    return updateDoc(docRef, data);
+    try {
+      return await updateDoc(docRef, data);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, `equipment/${id}`);
+    }
   },
 
   deleteEquipment: async (id: string) => {
+    const user = await waitForCurrentUser();
+    if (!user) throw new Error('User not authenticated');
     const docRef = doc(db, 'equipment', id);
-    return deleteDoc(docRef);
+    try {
+      return await deleteDoc(docRef);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.DELETE, `equipment/${id}`);
+    }
   }
 };

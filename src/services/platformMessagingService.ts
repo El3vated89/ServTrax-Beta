@@ -1,6 +1,7 @@
 import { doc, getDoc, onSnapshot, serverTimestamp, setDoc, updateDoc } from 'firebase/firestore';
 import { auth, db } from '../firebase';
 import { handleFirestoreError, OperationType } from './verificationService';
+import { waitForCurrentUser } from './authSessionService';
 
 export interface PlatformMessagingConfig {
   admin_email_lock: string;
@@ -67,7 +68,7 @@ export const platformMessagingService = {
   },
 
   ensureConfig: async () => {
-    const user = auth.currentUser;
+    const user = await waitForCurrentUser();
     if (!user || user.email !== ADMIN_EMAIL) return;
 
     const docRef = doc(db, 'platform_settings', DOC_ID);
@@ -89,7 +90,7 @@ export const platformMessagingService = {
   },
 
   saveConfig: async (updates: Partial<PlatformMessagingConfig>) => {
-    const user = auth.currentUser;
+    const user = await waitForCurrentUser();
     if (!user || user.email !== ADMIN_EMAIL) {
       throw new Error('Only the platform admin can update messaging providers.');
     }

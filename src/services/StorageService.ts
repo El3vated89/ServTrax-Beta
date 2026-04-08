@@ -1,6 +1,7 @@
 import { db, auth } from '../firebase';
 import { collection, query, getDocs, deleteDoc, doc, Timestamp, orderBy, where, getDoc, updateDoc } from 'firebase/firestore';
 import { storagePolicyService } from './storagePolicyService';
+import { handleFirestoreError, OperationType } from './verificationService';
 
 export interface StorageAsset {
   id: string;
@@ -122,12 +123,33 @@ export const storageService = {
     return assets.sort((a, b) => b.uploaded_at.seconds - a.uploaded_at.seconds);
   },
   updateAsset: async (id: string, data: Partial<StorageAsset>) => {
-    await updateDoc(doc(db, 'verification_records', id), data);
+    const user = await waitForCurrentUser();
+    if (!user) throw new Error('User not authenticated');
+
+    try {
+      await updateDoc(doc(db, 'verification_records', id), data);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, `verification_records/${id}`);
+    }
   },
   deleteAsset: async (id: string) => {
-    await deleteDoc(doc(db, 'verification_records', id));
+    const user = await waitForCurrentUser();
+    if (!user) throw new Error('User not authenticated');
+
+    try {
+      await deleteDoc(doc(db, 'verification_records', id));
+    } catch (error) {
+      handleFirestoreError(error, OperationType.DELETE, `verification_records/${id}`);
+    }
   },
   bulkDeleteAssets: async (ids: string[]) => {
-    await Promise.all(ids.map(id => deleteDoc(doc(db, 'verification_records', id))));
+    const user = await waitForCurrentUser();
+    if (!user) throw new Error('User not authenticated');
+
+    try {
+      await Promise.all(ids.map(id => deleteDoc(doc(db, 'verification_records', id))));
+    } catch (error) {
+      handleFirestoreError(error, OperationType.DELETE, 'verification_records_bulk');
+    }
   }
 };

@@ -85,6 +85,9 @@ export const supplyService = {
   },
 
   updateSupply: async (id: string, updates: Partial<SupplyRecord>) => {
+    const user = await waitForCurrentUser();
+    if (!user) throw new Error('User not authenticated');
+
     try {
       await updateDoc(doc(db, COLLECTION_NAME, id), {
         ...updates,

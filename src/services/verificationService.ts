@@ -2,6 +2,7 @@ import { db, auth } from '../firebase';
 import { collection, addDoc, onSnapshot, query, where, serverTimestamp, updateDoc, doc, getDoc, Timestamp, getDocs, limit } from 'firebase/firestore';
 import { waitForCurrentUser } from './authSessionService';
 import { storagePolicyService } from './storagePolicyService';
+import { mediaUploadService } from './mediaUploadService';
 
 export enum OperationType {
   CREATE = 'create',
@@ -70,6 +71,41 @@ export interface VerificationRecord {
 
 const COLLECTION_NAME = 'verification_records';
 
+const resolveVerificationFolder = (record: Partial<VerificationRecord>) => {
+  if (record.jobId) return `verification_records/jobs/${record.jobId}`;
+  if (record.customerId) return `verification_records/customers/${record.customerId}`;
+  return 'verification_records/unassigned';
+};
+
+const normalizeVerificationPhotos = async (userId: string, record: Partial<VerificationRecord>) => {
+  const nextRecord: Partial<VerificationRecord> = { ...record };
+  const folder = resolveVerificationFolder(record);
+
+  if (Array.isArray(record.photo_urls) && record.photo_urls.length > 0) {
+    const uploads = await mediaUploadService.uploadImageDataUrls({
+      ownerId: userId,
+      folder,
+      dataUrls: record.photo_urls,
+      fileNamePrefix: 'proof',
+    });
+    nextRecord.photo_urls = uploads.map((entry) => entry.downloadUrl);
+
+    if (!nextRecord.photo_url && nextRecord.photo_urls.length === 1) {
+      nextRecord.photo_url = nextRecord.photo_urls[0];
+    }
+  } else if (record.photo_url) {
+    const upload = await mediaUploadService.uploadImageDataUrl({
+      ownerId: userId,
+      folder,
+      dataUrl: record.photo_url,
+      fileNamePrefix: 'proof',
+    });
+    nextRecord.photo_url = upload.downloadUrl;
+  }
+
+  return nextRecord;
+};
+
 export const verificationService = {
   subscribeToJobVerifications: (jobId: string, callback: (records: VerificationRecord[]) => void) => {
     let unsubscribeRecords = () => {};
@@ -117,8 +153,10 @@ export const verificationService = {
       ? Timestamp.fromMillis(Date.now() + storagePolicy.retentionDays * 24 * 60 * 60 * 1000)
       : null;
 
+    const normalizedRecord = await normalizeVerificationPhotos(user.uid, record);
+
     const newRecord = {
-      ...record,
+      ...normalizedRecord,
       ownerId: user.uid,
       visibility: 'shareable', // Default to shareable so the public proof page can read it
       expires_at: expiresAt,
@@ -136,7 +174,8 @@ export const verificationService = {
     const user = await waitForCurrentUser();
     if (!user) throw new Error('Must be logged in to update verification');
     try {
-      await updateDoc(doc(db, COLLECTION_NAME, id), data);
+      const normalizedData = await normalizeVerificationPhotos(user.uid, data);
+      await updateDoc(doc(db, COLLECTION_NAME, id), normalizedData);
     } catch (error) {
       handleFirestoreError(error, OperationType.WRITE, COLLECTION_NAME);
     }

@@ -1,5 +1,6 @@
 import { collection, doc, getDocs, updateDoc } from 'firebase/firestore';
 import { db } from '../firebase';
+import { waitForCurrentUser } from './authSessionService';
 import { handleFirestoreError, OperationType } from './verificationService';
 import { UserProfile } from './userProfileService';
 import { planConfigService, SubscriptionStatus } from './planConfigService';
@@ -329,6 +330,9 @@ export const adminService = {
       storage_add_on_quantity: number;
     }
   ) => {
+    const user = await waitForCurrentUser();
+    if (!user) throw new Error('User not authenticated');
+
     try {
       await updateDoc(doc(db, 'business_profiles', ownerId), updates);
     } catch (error) {

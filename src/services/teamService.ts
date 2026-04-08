@@ -12,6 +12,7 @@ import {
 import { auth, db } from '../firebase';
 import { handleFirestoreError, OperationType } from './verificationService';
 import { planConfigService } from './planConfigService';
+import { waitForCurrentUser } from './authSessionService';
 
 export type TeamMemberRole = 'crew_member' | 'crew_lead';
 export type TeamAccountStatus = 'pending' | 'active' | 'inactive';
@@ -112,7 +113,7 @@ export const teamService = {
   },
 
   addTeamMember: async (member: Omit<TeamMember, 'ownerId' | 'created_at' | 'updated_at'>) => {
-    const user = auth.currentUser;
+    const user = await waitForCurrentUser();
     if (!user) throw new Error('User not authenticated');
 
     try {
@@ -130,6 +131,9 @@ export const teamService = {
   },
 
   updateTeamMember: async (id: string, updates: Partial<TeamMember>) => {
+    const user = await waitForCurrentUser();
+    if (!user) throw new Error('User not authenticated');
+
     try {
       await updateDoc(doc(db, COLLECTION_NAME, id), {
         ...updates,

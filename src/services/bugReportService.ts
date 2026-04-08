@@ -12,6 +12,7 @@ import {
 import { auth, db } from '../firebase';
 import { waitForCurrentUser } from './authSessionService';
 import { handleFirestoreError, OperationType } from './verificationService';
+import { mediaUploadService } from './mediaUploadService';
 
 export type BugReportCategory =
   | 'ui_layout'
@@ -104,6 +105,16 @@ export const bugReportService = {
     if (!user) throw new Error('User not authenticated');
 
     try {
+      const screenshotUpload = input.screenshot_data_url
+        ? await mediaUploadService.uploadImageDataUrl({
+            ownerId: user.uid,
+            folder: 'bug_reports',
+            dataUrl: input.screenshot_data_url,
+            contentType: input.screenshot_content_type,
+            fileNamePrefix: 'report',
+          })
+        : null;
+
       return await addDoc(collection(db, COLLECTION_NAME), {
         ownerId: user.uid,
         reporter_uid: user.uid,
@@ -114,8 +125,8 @@ export const bugReportService = {
         status: 'open',
         page_path: input.page_path,
         current_url: input.current_url,
-        screenshot_data_url: input.screenshot_data_url || '',
-        screenshot_content_type: input.screenshot_content_type || '',
+        screenshot_data_url: screenshotUpload?.downloadUrl || '',
+        screenshot_content_type: screenshotUpload?.contentType || input.screenshot_content_type || '',
         browser_info: typeof navigator !== 'undefined' ? navigator.userAgent : '',
         created_at: serverTimestamp(),
         updated_at: serverTimestamp(),
@@ -164,6 +175,9 @@ export const bugReportService = {
   },
 
   updateBugReportStatus: async (reportId: string, status: BugReportStatus) => {
+    const user = await waitForCurrentUser();
+    if (!user) throw new Error('User not authenticated');
+
     try {
       await updateDoc(doc(db, COLLECTION_NAME, reportId), {
         status,

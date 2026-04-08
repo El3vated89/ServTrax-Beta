@@ -1,6 +1,7 @@
 import { doc, getDoc, onSnapshot, serverTimestamp, setDoc } from 'firebase/firestore';
 import { auth, db } from '../firebase';
 import { handleFirestoreError, OperationType } from './verificationService';
+import { waitForCurrentUser } from './authSessionService';
 
 export type PlanKey = 'free' | 'starter_lite' | 'starter' | 'pro';
 export type SubscriptionStatus = 'trialing' | 'active' | 'past_due' | 'paused' | 'canceled';
@@ -270,8 +271,6 @@ const normalizeFramework = (framework?: Partial<BillingFramework> | null): Billi
 
 const getDocRef = () => doc(db, COLLECTION_NAME, DOC_ID);
 
-const isPlatformAdmin = () => auth.currentUser?.email === ADMIN_EMAIL;
-
 export const planConfigService = {
   normalizePlanKey,
 
@@ -288,7 +287,7 @@ export const planConfigService = {
   }),
 
   hydrateFramework: async () => {
-    const user = auth.currentUser;
+    const user = await waitForCurrentUser();
 
     if (!user) {
       cachedFramework = DEFAULT_FRAMEWORK;
@@ -343,7 +342,8 @@ export const planConfigService = {
   },
 
   ensureFramework: async () => {
-    if (!isPlatformAdmin()) return;
+    const user = await waitForCurrentUser();
+    if (!user || user.email !== ADMIN_EMAIL) return;
 
     try {
       const snapshot = await getDoc(getDocRef());
@@ -361,7 +361,8 @@ export const planConfigService = {
   },
 
   saveFramework: async (framework: BillingFramework) => {
-    if (!isPlatformAdmin()) {
+    const user = await waitForCurrentUser();
+    if (!user || user.email !== ADMIN_EMAIL) {
       throw new Error('Only the platform admin can update plan settings.');
     }
 

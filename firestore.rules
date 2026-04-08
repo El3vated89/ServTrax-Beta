@@ -274,7 +274,8 @@ service cloud.firestore {
              (!('winter_mode' in data) || data.winter_mode is map) &&
              (!('grace_ranges' in data) || data.grace_ranges is map) &&
              (!('seasonal_enabled' in data) || data.seasonal_enabled is bool) &&
-             (!('seasonal_defaults' in data) || data.seasonal_defaults is map);
+             (!('seasonal_defaults' in data) || data.seasonal_defaults is map) &&
+             (!('storage_settings' in data) || data.storage_settings is map);
     }
 
     function isValidPlatformSettings(data) {

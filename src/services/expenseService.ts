@@ -97,6 +97,9 @@ export const expenseService = {
   },
 
   updateExpense: async (id: string, updates: Partial<ExpenseRecord>) => {
+    const user = await waitForCurrentUser();
+    if (!user) throw new Error('User not authenticated');
+
     try {
       await updateDoc(doc(db, COLLECTION_NAME, id), {
         ...updates,
