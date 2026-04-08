@@ -301,11 +301,18 @@ export default function Customers() {
                     <div className="w-12 h-12 rounded-2xl bg-blue-50 flex items-center justify-center font-black text-lg text-blue-600">
                       {customer.name.charAt(0)}
                     </div>
-                    <div>
+                    <div className="space-y-2">
                       <h3 className="text-lg font-black text-gray-900 leading-tight">{customer.name}</h3>
-                      <span className={`text-[10px] font-black px-2 py-0.5 rounded-full uppercase tracking-widest ${customer.status === 'active' ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-600'}`}>
-                        {customer.status}
-                      </span>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className={`text-[10px] font-black px-2 py-0.5 rounded-full uppercase tracking-widest ${customer.status === 'active' ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-600'}`}>
+                          {customer.status}
+                        </span>
+                        <span className={`text-[10px] font-black px-2 py-0.5 rounded-full uppercase tracking-widest ${
+                          customer.portal_enabled ? 'bg-blue-100 text-blue-700' : 'bg-gray-100 text-gray-500'
+                        }`}>
+                          Portal {customer.portal_enabled ? 'On' : 'Off'}
+                        </span>
+                      </div>
                     </div>
                   </div>
                   <button 
@@ -431,6 +438,25 @@ export default function Customers() {
                     </div>
                   ) : (
                     <div className="space-y-4">
+                      <div className="grid grid-cols-2 gap-3">
+                        <div className="bg-gray-50 rounded-2xl p-4 border border-gray-100">
+                          <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Access Mode</p>
+                          <p className="text-sm font-black text-gray-900 mt-2">
+                            {portalEnabled ? 'Persistent Portal' : 'Temporary Links Only'}
+                          </p>
+                          <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mt-2">
+                            Per customer
+                          </p>
+                        </div>
+                        <div className="bg-gray-50 rounded-2xl p-4 border border-gray-100">
+                          <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Portal Plan</p>
+                          <p className="text-sm font-black text-gray-900 mt-2">{portalCapabilities.planLabel}</p>
+                          <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mt-2">
+                            Temporary proof links still separate
+                          </p>
+                        </div>
+                      </div>
+
                       <div className="bg-gray-50 rounded-2xl p-4 border border-gray-100 space-y-4">
                         <div className="flex items-center justify-between">
                           <div>
@@ -449,6 +475,13 @@ export default function Customers() {
                         </div>
 
                         <div className={`${portalEnabled ? '' : 'opacity-50 pointer-events-none'} space-y-3`}>
+                          <div className="bg-white rounded-2xl p-4 border border-gray-100">
+                            <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Portal Customization</p>
+                            <p className="text-xs font-bold text-gray-500 mt-2">
+                              Control what this customer can see in the portal. Internal notes and internal-only proof never appear here.
+                            </p>
+                          </div>
+
                           <div className="flex items-center justify-between">
                             <div>
                               <p className="text-sm font-black text-gray-900">Show Job History</p>
@@ -523,6 +556,15 @@ export default function Customers() {
                               {portalCopied ? 'Copied' : 'Copy'}
                             </button>
                           </div>
+                          <a
+                            href={portalLink}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="w-full inline-flex items-center justify-center gap-2 py-4 bg-gray-50 text-gray-700 rounded-2xl text-xs font-black uppercase tracking-widest hover:bg-blue-50 hover:text-blue-600 transition-all border border-gray-100"
+                          >
+                            <LinkIcon className="h-4 w-4" />
+                            Open Portal
+                          </a>
                           <div className="bg-blue-50 rounded-2xl p-4 border border-blue-100">
                             <p className="text-xs font-bold text-blue-700">
                               Portal access is persistent on {portalCapabilities.planLabel}. Temporary proof links stay separate and still expire by your storage settings.
