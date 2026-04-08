@@ -148,6 +148,26 @@ export const routeService = {
     });
   },
 
+  subscribeToAllRouteStops: (callback: (stops: RouteStop[]) => void) => {
+    const user = auth.currentUser;
+    if (!user) return () => {};
+
+    const q = query(
+      collection(db, 'route_stops'),
+      where('ownerId', '==', user.uid)
+    );
+
+    return onSnapshot(q, (snapshot) => {
+      const stops = snapshot.docs.map((entry) => ({
+        id: entry.id,
+        ...entry.data()
+      })) as RouteStop[];
+      callback(stops);
+    }, (error) => {
+      handleFirestoreError(error, OperationType.GET, 'route_stops');
+    });
+  },
+
   getRouteStops: async (routeId: string) => {
     const q = query(
       collection(db, 'route_stops'),

@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom';
 import { AlertTriangle, Bell, ChevronRight, Clock, HardDrive, Route as RouteIcon } from 'lucide-react';
 import { jobService, Job } from '../services/jobService';
 import { routeService } from '../services/RouteService';
-import { Route } from '../modules/routes/types';
+import { Route, RouteStop } from '../modules/routes/types';
 import { storageService } from '../services/StorageService';
 import { alertService } from '../services/alertService';
 import { quoteService, Quote } from '../services/quoteService';
@@ -11,12 +11,14 @@ import { quoteService, Quote } from '../services/quoteService';
 export default function Alerts() {
   const [jobs, setJobs] = useState<Job[]>([]);
   const [routes, setRoutes] = useState<Route[]>([]);
+  const [routeStops, setRouteStops] = useState<RouteStop[]>([]);
   const [quotes, setQuotes] = useState<Quote[]>([]);
   const [storageSummary, setStorageSummary] = useState({ used_bytes: 0, limit_bytes: 0 });
 
   useEffect(() => {
     const unsubscribeJobs = jobService.subscribeToJobs(setJobs);
     const unsubscribeRoutes = routeService.subscribeToRoutes(setRoutes);
+    const unsubscribeRouteStops = routeService.subscribeToAllRouteStops(setRouteStops);
     const unsubscribeQuotes = quoteService.subscribeToQuotes(setQuotes);
 
     const loadStorageSummary = async () => {
@@ -29,13 +31,14 @@ export default function Alerts() {
     return () => {
       unsubscribeJobs();
       unsubscribeRoutes();
+      unsubscribeRouteStops();
       unsubscribeQuotes();
     };
   }, []);
 
   const alerts = useMemo(
-    () => alertService.buildOperationalAlerts(jobs, routes, quotes, storageSummary),
-    [jobs, quotes, routes, storageSummary]
+    () => alertService.buildOperationalAlerts(jobs, routes, routeStops, quotes, storageSummary),
+    [jobs, quotes, routeStops, routes, storageSummary]
   );
 
   return (

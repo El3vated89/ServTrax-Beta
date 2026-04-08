@@ -6,7 +6,7 @@ import { signOut } from 'firebase/auth';
 import PhotoCaptureFlow from './PhotoCaptureFlow';
 import { jobService, Job } from '../services/jobService';
 import { routeService } from '../services/RouteService';
-import { Route } from '../modules/routes/types';
+import { Route, RouteStop } from '../modules/routes/types';
 import { storageService } from '../services/StorageService';
 import { alertService } from '../services/alertService';
 import { userProfileService } from '../services/userProfileService';
@@ -39,11 +39,12 @@ export default function Layout() {
   useEffect(() => {
     let latestJobs: Job[] = [];
     let latestRoutes: Route[] = [];
+    let latestRouteStops: RouteStop[] = [];
     let latestQuotes: Quote[] = [];
     let latestStorage = { used_bytes: 0, limit_bytes: 0 };
 
     const recomputeAlerts = () => {
-      setAlertCount(alertService.buildOperationalAlerts(latestJobs, latestRoutes, latestQuotes, latestStorage).length);
+      setAlertCount(alertService.buildOperationalAlerts(latestJobs, latestRoutes, latestRouteStops, latestQuotes, latestStorage).length);
     };
 
     const unsubscribeJobs = jobService.subscribeToJobs((jobs) => {
@@ -53,6 +54,11 @@ export default function Layout() {
 
     const unsubscribeRoutes = routeService.subscribeToRoutes((routes) => {
       latestRoutes = routes;
+      recomputeAlerts();
+    });
+
+    const unsubscribeRouteStops = routeService.subscribeToAllRouteStops((routeStops) => {
+      latestRouteStops = routeStops;
       recomputeAlerts();
     });
 
@@ -76,6 +82,7 @@ export default function Layout() {
     return () => {
       unsubscribeJobs();
       unsubscribeRoutes();
+      unsubscribeRouteStops();
       unsubscribeQuotes();
       unsubscribeProfile();
     };

@@ -1,6 +1,6 @@
 import { Timestamp } from 'firebase/firestore';
 import { Job } from './jobService';
-import { Route } from '../modules/routes/types';
+import { Route, RouteStop } from '../modules/routes/types';
 import { Quote } from './quoteService';
 
 export interface OperationalAlert {
@@ -32,7 +32,13 @@ const startOfDay = (value: Date) => {
 };
 
 export const alertService = {
-  buildOperationalAlerts: (jobs: Job[], routes: Route[], quotes: Quote[] = [], storageSummary?: StorageAlertSummary): OperationalAlert[] => {
+  buildOperationalAlerts: (
+    jobs: Job[],
+    routes: Route[],
+    routeStops: RouteStop[] = [],
+    quotes: Quote[] = [],
+    storageSummary?: StorageAlertSummary
+  ): OperationalAlert[] => {
     const today = startOfDay(new Date());
 
     const overdueJobs = jobs.filter((job) => {
@@ -51,8 +57,38 @@ export const alertService = {
     const draftRoutes = todayRoutes.filter((route) => route.status === 'draft');
     const inProgressRoutes = todayRoutes.filter((route) => route.status === 'in_progress');
     const sentQuotes = quotes.filter((quote) => quote.status === 'sent');
+    const todayRouteIds = new Set(todayRoutes.map((route) => route.id).filter(Boolean));
+    const assignedTodayJobIds = new Set(
+      routeStops
+        .filter((stop) => stop.route_id && todayRouteIds.has(stop.route_id))
+        .map((stop) => stop.job_id)
+        .filter(Boolean)
+    );
+    const needsPlacementJobs = jobs.filter((job) => {
+      if (!job.id || ['completed', 'canceled', 'quote'].includes(job.status)) return false;
+      const dueDate = toDate(job.next_due_date || job.scheduled_date);
+      const isDueNow = dueDate ? startOfDay(dueDate).getTime() <= today.getTime() : false;
+      const isCarryover = ['skipped', 'delayed'].includes(job.status);
+      return (isDueNow || isCarryover) && !assignedTodayJobIds.has(job.id);
+    });
+    const unassignedRuns = todayRoutes.filter((route) => !route.assigned_team_name_snapshot);
 
     const alerts: OperationalAlert[] = [];
+
+    if (needsPlacementJobs.length > 0) {
+      alerts.push({
+        id: 'needs-placement',
+        title: 'Work Still Needs Placement',
+        description: `${needsPlacementJobs.length} due or carryover job${needsPlacementJobs.length === 1 ? '' : 's'} are not on a route run yet.`,
+        severity: needsPlacementJobs.some((job) => {
+          const dueDate = toDate(job.next_due_date || job.scheduled_date);
+          return dueDate ? startOfDay(dueDate).getTime() < today.getTime() : false;
+        }) ? 'critical' : 'warning',
+        link: '/routes',
+        linkState: { selectedDate: new Date().toISOString() },
+        count: needsPlacementJobs.length,
+      });
+    }
 
     if (overdueJobs.length > 0) {
       alerts.push({
@@ -63,6 +99,18 @@ export const alertService = {
         link: '/routes',
         linkState: { selectedDate: new Date().toISOString() },
         count: overdueJobs.length,
+      });
+    }
+
+    if (unassignedRuns.length > 0) {
+      alerts.push({
+        id: 'unassigned-route-runs',
+        title: 'Route Runs Need Crew Labels',
+        description: `${unassignedRuns.length} route run${unassignedRuns.length === 1 ? '' : 's'} for today still need a crew or run label.`,
+        severity: 'warning',
+        link: '/routes',
+        linkState: { selectedDate: new Date().toISOString() },
+        count: unassignedRuns.length,
       });
     }
 

@@ -4,7 +4,7 @@ import { Timestamp } from 'firebase/firestore';
 import { jobService, Job } from '../services/jobService';
 import { customerService, Customer } from '../services/customerService';
 import { routeService } from '../services/RouteService';
-import { Route } from '../modules/routes/types';
+import { Route, RouteStop } from '../modules/routes/types';
 import { quoteService, Quote } from '../services/quoteService';
 import { 
   AlertTriangle,
@@ -36,6 +36,7 @@ export default function Dashboard() {
   const [jobs, setJobs] = useState<Job[]>([]);
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [routes, setRoutes] = useState<Route[]>([]);
+  const [routeStops, setRouteStops] = useState<RouteStop[]>([]);
   const [quotes, setQuotes] = useState<Quote[]>([]);
 
   useEffect(() => {
@@ -46,11 +47,13 @@ export default function Dashboard() {
       setCustomers(data);
     });
     const unsubscribeRoutes = routeService.subscribeToRoutes(setRoutes);
+    const unsubscribeRouteStops = routeService.subscribeToAllRouteStops(setRouteStops);
     const unsubscribeQuotes = quoteService.subscribeToQuotes(setQuotes);
     return () => {
       unsubscribeJobs();
       unsubscribeCustomers();
       unsubscribeRoutes();
+      unsubscribeRouteStops();
       unsubscribeQuotes();
     };
   }, []);
@@ -76,8 +79,25 @@ export default function Dashboard() {
     const routeDate = toDate(route.route_date);
     return routeDate ? startOfDay(routeDate).getTime() === todayDate.getTime() : false;
   });
+  const todayRouteIds = new Set(todayRoutes.map((route) => route.id).filter(Boolean));
+  const assignedTodayJobIds = new Set(
+    routeStops
+      .filter((stop) => stop.route_id && todayRouteIds.has(stop.route_id))
+      .map((stop) => stop.job_id)
+      .filter(Boolean)
+  );
   const routeDraftCount = todayRoutes.filter((route) => route.status === 'draft').length;
   const routeActiveCount = todayRoutes.filter((route) => route.status === 'in_progress').length;
+  const needsPlacementJobs = jobs.filter((job) => {
+    if (!job.id || ['completed', 'canceled', 'quote'].includes(job.status)) return false;
+    const dueDate = toDate(job.next_due_date || job.scheduled_date);
+    const isDueNow = dueDate ? startOfDay(dueDate).getTime() <= todayDate.getTime() : false;
+    const isCarryover = ['skipped', 'delayed'].includes(job.status);
+    return (isDueNow || isCarryover) && !assignedTodayJobIds.has(job.id);
+  });
+  const attentionJobs = [...needsPlacementJobs, ...overdueJobs, ...carryoverJobs].filter((job, index, collection) =>
+    collection.findIndex((entry) => entry.id === job.id) === index
+  );
   
   // Calculate total unpaid amount for all jobs
   const toCollect = jobs.filter(job => job.payment_status === 'unpaid' && job.status === 'completed')
@@ -141,8 +161,8 @@ export default function Dashboard() {
         >
           <div className="relative z-10">
             <AlertTriangle className="h-6 w-6 mb-4 text-red-500" />
-            <p className="text-3xl font-black text-gray-900">{overdueJobs.length + carryoverJobs.length}</p>
-            <p className="text-[10px] font-bold uppercase tracking-widest text-gray-400">Needs Attention</p>
+            <p className="text-3xl font-black text-gray-900">{needsPlacementJobs.length}</p>
+            <p className="text-[10px] font-bold uppercase tracking-widest text-gray-400">Needs Placement</p>
           </div>
           <div className="absolute -right-4 -bottom-4 w-24 h-24 bg-red-50 rounded-full blur-2xl group-hover:scale-110 transition-transform" />
         </Link>
@@ -274,16 +294,18 @@ export default function Dashboard() {
             <Link to="/routes" state={{ selectedDate: new Date().toISOString() }} className="text-xs font-bold text-blue-600 hover:underline">Open Planner</Link>
           </div>
           <div className="space-y-3">
-            {[...overdueJobs, ...carryoverJobs].length === 0 ? (
+            {attentionJobs.length === 0 ? (
               <div className="bg-gray-50 rounded-3xl p-12 text-center border-2 border-dashed border-gray-200">
-                <p className="text-sm font-bold text-gray-400 uppercase tracking-widest">Nothing overdue or carried over</p>
+                <p className="text-sm font-bold text-gray-400 uppercase tracking-widest">Nothing waiting on route placement</p>
               </div>
             ) : (
-              [...overdueJobs, ...carryoverJobs].slice(0, 5).map(job => (
+              attentionJobs.slice(0, 5).map(job => (
                 <Link key={job.id} to="/routes" state={{ selectedDate: new Date().toISOString() }} className="bg-white p-5 rounded-2xl border border-gray-100 shadow-sm hover:shadow-md transition-all flex justify-between items-center group">
                   <div className="flex items-center gap-4">
                     <div className={`w-12 h-12 rounded-xl flex items-center justify-center font-bold text-lg transition-colors ${
-                      job.status === 'delayed' || job.status === 'skipped'
+                      needsPlacementJobs.some((entry) => entry.id === job.id)
+                        ? 'bg-blue-50 text-blue-600'
+                        : job.status === 'delayed' || job.status === 'skipped'
                         ? 'bg-amber-50 text-amber-600'
                         : 'bg-red-50 text-red-600'
                     }`}>
@@ -296,11 +318,17 @@ export default function Dashboard() {
                   </div>
                   <div className="flex items-center gap-3">
                     <span className={`text-[10px] font-bold px-2 py-1 rounded-full uppercase tracking-wider ${
-                      job.status === 'delayed' || job.status === 'skipped'
+                      needsPlacementJobs.some((entry) => entry.id === job.id)
+                        ? 'bg-blue-100 text-blue-700'
+                        : job.status === 'delayed' || job.status === 'skipped'
                         ? 'bg-amber-100 text-amber-700'
                         : 'bg-red-100 text-red-700'
                     }`}>
-                      {job.status === 'delayed' || job.status === 'skipped' ? 'Carryover' : 'Overdue'}
+                      {needsPlacementJobs.some((entry) => entry.id === job.id)
+                        ? 'Needs Placement'
+                        : job.status === 'delayed' || job.status === 'skipped'
+                          ? 'Carryover'
+                          : 'Overdue'}
                     </span>
                     <ChevronRight className="h-4 w-4 text-gray-300 group-hover:text-blue-600 transition-colors" />
                   </div>
