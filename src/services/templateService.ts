@@ -1,8 +1,8 @@
-import { db, auth } from '../firebase';
+import { db } from '../firebase';
 import { collection, addDoc, onSnapshot, query, where, serverTimestamp, updateDoc, deleteDoc, doc } from 'firebase/firestore';
-import { onAuthStateChanged } from 'firebase/auth';
-import { waitForCurrentUser } from './authSessionService';
+import { subscribeToResolvedUser, waitForCurrentUser } from './authSessionService';
 import { localFallbackStore } from './localFallbackStore';
+import { cloudBackedLocalIdService } from './cloudBackedLocalIdService';
 
 export interface MessageTemplate {
   id?: string;
@@ -84,7 +84,7 @@ export const templateService = {
 
     const emit = () => callback(mergeTemplates(primaryTemplates, localTemplates));
 
-    const unsubscribeAuth = onAuthStateChanged(auth, (user) => {
+    const unsubscribeAuth = subscribeToResolvedUser((user) => {
       unsubscribeSnapshot();
       unsubscribeLocal();
       primaryTemplates = [];
@@ -154,7 +154,13 @@ export const templateService = {
     const user = await waitForCurrentUser();
     if (!user) throw new Error('Must be logged in to update template');
     try {
-      if (localFallbackStore.isLocalId(id, LOCAL_FALLBACK_NAMESPACE)) {
+      const shouldUseLocalFallback = await cloudBackedLocalIdService.shouldUseLocalFallback(
+        COLLECTION_NAME,
+        id,
+        'Message template update timed out while checking the recovered cloud record.'
+      );
+
+      if (shouldUseLocalFallback) {
         localFallbackStore.updateRecord<LocalMessageTemplate>(LOCAL_FALLBACK_NAMESPACE, user.uid, id, {
           ...template,
           _local_deleted: false,
@@ -185,7 +191,13 @@ export const templateService = {
     const user = await waitForCurrentUser();
     if (!user) throw new Error('Must be logged in to delete template');
     try {
-      if (localFallbackStore.isLocalId(id, LOCAL_FALLBACK_NAMESPACE)) {
+      const shouldUseLocalFallback = await cloudBackedLocalIdService.shouldUseLocalFallback(
+        COLLECTION_NAME,
+        id,
+        'Message template delete timed out while checking the recovered cloud record.'
+      );
+
+      if (shouldUseLocalFallback) {
         localFallbackStore.removeRecord<LocalMessageTemplate>(LOCAL_FALLBACK_NAMESPACE, user.uid, id);
         templateCache.delete(id);
         return;

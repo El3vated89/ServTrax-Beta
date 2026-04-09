@@ -3,6 +3,7 @@ import { db } from '../firebase';
 import { RouteTemplate } from '../modules/routes/types';
 import { subscribeToResolvedUser, waitForCurrentUser } from './authSessionService';
 import { localFallbackStore } from './localFallbackStore';
+import { cloudBackedLocalIdService } from './cloudBackedLocalIdService';
 
 const COLLECTION_NAME = 'route_templates';
 const DEFAULT_MAX_STOPS_PER_RUN = 15;
@@ -154,7 +155,13 @@ export const routeTemplateService = {
         max_stops_per_run: Math.min(ABSOLUTE_MAX_STOPS_PER_RUN, Math.max(1, updates.max_stops_per_run || DEFAULT_MAX_STOPS_PER_RUN)),
         updated_at: serverTimestamp(),
       };
-      if (localFallbackStore.isLocalId(id, LOCAL_FALLBACK_NAMESPACE)) {
+      const shouldUseLocalFallback = await cloudBackedLocalIdService.shouldUseLocalFallback(
+        COLLECTION_NAME,
+        id,
+        'Route template update timed out while checking the recovered cloud record.'
+      );
+
+      if (shouldUseLocalFallback) {
         localFallbackStore.updateRecord<LocalRouteTemplate>(LOCAL_FALLBACK_NAMESPACE, user.uid, id, {
           ...nextData,
           updated_at: toClientTimestamp() as any,
@@ -191,7 +198,13 @@ export const routeTemplateService = {
     const user = await waitForCurrentUser();
     if (!user) throw new Error('User not authenticated');
     try {
-      if (localFallbackStore.isLocalId(id, LOCAL_FALLBACK_NAMESPACE)) {
+      const shouldUseLocalFallback = await cloudBackedLocalIdService.shouldUseLocalFallback(
+        COLLECTION_NAME,
+        id,
+        'Route template delete timed out while checking the recovered cloud record.'
+      );
+
+      if (shouldUseLocalFallback) {
         localFallbackStore.removeRecord<LocalRouteTemplate>(LOCAL_FALLBACK_NAMESPACE, user.uid, id);
         templateCache.delete(id);
         return;

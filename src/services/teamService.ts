@@ -14,6 +14,7 @@ import { planConfigService } from './planConfigService';
 import { subscribeToResolvedUser, waitForCurrentUser } from './authSessionService';
 import { localFallbackStore } from './localFallbackStore';
 import { savePipelineService } from './savePipelineService';
+import { cloudBackedLocalIdService } from './cloudBackedLocalIdService';
 
 export type TeamMemberRole = 'crew_member' | 'crew_lead';
 export type TeamAccountStatus = 'pending' | 'active' | 'inactive';
@@ -218,7 +219,13 @@ export const teamService = {
     if (!user) throw new Error('User not authenticated');
 
     try {
-      if (localFallbackStore.isLocalId(id, LOCAL_FALLBACK_NAMESPACE)) {
+      const shouldUseLocalFallback = await cloudBackedLocalIdService.shouldUseLocalFallback(
+        COLLECTION_NAME,
+        id,
+        'Team member update timed out while checking the recovered cloud record.'
+      );
+
+      if (shouldUseLocalFallback) {
         localFallbackStore.updateRecord<LocalTeamMember>(LOCAL_FALLBACK_NAMESPACE, user.uid, id, {
           ...updates,
           updated_at: toClientTimestamp() as any,

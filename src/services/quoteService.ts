@@ -3,6 +3,7 @@ import { db } from '../firebase';
 import { subscribeToResolvedUser, waitForCurrentUser } from './authSessionService';
 import { BillingFrequency } from './recurringService';
 import { localFallbackStore } from './localFallbackStore';
+import { cloudBackedLocalIdService } from './cloudBackedLocalIdService';
 
 export interface Quote {
   id?: string;
@@ -145,7 +146,13 @@ export const quoteService = {
     const docRef = doc(db, COLLECTION_NAME, id);
 
     try {
-      if (localFallbackStore.isLocalId(id, LOCAL_FALLBACK_NAMESPACE)) {
+      const shouldUseLocalFallback = await cloudBackedLocalIdService.shouldUseLocalFallback(
+        COLLECTION_NAME,
+        id,
+        'Quote update timed out while checking the recovered cloud record.'
+      );
+
+      if (shouldUseLocalFallback) {
         localFallbackStore.updateRecord<LocalQuote>(LOCAL_FALLBACK_NAMESPACE, user.uid, id, {
           ...data,
           _local_deleted: false,
@@ -184,7 +191,13 @@ export const quoteService = {
     const docRef = doc(db, COLLECTION_NAME, id);
 
     try {
-      if (localFallbackStore.isLocalId(id, LOCAL_FALLBACK_NAMESPACE)) {
+      const shouldUseLocalFallback = await cloudBackedLocalIdService.shouldUseLocalFallback(
+        COLLECTION_NAME,
+        id,
+        'Quote delete timed out while checking the recovered cloud record.'
+      );
+
+      if (shouldUseLocalFallback) {
         localFallbackStore.removeRecord<LocalQuote>(LOCAL_FALLBACK_NAMESPACE, user.uid, id);
         quoteCache.delete(id);
         return;

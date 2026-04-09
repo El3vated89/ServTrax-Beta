@@ -3,6 +3,7 @@ import { collection, addDoc, onSnapshot, query, where, serverTimestamp, updateDo
 import { subscribeToResolvedUser, waitForCurrentUser } from './authSessionService';
 import { localFallbackStore } from './localFallbackStore';
 import { savePipelineService } from './savePipelineService';
+import { cloudBackedLocalIdService } from './cloudBackedLocalIdService';
 
 export interface ServicePlan {
   id?: string;
@@ -169,7 +170,13 @@ export const servicePlanService = {
     const docRef = doc(db, COLLECTION_NAME, id);
     let currentPlan: Partial<ServicePlan> = servicePlanCache.get(id) || {};
 
-    if (!localFallbackStore.isLocalId(id, LOCAL_FALLBACK_NAMESPACE)) {
+    const shouldUseLocalFallback = await cloudBackedLocalIdService.shouldUseLocalFallback(
+      COLLECTION_NAME,
+      id,
+      'Service plan update timed out while checking the recovered cloud record.'
+    );
+
+    if (!shouldUseLocalFallback) {
       try {
         const docSnap = await savePipelineService.withTimeout(getDoc(docRef), {
           timeoutMessage: 'Service plan update timed out while loading the current record.',
@@ -190,7 +197,7 @@ export const servicePlanService = {
     }
 
     try {
-      if (localFallbackStore.isLocalId(id, LOCAL_FALLBACK_NAMESPACE)) {
+      if (shouldUseLocalFallback) {
         localFallbackStore.updateRecord<LocalServicePlan>(LOCAL_FALLBACK_NAMESPACE, user.uid, id, {
           ...safeUpdates,
           _local_deleted: false,
@@ -218,7 +225,13 @@ export const servicePlanService = {
     if (!user) throw new Error('Must be logged in to delete service plan');
     const docRef = doc(db, COLLECTION_NAME, id);
     try {
-      if (localFallbackStore.isLocalId(id, LOCAL_FALLBACK_NAMESPACE)) {
+      const shouldUseLocalFallback = await cloudBackedLocalIdService.shouldUseLocalFallback(
+        COLLECTION_NAME,
+        id,
+        'Service plan delete timed out while checking the recovered cloud record.'
+      );
+
+      if (shouldUseLocalFallback) {
         localFallbackStore.removeRecord<LocalServicePlan>(LOCAL_FALLBACK_NAMESPACE, user.uid, id);
         servicePlanCache.delete(id);
         return;

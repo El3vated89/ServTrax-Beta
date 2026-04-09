@@ -3,6 +3,7 @@ import { db } from '../firebase';
 import { subscribeToResolvedUser, waitForCurrentUser } from './authSessionService';
 import { localFallbackStore } from './localFallbackStore';
 import { savePipelineService } from './savePipelineService';
+import { cloudBackedLocalIdService } from './cloudBackedLocalIdService';
 
 export interface Job {
   id?: string;
@@ -188,7 +189,13 @@ export const jobService = {
     if (!user) throw new Error('User not authenticated');
     const docRef = doc(db, COLLECTION_NAME, id);
     try {
-      if (localFallbackStore.isLocalId(id, LOCAL_FALLBACK_NAMESPACE)) {
+      const shouldUseLocalFallback = await cloudBackedLocalIdService.shouldUseLocalFallback(
+        COLLECTION_NAME,
+        id,
+        'Job update timed out while checking the recovered cloud record.'
+      );
+
+      if (shouldUseLocalFallback) {
         if (options.requirePrimaryWrite) {
           throw new Error('This action requires a real cloud save and cannot use a local-only job record.');
         }
@@ -237,7 +244,13 @@ export const jobService = {
     if (!user) throw new Error('User not authenticated');
     const docRef = doc(db, COLLECTION_NAME, id);
     try {
-      if (localFallbackStore.isLocalId(id, LOCAL_FALLBACK_NAMESPACE)) {
+      const shouldUseLocalFallback = await cloudBackedLocalIdService.shouldUseLocalFallback(
+        COLLECTION_NAME,
+        id,
+        'Job delete timed out while checking the recovered cloud record.'
+      );
+
+      if (shouldUseLocalFallback) {
         localFallbackStore.removeRecord<LocalJob>(LOCAL_FALLBACK_NAMESPACE, user.uid, id);
         jobCache.delete(id);
         return;

@@ -3,6 +3,7 @@ import { db } from '../firebase';
 import { subscribeToResolvedUser, waitForCurrentUser } from './authSessionService';
 import { localFallbackStore } from './localFallbackStore';
 import { savePipelineService } from './savePipelineService';
+import { cloudBackedLocalIdService } from './cloudBackedLocalIdService';
 
 export interface Customer {
   id?: string;
@@ -184,7 +185,13 @@ export const customerService = {
         portal_show_quotes: data.portal_show_quotes ?? cachedCustomer?.portal_show_quotes ?? false,
       };
 
-      if (localFallbackStore.isLocalId(id, LOCAL_FALLBACK_NAMESPACE)) {
+      const shouldUseLocalFallback = await cloudBackedLocalIdService.shouldUseLocalFallback(
+        COLLECTION_NAME,
+        id,
+        'Customer update timed out while checking the recovered cloud record.'
+      );
+
+      if (shouldUseLocalFallback) {
         localFallbackStore.updateRecord<LocalCustomer>(LOCAL_FALLBACK_NAMESPACE, user.uid, id, {
           ...safeData,
           _local_deleted: false,
@@ -221,7 +228,13 @@ export const customerService = {
     if (!user) throw new Error('User not authenticated');
     const docRef = doc(db, COLLECTION_NAME, id);
     try {
-      if (localFallbackStore.isLocalId(id, LOCAL_FALLBACK_NAMESPACE)) {
+      const shouldUseLocalFallback = await cloudBackedLocalIdService.shouldUseLocalFallback(
+        COLLECTION_NAME,
+        id,
+        'Customer delete timed out while checking the recovered cloud record.'
+      );
+
+      if (shouldUseLocalFallback) {
         localFallbackStore.removeRecord<LocalCustomer>(LOCAL_FALLBACK_NAMESPACE, user.uid, id);
         customerCache.delete(id);
         return;

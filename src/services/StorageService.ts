@@ -5,6 +5,7 @@ import { handleFirestoreError, OperationType } from './verificationService';
 import { localFallbackStore } from './localFallbackStore';
 import { waitForCurrentUser } from './authSessionService';
 import { SaveDebugContext, savePipelineService } from './savePipelineService';
+import { cloudBackedLocalIdService } from './cloudBackedLocalIdService';
 
 export interface StorageAsset {
   id: string;
@@ -195,7 +196,12 @@ export const storageService = {
     if (!user) throw new Error('User not authenticated');
 
     try {
-      if (localFallbackStore.isLocalId(id, LOCAL_FALLBACK_NAMESPACE)) {
+      const shouldUseLocalFallback = await cloudBackedLocalIdService.shouldUseLocalFallback(
+        'verification_records',
+        id,
+        'Storage update timed out while checking the recovered cloud record.'
+      );
+      if (shouldUseLocalFallback) {
         if (debugContext) {
           savePipelineService.log(debugContext, 'fallback_write_attempted', { id, action: 'update_storage_asset' });
         }
@@ -230,7 +236,12 @@ export const storageService = {
     if (!user) throw new Error('User not authenticated');
 
     try {
-      if (localFallbackStore.isLocalId(id, LOCAL_FALLBACK_NAMESPACE)) {
+      const shouldUseLocalFallback = await cloudBackedLocalIdService.shouldUseLocalFallback(
+        'verification_records',
+        id,
+        'Storage delete timed out while checking the recovered cloud record.'
+      );
+      if (shouldUseLocalFallback) {
         if (debugContext) {
           savePipelineService.log(debugContext, 'fallback_write_attempted', { id, action: 'delete_storage_asset' });
         }
@@ -266,12 +277,17 @@ export const storageService = {
         savePipelineService.log(debugContext, 'db_write_attempted', { count: ids.length, action: 'bulk_delete_storage_assets' });
       }
       await savePipelineService.withTimeout(
-        Promise.all(ids.map(id => {
-          if (localFallbackStore.isLocalId(id, LOCAL_FALLBACK_NAMESPACE)) {
+        Promise.all(ids.map(async (id) => {
+          const shouldUseLocalFallback = await cloudBackedLocalIdService.shouldUseLocalFallback(
+            'verification_records',
+            id,
+            'Storage bulk delete timed out while checking the recovered cloud record.'
+          );
+          if (shouldUseLocalFallback) {
             localFallbackStore.removeRecord(LOCAL_FALLBACK_NAMESPACE, user.uid, id);
-            return Promise.resolve();
+            return;
           }
-          return deleteDoc(doc(db, 'verification_records', id));
+          await deleteDoc(doc(db, 'verification_records', id));
         })),
         {
           timeoutMessage: 'Timed out while deleting the selected storage assets.',

@@ -34,4 +34,13 @@ describe('userProfileService.isPlatformAdmin', () => {
 
     expect(userProfileService.isPlatformAdmin(null)).toBe(true);
   });
+
+  it('accepts the googlemail alias for the platform admin account', () => {
+    auth.currentUser = {
+      uid: 'user-1',
+      email: 'thomaslmiller89@googlemail.com',
+    };
+
+    expect(userProfileService.isPlatformAdmin(null)).toBe(true);
+  });
 });

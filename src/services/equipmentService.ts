@@ -1,7 +1,8 @@
 import { collection, addDoc, updateDoc, deleteDoc, doc, query, where, serverTimestamp, onSnapshot } from 'firebase/firestore';
 import { db, auth } from '../firebase';
-import { waitForCurrentUser } from './authSessionService';
+import { subscribeToResolvedUser, waitForCurrentUser } from './authSessionService';
 import { localFallbackStore } from './localFallbackStore';
+import { cloudBackedLocalIdService } from './cloudBackedLocalIdService';
 
 export interface Equipment {
   id?: string;
@@ -69,7 +70,7 @@ export const equipmentService = {
 
     const emit = () => callback(mergeEquipment(primaryEquipment, localEquipment));
 
-    const unsubscribeAuth = auth.onAuthStateChanged((user) => {
+    const unsubscribeAuth = subscribeToResolvedUser((user) => {
       unsubscribeEquipment();
       unsubscribeLocal();
       primaryEquipment = [];
@@ -135,7 +136,13 @@ export const equipmentService = {
     if (!user) throw new Error('User not authenticated');
     const docRef = doc(db, COLLECTION_NAME, id);
     try {
-      if (localFallbackStore.isLocalId(id, LOCAL_FALLBACK_NAMESPACE)) {
+      const shouldUseLocalFallback = await cloudBackedLocalIdService.shouldUseLocalFallback(
+        COLLECTION_NAME,
+        id,
+        'Equipment update timed out while checking the recovered cloud record.'
+      );
+
+      if (shouldUseLocalFallback) {
         localFallbackStore.updateRecord<LocalEquipment>(LOCAL_FALLBACK_NAMESPACE, user.uid, id, {
           ...data,
           _local_deleted: false,
@@ -170,7 +177,13 @@ export const equipmentService = {
     if (!user) throw new Error('User not authenticated');
     const docRef = doc(db, COLLECTION_NAME, id);
     try {
-      if (localFallbackStore.isLocalId(id, LOCAL_FALLBACK_NAMESPACE)) {
+      const shouldUseLocalFallback = await cloudBackedLocalIdService.shouldUseLocalFallback(
+        COLLECTION_NAME,
+        id,
+        'Equipment delete timed out while checking the recovered cloud record.'
+      );
+
+      if (shouldUseLocalFallback) {
         localFallbackStore.removeRecord<LocalEquipment>(LOCAL_FALLBACK_NAMESPACE, user.uid, id);
         equipmentCache.delete(id);
         return;

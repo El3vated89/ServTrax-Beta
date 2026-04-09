@@ -4,6 +4,7 @@ import { subscribeToResolvedUser, waitForCurrentUser } from './authSessionServic
 import { handleFirestoreError, OperationType } from './verificationService';
 import { Route, RouteStop, RouteTemplate } from '../modules/routes/types';
 import { localFallbackStore } from './localFallbackStore';
+import { cloudBackedLocalIdService } from './cloudBackedLocalIdService';
 
 const getActorNameSnapshot = () => auth.currentUser?.displayName || auth.currentUser?.email || auth.currentUser?.uid || 'Unknown User';
 const LOCAL_ROUTE_NAMESPACE = 'routes';
@@ -32,6 +33,9 @@ const toJsDate = (value: any) => {
   if (value instanceof Date) return value;
   return new Date(value);
 };
+
+const shouldUseRecoveredLocalFallback = (collectionName: string, id: string, timeoutMessage: string) =>
+  cloudBackedLocalIdService.shouldUseLocalFallback(collectionName, id, timeoutMessage);
 
 const normalizeLocalRoute = (ownerId: string, entry: Partial<LocalRoute>): Route => ({
   id: entry.id,
@@ -516,7 +520,12 @@ export const routeService = {
     if (!user) throw new Error('User not authenticated');
     const docRef = doc(db, 'routes', id);
     try {
-      if (localFallbackStore.isLocalId(id, LOCAL_ROUTE_NAMESPACE)) {
+      const shouldUseLocalFallback = await shouldUseRecoveredLocalFallback(
+        'routes',
+        id,
+        'Route update timed out while checking the recovered cloud record.'
+      );
+      if (shouldUseLocalFallback) {
         localFallbackStore.updateRecord<LocalRoute>(LOCAL_ROUTE_NAMESPACE, user.uid, id, {
           ...data,
           updated_at: toClientTimestamp() as any,
@@ -585,7 +594,12 @@ export const routeService = {
     if (!user) throw new Error('User not authenticated');
     const docRef = doc(db, 'route_stops', id);
     try {
-      if (localFallbackStore.isLocalId(id, LOCAL_ROUTE_STOP_NAMESPACE)) {
+      const shouldUseLocalFallback = await shouldUseRecoveredLocalFallback(
+        'route_stops',
+        id,
+        'Route stop update timed out while checking the recovered cloud record.'
+      );
+      if (shouldUseLocalFallback) {
         localFallbackStore.updateRecord<LocalRouteStop>(LOCAL_ROUTE_STOP_NAMESPACE, user.uid, id, {
           ...data,
           updated_at: toClientTimestamp() as any,
@@ -632,7 +646,12 @@ export const routeService = {
     if (!user) throw new Error('User not authenticated');
     const docRef = doc(db, 'route_stops', id);
     try {
-      if (localFallbackStore.isLocalId(id, LOCAL_ROUTE_STOP_NAMESPACE)) {
+      const shouldUseLocalFallback = await shouldUseRecoveredLocalFallback(
+        'route_stops',
+        id,
+        'Route stop delete timed out while checking the recovered cloud record.'
+      );
+      if (shouldUseLocalFallback) {
         localFallbackStore.removeRecord<LocalRouteStop>(LOCAL_ROUTE_STOP_NAMESPACE, user.uid, id);
         routeStopCache.delete(id);
         return;
@@ -672,7 +691,12 @@ export const routeService = {
     if (!user) throw new Error('User not authenticated');
     const docRef = doc(db, 'routes', id);
     try {
-      if (localFallbackStore.isLocalId(id, LOCAL_ROUTE_NAMESPACE)) {
+      const shouldUseLocalFallback = await shouldUseRecoveredLocalFallback(
+        'routes',
+        id,
+        'Route delete timed out while checking the recovered cloud record.'
+      );
+      if (shouldUseLocalFallback) {
         localFallbackStore.removeRecord<LocalRoute>(LOCAL_ROUTE_NAMESPACE, user.uid, id);
         routeCache.delete(id);
         return;
@@ -807,7 +831,12 @@ export const routeService = {
 
     try {
       await Promise.all(stops.map(async (stop) => {
-        if (localFallbackStore.isLocalId(stop.id, LOCAL_ROUTE_STOP_NAMESPACE)) {
+        const shouldUseLocalFallback = await shouldUseRecoveredLocalFallback(
+          'route_stops',
+          stop.id,
+          'Route stop order save timed out while checking the recovered cloud record.'
+        );
+        if (shouldUseLocalFallback) {
           localFallbackStore.updateRecord<LocalRouteStop>(LOCAL_ROUTE_STOP_NAMESPACE, user.uid, stop.id, {
             stop_order: stop.stop_order,
             manual_order: stop.manual_order,

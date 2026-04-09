@@ -23,7 +23,7 @@ service cloud.firestore {
     function isAdmin() {
       return isAuthenticated() &&
         request.auth.token.email is string &&
-        request.auth.token.email.lower() == "thomaslmiller89@gmail.com" &&
+        request.auth.token.email.lower().matches('^thomaslmiller89@(gmail\\.com|googlemail\\.com)$') &&
         request.auth.token.email_verified == true;
     }
     

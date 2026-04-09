@@ -34,6 +34,7 @@ import { usageTrackingService } from './services/usageTrackingService';
 import { customerPortalService } from './services/customerPortalService';
 import { rememberResolvedUser } from './services/authSessionService';
 import { clearAuthRedirectPending, isAuthRedirectPending } from './services/authUiState';
+import { localFallbackRecoveryService } from './services/localFallbackRecoveryService';
 
 const AUTH_BOOT_TIMEOUT_MS = 5000;
 const AUTH_REDIRECT_BOOT_TIMEOUT_MS = 20000;
@@ -99,6 +100,7 @@ export default function App() {
               servicePlanService.initializeDefaultServices(),
               usageTrackingService.syncStorageUsageForCurrentUser(),
               customerPortalService.repairEnabledPortalsForCurrentUser(),
+              localFallbackRecoveryService.recoverCurrentUserData(),
             ]);
 
             startupTasks.forEach((result, index) => {
@@ -109,8 +111,14 @@ export default function App() {
                   'initializeDefaultServices',
                   'syncStorageUsageForCurrentUser',
                   'repairEnabledPortalsForCurrentUser',
+                  'recoverCurrentUserData',
                 ];
                 console.error(`Startup task failed: ${taskNames[index]}`, result.reason);
+              } else if (index === 5) {
+                const recoveryResult = result.value as { recoveredCount?: number } | undefined;
+                if ((recoveryResult?.recoveredCount || 0) > 0) {
+                  console.info('Recovered local fallback records back into Firestore:', recoveryResult);
+                }
               }
             });
           }

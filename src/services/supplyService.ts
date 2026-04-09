@@ -8,10 +8,11 @@ import {
   updateDoc,
   where,
 } from 'firebase/firestore';
-import { auth, db } from '../firebase';
+import { db } from '../firebase';
 import { localFallbackStore } from './localFallbackStore';
-import { waitForCurrentUser } from './authSessionService';
+import { subscribeToResolvedUser, waitForCurrentUser } from './authSessionService';
 import { SaveDebugContext, savePipelineService } from './savePipelineService';
+import { cloudBackedLocalIdService } from './cloudBackedLocalIdService';
 
 export interface SupplyRecord {
   id?: string;
@@ -82,7 +83,7 @@ export const supplyService = {
       callback(merged);
     };
 
-    const unsubscribeAuth = auth.onAuthStateChanged((user) => {
+    const unsubscribeAuth = subscribeToResolvedUser((user) => {
       unsubscribeSupplies();
       unsubscribeLocal();
       primarySupplies = [];
@@ -170,7 +171,13 @@ export const supplyService = {
     if (!user) throw new Error('User not authenticated');
 
     try {
-      if (localFallbackStore.isLocalId(id, LOCAL_FALLBACK_NAMESPACE)) {
+      const shouldUseLocalFallback = await cloudBackedLocalIdService.shouldUseLocalFallback(
+        COLLECTION_NAME,
+        id,
+        'Supply update timed out while checking the recovered cloud record.'
+      );
+
+      if (shouldUseLocalFallback) {
         if (debugContext) {
           savePipelineService.log(debugContext, 'fallback_write_attempted', { id, action: 'update_supply' });
         }

@@ -17,6 +17,7 @@ import { handleFirestoreError, OperationType } from './verificationService';
 import { localFallbackStore } from './localFallbackStore';
 import { subscribeToResolvedUser, waitForCurrentUser } from './authSessionService';
 import { SaveDebugContext, savePipelineService } from './savePipelineService';
+import { cloudBackedLocalIdService } from './cloudBackedLocalIdService';
 
 export type BillingStatus = 'draft' | 'scheduled' | 'due' | 'partial' | 'paid' | 'overdue' | 'canceled';
 export type BillingType = 'one_time' | 'auto_bill';
@@ -508,7 +509,13 @@ export const billingService = {
     if (!user) throw new Error('User not authenticated');
 
     try {
-      if (localFallbackStore.isLocalId(id, LOCAL_BILLING_NAMESPACE)) {
+      const shouldUseLocalFallback = await cloudBackedLocalIdService.shouldUseLocalFallback(
+        BILLING_COLLECTION,
+        id,
+        'Billing update timed out while checking the recovered cloud record.'
+      );
+
+      if (shouldUseLocalFallback) {
         localFallbackStore.updateRecord(LOCAL_BILLING_NAMESPACE, user.uid, id, {
           ...updates,
           due_date: serializeDateValue((updates as any).due_date),
@@ -611,7 +618,15 @@ export const billingService = {
     }
 
     try {
-      if (billingRecord.id && localFallbackStore.isLocalId(billingRecord.id, LOCAL_BILLING_NAMESPACE)) {
+      const shouldUseLocalFallback = billingRecord.id
+        ? await cloudBackedLocalIdService.shouldUseLocalFallback(
+            BILLING_COLLECTION,
+            billingRecord.id,
+            'Payment save timed out while checking the recovered billing record.'
+          )
+        : false;
+
+      if (billingRecord.id && shouldUseLocalFallback) {
         const paymentLocalId = localFallbackStore.upsertRecord(LOCAL_PAYMENT_NAMESPACE, user.uid, {
           id: localFallbackStore.createLocalId(LOCAL_PAYMENT_NAMESPACE),
           ownerId: user.uid,

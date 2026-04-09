@@ -1,10 +1,11 @@
 import { db, auth } from '../firebase';
 import { collection, addDoc, onSnapshot, query, where, serverTimestamp, updateDoc, doc, getDoc, Timestamp, getDocs, limit } from 'firebase/firestore';
-import { waitForCurrentUser } from './authSessionService';
+import { subscribeToResolvedUser, waitForCurrentUser } from './authSessionService';
 import { storagePolicyService } from './storagePolicyService';
 import { mediaUploadService } from './mediaUploadService';
 import { localFallbackStore } from './localFallbackStore';
 import { SaveDebugContext, savePipelineService } from './savePipelineService';
+import { cloudBackedLocalIdService } from './cloudBackedLocalIdService';
 
 export enum OperationType {
   CREATE = 'create',
@@ -277,7 +278,12 @@ export const verificationService = {
     if (!user) throw new Error('Must be logged in to update verification');
     try {
       const normalizedData = await normalizeVerificationPhotos(user.uid, data, debugContext);
-      if (localFallbackStore.isLocalId(id, LOCAL_FALLBACK_NAMESPACE)) {
+      const shouldUseLocalFallback = await cloudBackedLocalIdService.shouldUseLocalFallback(
+        COLLECTION_NAME,
+        id,
+        'Verification update timed out while checking the recovered cloud record.'
+      );
+      if (shouldUseLocalFallback) {
         localFallbackStore.updateRecord<VerificationRecord>(LOCAL_FALLBACK_NAMESPACE, user.uid, id, {
           ...normalizedData,
           updated_at: new Date().toISOString(),
@@ -328,7 +334,7 @@ export const verificationService = {
       callback(next);
     };
 
-    const unsubscribeAuth = auth.onAuthStateChanged((user) => {
+    const unsubscribeAuth = subscribeToResolvedUser((user) => {
       unsubscribeRecords();
       unsubscribeLocal();
       primaryRecords = [];

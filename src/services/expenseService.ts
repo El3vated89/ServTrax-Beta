@@ -13,6 +13,7 @@ import { handleFirestoreError, OperationType } from './verificationService';
 import { subscribeToResolvedUser, waitForCurrentUser } from './authSessionService';
 import { localFallbackStore } from './localFallbackStore';
 import { savePipelineService } from './savePipelineService';
+import { cloudBackedLocalIdService } from './cloudBackedLocalIdService';
 
 export type ExpenseCategory =
   | 'fuel'
@@ -133,7 +134,13 @@ export const expenseService = {
     if (!user) throw new Error('User not authenticated');
 
     try {
-      if (localFallbackStore.isLocalId(id, LOCAL_FALLBACK_NAMESPACE)) {
+      const shouldUseLocalFallback = await cloudBackedLocalIdService.shouldUseLocalFallback(
+        COLLECTION_NAME,
+        id,
+        'Expense update timed out while checking the recovered cloud record.'
+      );
+
+      if (shouldUseLocalFallback) {
         localFallbackStore.updateRecord<ExpenseRecord>(LOCAL_FALLBACK_NAMESPACE, user.uid, id, {
           ...updates,
           updated_at: new Date().toISOString(),
