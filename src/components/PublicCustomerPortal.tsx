@@ -28,10 +28,21 @@ export default function PublicCustomerPortal() {
   const [phoneError, setPhoneError] = useState('');
   const [isPhoneVerified, setIsPhoneVerified] = useState(false);
   const [portalSource, setPortalSource] = useState<'public' | 'internal_preview'>('public');
+  const [authReady, setAuthReady] = useState(false);
+  const [currentUserUid, setCurrentUserUid] = useState<string | null>(auth.currentUser?.uid || null);
 
   const requiresPhoneGate = !!customerPortal &&
     customerPortal.portal_access_mode === 'phone_only_temporary' &&
     !!customerPortal.portal_phone_hash;
+
+  useEffect(() => {
+    const unsubscribe = auth.onAuthStateChanged((user) => {
+      setCurrentUserUid(user?.uid || null);
+      setAuthReady(true);
+    });
+
+    return () => unsubscribe();
+  }, []);
 
   useEffect(() => {
     const loadPortal = async () => {
@@ -43,6 +54,7 @@ export default function PublicCustomerPortal() {
 
       try {
         let portalData: CustomerPortalRecord | null = null;
+        setError('');
 
         try {
           const portalSnap = await getDoc(doc(db, 'public_customer_portals', portalToken));
@@ -92,7 +104,11 @@ export default function PublicCustomerPortal() {
           }
         }
 
-        if (!portalData && auth.currentUser) {
+        if (!portalData && !authReady) {
+          return;
+        }
+
+        if (!portalData && currentUserUid) {
           try {
             if (customerId) {
               const internalPortalSnap = await getDoc(doc(db, 'customer_portals', customerId));
@@ -131,7 +147,7 @@ export default function PublicCustomerPortal() {
     };
 
     loadPortal();
-  }, [customerId, portalToken]);
+  }, [authReady, currentUserUid, customerId, portalToken]);
 
   useEffect(() => {
     if (!portalToken) return;
@@ -154,7 +170,7 @@ export default function PublicCustomerPortal() {
         let jobsSnap;
         let quotesSnap;
 
-        if (portalSource === 'internal_preview' && auth.currentUser) {
+        if (portalSource === 'internal_preview' && currentUserUid) {
           [jobsSnap, quotesSnap] = await Promise.all([
             getDocs(
               query(
