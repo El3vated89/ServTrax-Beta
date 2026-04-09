@@ -127,9 +127,9 @@ const quoteItemFromJob = (customer: Customer, job: Job): CustomerPortalQuoteItem
   portal_visible: true,
   source_type: 'job_quote',
   source_id: job.id || '',
-  service_snapshot: job.service_snapshot,
-  address_snapshot: job.address_snapshot,
-  status: job.status,
+  service_snapshot: job.service_snapshot || 'Quote',
+  address_snapshot: job.address_snapshot || '',
+  status: job.status || 'draft',
   billing_frequency: job.billing_frequency,
   price_snapshot: job.price_snapshot || 0,
   created_at: job.created_at || serverTimestamp(),
@@ -143,9 +143,9 @@ const quoteItemFromQuote = (customer: Customer, quote: Quote): CustomerPortalQuo
   portal_visible: true,
   source_type: 'quote',
   source_id: quote.id || '',
-  service_snapshot: quote.service_snapshot,
-  address_snapshot: quote.address_snapshot,
-  status: quote.status,
+  service_snapshot: quote.service_snapshot || 'Quote',
+  address_snapshot: quote.address_snapshot || '',
+  status: quote.status || 'draft',
   billing_frequency: quote.billing_frequency,
   price_snapshot: quote.price_snapshot || 0,
   created_at: quote.created_at || serverTimestamp(),
@@ -313,6 +313,22 @@ export const customerPortalService = {
       timeoutMessage: 'Portal sync timed out while saving the internal portal record.',
     });
 
+    try {
+      const publicPortalDoc: CustomerPortalRecord = {
+        ...portalDoc,
+        created_at: existingPortalSnap.exists() ? existingPortalSnap.data().created_at || serverTimestamp() : serverTimestamp(),
+      };
+
+      await savePipelineService.withTimeout(
+        setDoc(doc(db, PUBLIC_PORTAL_COLLECTION, customer.portal_token), publicPortalDoc, { merge: true }),
+        {
+          timeoutMessage: 'Portal sync timed out while saving the public portal shell.',
+        }
+      );
+    } catch (error) {
+      console.error('Public portal shell sync failed. Portal content sync will continue, but the public shell may be unavailable:', error);
+    }
+
     const historyDocs = jobs
       .filter((job) =>
         job.customerId === customer.id &&
@@ -328,10 +344,10 @@ export const customerPortalService = {
         portal_visible: !!customer.portal_show_history,
         proof_job_id: job.id || '',
         share_token: job.share_token || '',
-        service_snapshot: job.service_snapshot,
-        address_snapshot: job.address_snapshot,
-        status: job.status,
-        payment_status: job.payment_status,
+        service_snapshot: job.service_snapshot || 'Service Visit',
+        address_snapshot: job.address_snapshot || '',
+        status: job.status || 'completed',
+        payment_status: job.payment_status || 'unpaid',
         price_snapshot: job.price_snapshot || 0,
         scheduled_date: job.scheduled_date || null,
         completed_date: job.completed_date || null,
@@ -348,63 +364,55 @@ export const customerPortalService = {
         .map((quote) => quoteItemFromQuote(customer, quote)),
     ];
 
-    const historySnapshot = await savePipelineService.withTimeout(
-      getDocs(query(collection(db, INTERNAL_PORTAL_HISTORY_COLLECTION), where('customerId', '==', customer.id))),
-      {
-        timeoutMessage: 'Portal sync timed out while loading internal portal history.',
-      }
-    );
-    const quoteSnapshot = await savePipelineService.withTimeout(
-      getDocs(query(collection(db, INTERNAL_PORTAL_QUOTES_COLLECTION), where('customerId', '==', customer.id))),
-      {
-        timeoutMessage: 'Portal sync timed out while loading internal portal quotes.',
-      }
-    );
-
-    const batch = writeBatch(db);
-    const nextHistoryIds = new Set(historyDocs.map((item) => item.id));
-    const nextQuoteIds = new Set(quoteDocs.map((item) => `${item.source_type}_${item.source_id}`));
-
-    historySnapshot.docs.forEach((entry) => {
-      if (!nextHistoryIds.has(entry.id)) {
-        batch.delete(entry.ref);
-      }
-    });
-
-    quoteSnapshot.docs.forEach((entry) => {
-      if (!nextQuoteIds.has(entry.id)) {
-        batch.delete(entry.ref);
-      }
-    });
-
-    historyDocs.forEach((item) => {
-      batch.set(doc(db, INTERNAL_PORTAL_HISTORY_COLLECTION, item.id), item);
-    });
-
-    quoteDocs.forEach((item) => {
-      batch.set(doc(db, INTERNAL_PORTAL_QUOTES_COLLECTION, `${item.source_type}_${item.source_id}`), {
-        ...item,
-        portal_visible: !!customer.portal_show_quotes,
-      });
-    });
-
-    await savePipelineService.withTimeout(batch.commit(), {
-      timeoutMessage: 'Portal sync timed out while saving internal portal history.',
-    });
-
     try {
-      const publicPortalDoc: CustomerPortalRecord = {
-        ...portalDoc,
-        created_at: existingPortalSnap.exists() ? existingPortalSnap.data().created_at || serverTimestamp() : serverTimestamp(),
-      };
-
-      await savePipelineService.withTimeout(
-        setDoc(doc(db, PUBLIC_PORTAL_COLLECTION, customer.portal_token), publicPortalDoc, { merge: true }),
+      const historySnapshot = await savePipelineService.withTimeout(
+        getDocs(query(collection(db, INTERNAL_PORTAL_HISTORY_COLLECTION), where('customerId', '==', customer.id))),
         {
-          timeoutMessage: 'Portal sync timed out while saving the public portal mirror.',
+          timeoutMessage: 'Portal sync timed out while loading internal portal history.',
+        }
+      );
+      const quoteSnapshot = await savePipelineService.withTimeout(
+        getDocs(query(collection(db, INTERNAL_PORTAL_QUOTES_COLLECTION), where('customerId', '==', customer.id))),
+        {
+          timeoutMessage: 'Portal sync timed out while loading internal portal quotes.',
         }
       );
 
+      const batch = writeBatch(db);
+      const nextHistoryIds = new Set(historyDocs.map((item) => item.id));
+      const nextQuoteIds = new Set(quoteDocs.map((item) => `${item.source_type}_${item.source_id}`));
+
+      historySnapshot.docs.forEach((entry) => {
+        if (!nextHistoryIds.has(entry.id)) {
+          batch.delete(entry.ref);
+        }
+      });
+
+      quoteSnapshot.docs.forEach((entry) => {
+        if (!nextQuoteIds.has(entry.id)) {
+          batch.delete(entry.ref);
+        }
+      });
+
+      historyDocs.forEach((item) => {
+        batch.set(doc(db, INTERNAL_PORTAL_HISTORY_COLLECTION, item.id), item);
+      });
+
+      quoteDocs.forEach((item) => {
+        batch.set(doc(db, INTERNAL_PORTAL_QUOTES_COLLECTION, `${item.source_type}_${item.source_id}`), {
+          ...item,
+          portal_visible: !!customer.portal_show_quotes,
+        });
+      });
+
+      await savePipelineService.withTimeout(batch.commit(), {
+        timeoutMessage: 'Portal sync timed out while saving internal portal history.',
+      });
+    } catch (error) {
+      console.error('Internal portal content sync failed. Portal shell remains available:', error);
+    }
+
+    try {
       const publicHistorySnapshot = await savePipelineService.withTimeout(
         getDocs(query(collection(db, PUBLIC_PORTAL_HISTORY_COLLECTION), where('portal_token', '==', customer.portal_token))),
         {
@@ -453,7 +461,7 @@ export const customerPortalService = {
         timeoutMessage: 'Portal sync timed out while saving the public portal mirror.',
       });
     } catch (error) {
-      console.error('Public portal mirror sync failed. Internal portal preview remains available:', error);
+      console.error('Public portal content sync failed. Public portal shell remains available, but some content may be missing:', error);
     }
   },
 };
