@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import { collection, doc, getDoc, getDocs, query, where } from 'firebase/firestore';
+import { collection, doc, getDoc, getDocs, limit, query, where } from 'firebase/firestore';
 import { AlertCircle, Calendar, CheckCircle, FileText, Info, LockKeyhole, MapPin } from 'lucide-react';
 import { auth, db } from '../firebase';
 import {
@@ -9,7 +9,6 @@ import {
   CustomerPortalRecord,
   customerPortalService,
 } from '../services/customerPortalService';
-import { waitForCurrentUser } from '../services/authSessionService';
 
 const toDate = (value: any) => {
   if (!value) return null;
@@ -30,7 +29,9 @@ export default function PublicCustomerPortal() {
   const [isPhoneVerified, setIsPhoneVerified] = useState(false);
   const [portalSource, setPortalSource] = useState<'public' | 'internal_preview'>('public');
 
-  const requiresPhoneGate = !!customerPortal && customerPortal.portal_access_mode === 'phone_only_temporary';
+  const requiresPhoneGate = !!customerPortal &&
+    customerPortal.portal_access_mode === 'phone_only_temporary' &&
+    !!customerPortal.portal_phone_hash;
 
   useEffect(() => {
     const loadPortal = async () => {
@@ -57,8 +58,34 @@ export default function PublicCustomerPortal() {
         }
 
         if (!portalData) {
-          const currentUser = await waitForCurrentUser();
-          if (currentUser) {
+          try {
+            const legacyPortalSnap = await getDocs(
+              query(
+                collection(db, 'public_customer_portals'),
+                where('portal_token', '==', portalToken),
+                limit(1)
+              )
+            );
+
+            if (!legacyPortalSnap.empty) {
+              const entry = legacyPortalSnap.docs[0];
+              const legacyPortalData = { customerId, ...entry.data() } as CustomerPortalRecord;
+              if (
+                legacyPortalData.portal_enabled &&
+                legacyPortalData.portal_token === portalToken &&
+                (!legacyPortalData.customerId || legacyPortalData.customerId === customerId)
+              ) {
+                portalData = legacyPortalData;
+                setPortalSource('public');
+              }
+            }
+          } catch (legacyError) {
+            console.warn('Legacy public portal lookup failed:', legacyError);
+          }
+        }
+
+        if (!portalData && auth.currentUser) {
+          try {
             const internalPortalSnap = await getDoc(doc(db, 'customer_portals', customerId));
             if (internalPortalSnap.exists()) {
               const internalPortalData = { customerId, ...internalPortalSnap.data() } as CustomerPortalRecord;
@@ -71,6 +98,8 @@ export default function PublicCustomerPortal() {
                 setPortalSource('internal_preview');
               }
             }
+          } catch (internalError) {
+            console.warn('Internal portal preview lookup failed:', internalError);
           }
         }
 
@@ -169,8 +198,9 @@ export default function PublicCustomerPortal() {
             })
         );
       } catch (err) {
-        console.error('Error loading customer portal content:', err);
-        setError('Failed to load customer portal.');
+        console.warn('Customer portal content lookup failed, showing the portal shell without history data:', err);
+        setJobs([]);
+        setQuotes([]);
       } finally {
         setLoading(false);
       }

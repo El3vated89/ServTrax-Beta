@@ -177,12 +177,21 @@ export const jobService = {
     }
   },
 
-  updateJob: async (id: string, data: Partial<Job>) => {
+  updateJob: async (
+    id: string,
+    data: Partial<Job>,
+    options: {
+      requirePrimaryWrite?: boolean;
+    } = {}
+  ) => {
     const user = await waitForCurrentUser();
     if (!user) throw new Error('User not authenticated');
     const docRef = doc(db, COLLECTION_NAME, id);
     try {
       if (localFallbackStore.isLocalId(id, LOCAL_FALLBACK_NAMESPACE)) {
+        if (options.requirePrimaryWrite) {
+          throw new Error('This action requires a real cloud save and cannot use a local-only job record.');
+        }
         localFallbackStore.updateRecord<LocalJob>(LOCAL_FALLBACK_NAMESPACE, user.uid, id, {
           ...data,
           _local_deleted: false,
@@ -193,6 +202,9 @@ export const jobService = {
         timeoutMessage: 'Job update timed out while writing to the database.',
       });
     } catch (error) {
+      if (options.requirePrimaryWrite) {
+        throw error;
+      }
       console.error('Primary job update failed, updating local fallback instead:', error);
       const cachedJob = jobCache.get(id);
       localFallbackStore.upsertRecord<LocalJob>(LOCAL_FALLBACK_NAMESPACE, user.uid, {

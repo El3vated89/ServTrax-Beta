@@ -29,25 +29,42 @@ export default function PublicJobProof() {
       }
 
       try {
-        // Fetch job
-        const jobRef = doc(db, 'jobs', jobId);
-        let jobSnap;
+        let jobData: Job | null = null;
+
         try {
-          jobSnap = await getDoc(jobRef);
+          const jobSnap = await getDoc(doc(db, 'jobs', jobId));
+          if (jobSnap.exists()) {
+            jobData = { id: jobSnap.id, ...jobSnap.data() } as Job;
+          }
         } catch (err) {
-          console.error("Error fetching job:", err);
-          setError('Failed to load job details. Please check your connection.');
+          console.warn('Direct shared-job lookup failed, trying token lookup instead:', err);
+        }
+
+        if (!jobData) {
+          try {
+            const sharedJobSnap = await getDocs(
+              query(
+                collection(db, 'jobs'),
+                where('share_token', '==', shareToken),
+                limit(1)
+              )
+            );
+
+            if (!sharedJobSnap.empty) {
+              const entry = sharedJobSnap.docs[0];
+              jobData = { id: entry.id, ...entry.data() } as Job;
+            }
+          } catch (tokenError) {
+            console.error('Token-based shared-job lookup failed:', tokenError);
+          }
+        }
+
+        if (!jobData) {
+          setError('Failed to load job details. Please re-share this proof link from the job.');
           setLoading(false);
           return;
         }
 
-        if (!jobSnap.exists()) {
-          setError('Job not found');
-          setLoading(false);
-          return;
-        }
-
-        const jobData = { id: jobSnap.id, ...jobSnap.data() } as Job;
         const now = new Date();
         const expiresAt = jobData.share_expires_at?.toDate ? jobData.share_expires_at.toDate() : new Date(jobData.share_expires_at);
 

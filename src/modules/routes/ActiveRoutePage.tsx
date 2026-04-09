@@ -671,6 +671,11 @@ export default function ActiveRoutePage() {
     const isPaymentDue = job.payment_status === 'unpaid' && (job.price_snapshot || 0) > 0;
     setPaymentDue(isPaymentDue);
     try {
+      if (!job.id || job.id.startsWith('sample-') || job.id.startsWith('local:jobs:')) {
+        setErrorMessage('This stop needs a real cloud-saved job before it can generate a public proof link.');
+        return;
+      }
+
       const canShareWithoutPhoto = await confirmNoPhotoShareIfRequired(job as Job);
       if (!canShareWithoutPhoto) return;
 
@@ -686,6 +691,8 @@ export default function ActiveRoutePage() {
             visibility_mode: 'shareable',
             share_token: shareToken,
             share_expires_at: Timestamp.fromDate(expiresAt)
+          }, {
+            requirePrimaryWrite: true,
           });
         }
         await syncCustomerPortal(
@@ -700,6 +707,8 @@ export default function ActiveRoutePage() {
         if (job.id && !job.id.startsWith('sample-')) {
           await jobService.updateJob(job.id, {
             share_expires_at: Timestamp.fromDate(expiresAt)
+          }, {
+            requirePrimaryWrite: true,
           });
         }
         await syncCustomerPortal(

@@ -311,7 +311,9 @@ export default function Jobs() {
       }
 
       // 3. Update job status to completed
-      await jobService.updateJob(verifyingJobId, updateData);
+      await jobService.updateJob(verifyingJobId, updateData, {
+        requirePrimaryWrite: Boolean(updateData.share_token || updateData.visibility_mode === 'shareable'),
+      });
 
       // 4. Update customer's last service date
       if (currentJob?.customerId) {
@@ -374,6 +376,11 @@ export default function Jobs() {
   const handleShareJob = async (job: Job) => {
     setErrorMessage(null);
     try {
+      if (!job.id || job.id.startsWith('local:jobs:')) {
+        setErrorMessage('This job has not finished saving to the cloud yet. Please try sharing it again in a moment.');
+        return;
+      }
+
       const canShareWithoutPhoto = await confirmNoPhotoShareIfRequired(job);
       if (!canShareWithoutPhoto) return;
 
@@ -388,6 +395,8 @@ export default function Jobs() {
           visibility_mode: 'shareable',
           share_token: shareToken,
           share_expires_at: Timestamp.fromDate(expiresAt)
+        }, {
+          requirePrimaryWrite: true,
         });
         await syncCustomerPortal(job.customerId, jobs.map((entry) => (entry.id === job.id ? updatedJob : entry)));
         setSharingJob(updatedJob);
@@ -396,6 +405,8 @@ export default function Jobs() {
         const updatedJob = { ...job, share_expires_at: Timestamp.fromDate(expiresAt) } as Job;
         await jobService.updateJob(job.id!, {
           share_expires_at: Timestamp.fromDate(expiresAt)
+        }, {
+          requirePrimaryWrite: true,
         });
         await syncCustomerPortal(job.customerId, jobs.map((entry) => (entry.id === job.id ? updatedJob : entry)));
         setSharingJob(updatedJob);
