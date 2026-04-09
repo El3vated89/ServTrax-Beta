@@ -115,28 +115,84 @@ const toDate = (value: any) => {
   return new Date(value);
 };
 
+const safeReadCollection = async <T>(
+  collectionName: string,
+  debugContext?: SaveDebugContext
+): Promise<T[]> => {
+  try {
+    if (debugContext) {
+      savePipelineService.log(debugContext, 'db_write_attempted', { action: 'admin_read_collection', collectionName });
+    }
+
+    const snapshot = await savePipelineService.withTimeout(getDocs(collection(db, collectionName)), {
+      timeoutMessage: `Timed out while loading controller data from ${collectionName}.`,
+      debugContext,
+    });
+
+    if (debugContext) {
+      savePipelineService.log(debugContext, 'db_write_succeeded', { action: 'admin_read_collection', collectionName, count: snapshot.size });
+    }
+
+    return snapshot.docs.map((entry) => ({ id: entry.id, ...entry.data() } as T));
+  } catch (error) {
+    console.error(`Controller read failed for ${collectionName}, continuing with partial metrics:`, error);
+    if (debugContext) {
+      savePipelineService.logError(debugContext, 'db_write_failed', error);
+    }
+    return [];
+  }
+};
+
 export const adminService = {
-  getMetrics: async (): Promise<AdminMetrics> => {
+  getMetrics: async (debugContext?: SaveDebugContext): Promise<AdminMetrics> => {
     try {
-      const [usersSnapshot, businessSnapshot, verificationSnapshot, jobsSnapshot, routeTemplatesSnapshot, routesSnapshot, routeActivitySnapshot, usageSnapshot] = await Promise.all([
-        getDocs(collection(db, 'users')),
-        getDocs(collection(db, 'business_profiles')),
-        getDocs(collection(db, 'verification_records')),
-        getDocs(collection(db, 'jobs')),
-        getDocs(collection(db, 'route_templates')),
-        getDocs(collection(db, 'routes')),
-        getDocs(collection(db, 'route_activity_logs')),
-        getDocs(collection(db, 'usage_counters')),
+      const user = await waitForCurrentUser({ debugContext });
+      if (!user) {
+        throw new Error('User not authenticated');
+      }
+
+      const [users, businesses, records, jobs, routeTemplates, routes, routeActivity, usageCounters] = await Promise.all([
+        safeReadCollection<Record<string, any>>('users', debugContext).then((entries) =>
+          entries.map((entry) => ({ uid: String(entry.uid || entry.id || ''), ...entry } as UserProfile))
+        ),
+        safeReadCollection<AdminBusinessProfile>('business_profiles', debugContext),
+        safeReadCollection<AdminVerificationRecord>('verification_records', debugContext),
+        safeReadCollection<AdminJobRecord>('jobs', debugContext),
+        safeReadCollection<AdminRouteTemplateRecord>('route_templates', debugContext),
+        safeReadCollection<AdminRouteRecord>('routes', debugContext),
+        safeReadCollection<AdminRouteActivityRecord>('route_activity_logs', debugContext),
+        safeReadCollection<AdminUsageCounterRecord>('usage_counters', debugContext),
       ]);
 
-      const users = usersSnapshot.docs.map((entry) => ({ uid: entry.id, ...entry.data() } as UserProfile));
-      const businesses = businessSnapshot.docs.map((entry) => ({ id: entry.id, ...entry.data() } as AdminBusinessProfile));
-      const records = verificationSnapshot.docs.map((entry) => ({ id: entry.id, ...entry.data() } as AdminVerificationRecord));
-      const jobs = jobsSnapshot.docs.map((entry) => ({ id: entry.id, ...entry.data() } as AdminJobRecord));
-      const routeTemplates = routeTemplatesSnapshot.docs.map((entry) => ({ id: entry.id, ...entry.data() } as AdminRouteTemplateRecord));
-      const routes = routesSnapshot.docs.map((entry) => ({ id: entry.id, ...entry.data() } as AdminRouteRecord));
-      const routeActivity = routeActivitySnapshot.docs.map((entry) => ({ id: entry.id, ...entry.data() } as AdminRouteActivityRecord));
-      const usageCounters = usageSnapshot.docs.map((entry) => ({ id: entry.id, ...entry.data() } as AdminUsageCounterRecord));
+      const businessNameByOwner = businesses.reduce<Record<string, string>>((lookup, business) => {
+        lookup[business.ownerId || business.id] = business.business_name || 'Unnamed Business';
+        return lookup;
+      }, {});
+
+      const ownerIdsFromBusinesses = businesses.map((business) => business.ownerId || business.id).filter(Boolean);
+      const ownerIdsFromUsers = users.map((entry) => entry.uid).filter(Boolean);
+      const uniqueUserIds = Array.from(new Set([...ownerIdsFromUsers, ...ownerIdsFromBusinesses]));
+
+      const usersById = users.reduce<Record<string, UserProfile>>((lookup, entry) => {
+        if (entry.uid) {
+          lookup[entry.uid] = entry;
+        }
+        return lookup;
+      }, {});
+
+      const normalizedUsers = uniqueUserIds
+        .map((uid) => {
+          const userEntry = usersById[uid];
+          const matchingBusiness = businesses.find((business) => (business.ownerId || business.id) === uid);
+          return {
+            uid,
+            email: userEntry?.email || '',
+            name: userEntry?.name || matchingBusiness?.business_name || userEntry?.email || 'Unknown User',
+            role: userEntry?.role || (uid === user.uid ? 'admin' : 'owner'),
+            active: userEntry?.active !== false,
+          };
+        })
+        .sort((left, right) => left.name.localeCompare(right.name));
 
       const planCounts = businesses.reduce<Record<string, number>>((counts, business) => {
         const planName = planConfigService.resolveBusinessPlan(business).planLabel;
@@ -150,11 +206,6 @@ export const adminService = {
         const estimatedBytes = record.file_size_bytes || (photoUrls.reduce((sum, url) => sum + (url?.length || 0), 0) * 0.75);
         totals[ownerId] = (totals[ownerId] || 0) + estimatedBytes;
         return totals;
-      }, {});
-
-      const businessNameByOwner = businesses.reduce<Record<string, string>>((lookup, business) => {
-        lookup[business.ownerId || business.id] = business.business_name || 'Unnamed Business';
-        return lookup;
       }, {});
 
       const activityThreshold = Date.now() - (7 * 24 * 60 * 60 * 1000);
@@ -241,19 +292,11 @@ export const adminService = {
         .slice(0, 8);
 
       return {
-        totalUsers: users.length,
+        totalUsers: normalizedUsers.length,
         activeBusinesses: businesses.length,
         activePlans: planCounts,
         totalStorageBytes: Object.values(storageByOwner).reduce((sum, size) => sum + size, 0),
-        users: users
-          .map((user) => ({
-            uid: user.uid,
-            email: user.email || '',
-            name: user.name || '',
-            role: user.role || 'owner',
-            active: user.active !== false,
-          }))
-          .sort((left, right) => left.email.localeCompare(right.email)),
+        users: normalizedUsers,
         storageByBusiness: Object.entries(storageByOwner)
           .map(([ownerId, usedBytes]) => ({
             ownerId,
