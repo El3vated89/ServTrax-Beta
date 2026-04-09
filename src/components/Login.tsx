@@ -1,18 +1,33 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { LogIn, ShieldCheck } from 'lucide-react';
 import { signInWithRedirect } from 'firebase/auth';
 import { auth, googleProvider } from '../firebase';
+import { clearAuthRedirectPending, isAuthRedirectPending, markAuthRedirectPending } from '../services/authUiState';
 
 export default function Login() {
-  const [isSigningIn, setIsSigningIn] = useState(false);
+  const [isSigningIn, setIsSigningIn] = useState(() => isAuthRedirectPending());
   const [errorMessage, setErrorMessage] = useState('');
+
+  useEffect(() => {
+    if (auth.currentUser) {
+      clearAuthRedirectPending();
+      setIsSigningIn(false);
+      return;
+    }
+
+    if (isAuthRedirectPending()) {
+      setIsSigningIn(true);
+    }
+  }, []);
 
   const handleLogin = async () => {
     setErrorMessage('');
     setIsSigningIn(true);
     try {
+      markAuthRedirectPending();
       await signInWithRedirect(auth, googleProvider);
     } catch (error) {
+      clearAuthRedirectPending();
       console.error('Login failed:', error);
       setErrorMessage(
         error instanceof Error && error.message
@@ -55,7 +70,7 @@ export default function Login() {
                 className="w-full flex justify-center py-3 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
               >
                 <LogIn className="w-5 h-5 mr-2" />
-                {isSigningIn ? 'Redirecting to Google...' : 'Sign in with Google'}
+                {isSigningIn ? 'Finishing Google sign-in...' : 'Sign in with Google'}
               </button>
             </div>
             
@@ -71,7 +86,9 @@ export default function Login() {
             </div>
 
             <p className="text-center text-xs font-medium text-gray-500">
-              Sign-in opens a standard Google page and returns you to ServTrax automatically.
+              {isSigningIn
+                ? 'ServTrax is completing your Google sign-in and will continue automatically.'
+                : 'Sign-in opens a standard Google page and returns you to ServTrax automatically.'}
             </p>
           </div>
         </div>

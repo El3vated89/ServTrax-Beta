@@ -5,6 +5,7 @@ import App from './App';
 
 const {
   onAuthStateChanged,
+  getRedirectResult,
   initializeDefaultServices,
   ensureCurrentUserProfile,
   hydrateFramework,
@@ -12,6 +13,7 @@ const {
   repairEnabledPortalsForCurrentUser,
 } = vi.hoisted(() => ({
   onAuthStateChanged: vi.fn(),
+  getRedirectResult: vi.fn(),
   initializeDefaultServices: vi.fn(),
   ensureCurrentUserProfile: vi.fn(),
   hydrateFramework: vi.fn(),
@@ -21,6 +23,7 @@ const {
 
 vi.mock('firebase/auth', () => ({
   onAuthStateChanged,
+  getRedirectResult,
 }));
 
 vi.mock('./firebase', () => ({
@@ -141,6 +144,7 @@ describe('App Safari-safe bootstrap', () => {
   beforeEach(() => {
     window.location.hash = '';
     onAuthStateChanged.mockReset();
+    getRedirectResult.mockReset().mockResolvedValue(null);
     initializeDefaultServices.mockReset().mockResolvedValue(undefined);
     ensureCurrentUserProfile.mockReset().mockResolvedValue(undefined);
     hydrateFramework.mockReset().mockResolvedValue(undefined);

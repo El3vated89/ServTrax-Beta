@@ -5,7 +5,7 @@
 
 import { useState, useEffect } from 'react';
 import { HashRouter, Routes, Route, Navigate } from 'react-router-dom';
-import { onAuthStateChanged, User } from 'firebase/auth';
+import { getRedirectResult, onAuthStateChanged, User } from 'firebase/auth';
 import { auth } from './firebase';
 import { servicePlanService } from './services/servicePlanService';
 import Login from './components/Login';
@@ -33,8 +33,10 @@ import { planConfigService } from './services/planConfigService';
 import { usageTrackingService } from './services/usageTrackingService';
 import { customerPortalService } from './services/customerPortalService';
 import { rememberResolvedUser } from './services/authSessionService';
+import { clearAuthRedirectPending, isAuthRedirectPending } from './services/authUiState';
 
 const AUTH_BOOT_TIMEOUT_MS = 5000;
+const AUTH_REDIRECT_BOOT_TIMEOUT_MS = 20000;
 
 const isPublicHashRoute = () => {
   if (typeof window === 'undefined') return false;
@@ -54,14 +56,30 @@ export default function App() {
 
   useEffect(() => {
     let isActive = true;
+    const redirectPending = isAuthRedirectPending();
+    const authBootTimeoutMs = redirectPending ? AUTH_REDIRECT_BOOT_TIMEOUT_MS : AUTH_BOOT_TIMEOUT_MS;
 
     const timeout = window.setTimeout(() => {
       if (!isActive) return;
       console.warn(
-        `Firebase Auth bootstrap timed out after ${AUTH_BOOT_TIMEOUT_MS}ms. Releasing app shell without an authenticated session.`
+        `Firebase Auth bootstrap timed out after ${authBootTimeoutMs}ms. Releasing app shell without an authenticated session.`
       );
+      clearAuthRedirectPending();
       setLoading(false);
-    }, AUTH_BOOT_TIMEOUT_MS);
+    }, authBootTimeoutMs);
+
+    void getRedirectResult(auth)
+      .then((result) => {
+        if (result?.user) {
+          rememberResolvedUser(result.user);
+        }
+      })
+      .catch((error) => {
+        console.error('Google redirect sign-in failed:', error);
+      })
+      .finally(() => {
+        clearAuthRedirectPending();
+      });
 
     const unsubscribe = onAuthStateChanged(
       auth,
@@ -69,6 +87,7 @@ export default function App() {
         if (!isActive) return;
 
         window.clearTimeout(timeout);
+        clearAuthRedirectPending();
         rememberResolvedUser(currentUser);
         setUser(currentUser);
 
@@ -107,6 +126,7 @@ export default function App() {
         if (!isActive) return;
 
         window.clearTimeout(timeout);
+        clearAuthRedirectPending();
         rememberResolvedUser(null);
         console.error('Firebase Auth bootstrap failed:', error);
         setLoading(false);
