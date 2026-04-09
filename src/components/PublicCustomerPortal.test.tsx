@@ -96,4 +96,40 @@ describe('PublicCustomerPortal', () => {
 
     expect(screen.queryByText('Portal Unavailable')).not.toBeInTheDocument();
   });
+
+  it('opens when the token is valid even if the customer id segment is stale', async () => {
+    getDoc.mockResolvedValueOnce({
+      exists: () => true,
+      data: () => ({
+        customerId: 'customer-live',
+        ownerId: 'owner-1',
+        portal_enabled: true,
+        portal_token: 'portal-token-2',
+        portal_show_history: true,
+        portal_show_payment_status: false,
+        portal_show_quotes: true,
+        portal_plan_name_snapshot: 'Free',
+        customer_name_snapshot: 'Portal Customer',
+        address_snapshot: '456 Main St',
+      }),
+    });
+
+    getDocs
+      .mockResolvedValueOnce({ docs: [] })
+      .mockResolvedValueOnce({ docs: [] });
+
+    render(
+      <MemoryRouter initialEntries={['/portal/customer-stale/portal-token-2']}>
+        <Routes>
+          <Route path="/portal/:customerId/:portalToken" element={<PublicCustomerPortal />} />
+        </Routes>
+      </MemoryRouter>
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText('Portal Customer')).toBeInTheDocument();
+    });
+
+    expect(screen.queryByText('Portal Unavailable')).not.toBeInTheDocument();
+  });
 });

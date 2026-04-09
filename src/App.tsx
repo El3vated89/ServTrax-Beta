@@ -84,6 +84,7 @@ export default function App() {
         <Routes>
           {/* Public Routes */}
           <Route path="/proof/:jobId/:shareToken" element={<PublicJobProof />} />
+          <Route path="/portal/:portalToken" element={<PublicCustomerPortal />} />
           <Route path="/portal/:customerId/:portalToken" element={<PublicCustomerPortal />} />
           
           {/* Auth Routes */}

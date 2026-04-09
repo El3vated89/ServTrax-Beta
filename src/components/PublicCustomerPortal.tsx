@@ -17,7 +17,7 @@ const toDate = (value: any) => {
 };
 
 export default function PublicCustomerPortal() {
-  const { customerId, portalToken } = useParams<{ customerId: string; portalToken: string }>();
+  const { customerId, portalToken } = useParams<{ customerId?: string; portalToken?: string }>();
   const [customerPortal, setCustomerPortal] = useState<CustomerPortalRecord | null>(null);
   const [jobs, setJobs] = useState<CustomerPortalHistoryItem[]>([]);
   const [quotes, setQuotes] = useState<CustomerPortalQuoteItem[]>([]);
@@ -35,7 +35,7 @@ export default function PublicCustomerPortal() {
 
   useEffect(() => {
     const loadPortal = async () => {
-      if (!customerId || !portalToken) {
+      if (!portalToken) {
         setError('Invalid portal link.');
         setLoading(false);
         return;
@@ -47,11 +47,13 @@ export default function PublicCustomerPortal() {
         try {
           const portalSnap = await getDoc(doc(db, 'public_customer_portals', portalToken));
           if (portalSnap.exists()) {
-            const publicPortalData = { customerId: portalSnap.id, ...portalSnap.data() } as CustomerPortalRecord;
+            const publicPortalData = {
+              ...portalSnap.data(),
+              customerId: String(portalSnap.data().customerId || customerId || ''),
+            } as CustomerPortalRecord;
             if (
               publicPortalData.portal_enabled &&
-              publicPortalData.portal_token === portalToken &&
-              publicPortalData.customerId === customerId
+              publicPortalData.portal_token === portalToken
             ) {
               portalData = publicPortalData;
               setPortalSource('public');
@@ -73,11 +75,13 @@ export default function PublicCustomerPortal() {
 
             if (!legacyPortalSnap.empty) {
               const entry = legacyPortalSnap.docs[0];
-              const legacyPortalData = { customerId, ...entry.data() } as CustomerPortalRecord;
+              const legacyPortalData = {
+                ...entry.data(),
+                customerId: String(entry.data().customerId || customerId || ''),
+              } as CustomerPortalRecord;
               if (
                 legacyPortalData.portal_enabled &&
-                legacyPortalData.portal_token === portalToken &&
-                (!legacyPortalData.customerId || legacyPortalData.customerId === customerId)
+                legacyPortalData.portal_token === portalToken
               ) {
                 portalData = legacyPortalData;
                 setPortalSource('public');
@@ -90,16 +94,20 @@ export default function PublicCustomerPortal() {
 
         if (!portalData && auth.currentUser) {
           try {
-            const internalPortalSnap = await getDoc(doc(db, 'customer_portals', customerId));
-            if (internalPortalSnap.exists()) {
-              const internalPortalData = { customerId, ...internalPortalSnap.data() } as CustomerPortalRecord;
-              if (
-                internalPortalData.portal_enabled &&
-                internalPortalData.portal_token === portalToken &&
-                internalPortalData.customerId === customerId
-              ) {
-                portalData = internalPortalData;
-                setPortalSource('internal_preview');
+            if (customerId) {
+              const internalPortalSnap = await getDoc(doc(db, 'customer_portals', customerId));
+              if (internalPortalSnap.exists()) {
+                const internalPortalData = {
+                  ...internalPortalSnap.data(),
+                  customerId: String(internalPortalSnap.data().customerId || customerId || ''),
+                } as CustomerPortalRecord;
+                if (
+                  internalPortalData.portal_enabled &&
+                  internalPortalData.portal_token === portalToken
+                ) {
+                  portalData = internalPortalData;
+                  setPortalSource('internal_preview');
+                }
               }
             }
           } catch (internalError) {

@@ -219,8 +219,8 @@ export const customerPortalService = {
     };
   },
 
-  buildPortalLink: (customerId: string, portalToken: string) =>
-    `${getPublicOrigin()}/#/portal/${customerId}/${portalToken}`,
+  buildPortalLink: (_customerId: string, portalToken: string) =>
+    `${getPublicOrigin()}/#/portal/${portalToken}`,
 
   createPortalToken: () =>
     `${Math.random().toString(36).slice(2, 15)}${Math.random().toString(36).slice(2, 15)}`,
