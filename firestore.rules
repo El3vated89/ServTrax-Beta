@@ -450,6 +450,7 @@ service cloud.firestore {
     }
 
     match /public_customer_portals/{portalToken} {
+      // Public customer portal shell: customer-safe snapshot only.
       allow read: if resource != null && resource.data.portal_enabled == true;
       allow create: if isAuthenticated() && request.resource.data.ownerId == request.auth.uid && isValidCustomerPortal(request.resource.data);
       allow update: if (isDocOwner() || isAdmin()) && ownerIdNotModified() && isValidCustomerPortal(request.resource.data);

@@ -46,6 +46,7 @@ export default function PublicJobProof() {
               query(
                 collection(db, 'jobs'),
                 where('share_token', '==', shareToken),
+                where('visibility_mode', '==', 'shareable'),
                 limit(1)
               )
             );

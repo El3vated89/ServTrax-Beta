@@ -209,7 +209,7 @@ export default function Customers() {
 
         if (nextPortalEnabled) {
           setPortalToken(nextPortalToken);
-          await savePipelineService.withTimeout(
+          const portalSyncResult = await savePipelineService.withTimeout(
             customerPortalService.syncPortalContent(updatedCustomer, allJobs, quotes, portalCapabilities.planLabel),
             {
               timeoutMs: 25000,
@@ -217,6 +217,9 @@ export default function Customers() {
               debugContext,
             }
           );
+          if (!portalSyncResult.publicShellSynced) {
+            setErrorMessage('Client saved, but the public customer portal could not be published yet. The portal mirror still needs a successful public sync.');
+          }
         } else {
           await savePipelineService.withTimeout(customerPortalService.disablePortal(editingCustomer.id), {
             timeoutMs: 25000,

@@ -7,6 +7,7 @@ import {
   query,
   serverTimestamp,
   setDoc,
+  updateDoc,
   where,
   writeBatch,
 } from 'firebase/firestore';
@@ -23,6 +24,14 @@ export interface PortalCapabilities {
   allowsPortal: boolean;
   allowsPersistentPortal: boolean;
   planLabel: string;
+}
+
+export interface PortalSyncResult {
+  internalShellSynced: boolean;
+  publicShellSynced: boolean;
+  internalContentSynced: boolean;
+  publicContentSynced: boolean;
+  issues: string[];
 }
 
 export interface CustomerPortalRecord {
@@ -264,13 +273,23 @@ export const customerPortalService = {
     jobs: Job[],
     quotes: Quote[],
     planName?: string
-  ) => {
+  ): Promise<PortalSyncResult> => {
+    const result: PortalSyncResult = {
+      internalShellSynced: false,
+      publicShellSynced: false,
+      internalContentSynced: false,
+      publicContentSynced: false,
+      issues: [],
+    };
     const user = await waitForCurrentUser();
-    if (!user || !customer.id) return;
+    if (!user || !customer.id) {
+      result.issues.push('No authenticated user or customer id was available for portal sync.');
+      return result;
+    }
 
     if (!customer.portal_enabled || !customer.portal_token) {
       await customerPortalService.disablePortal(customer.id);
-      return;
+      return result;
     }
 
     const existingPortalSnap = await savePipelineService.withTimeout(
@@ -312,6 +331,7 @@ export const customerPortalService = {
     await savePipelineService.withTimeout(setDoc(doc(db, INTERNAL_PORTAL_COLLECTION, customer.id), portalDoc, { merge: true }), {
       timeoutMessage: 'Portal sync timed out while saving the internal portal record.',
     });
+    result.internalShellSynced = true;
 
     try {
       const publicPortalDoc: CustomerPortalRecord = {
@@ -325,8 +345,10 @@ export const customerPortalService = {
           timeoutMessage: 'Portal sync timed out while saving the public portal shell.',
         }
       );
+      result.publicShellSynced = true;
     } catch (error) {
       console.error('Public portal shell sync failed. Portal content sync will continue, but the public shell may be unavailable:', error);
+      result.issues.push(error instanceof Error ? error.message : 'Public portal shell sync failed.');
     }
 
     const historyDocs = jobs
@@ -408,8 +430,10 @@ export const customerPortalService = {
       await savePipelineService.withTimeout(batch.commit(), {
         timeoutMessage: 'Portal sync timed out while saving internal portal history.',
       });
+      result.internalContentSynced = true;
     } catch (error) {
       console.error('Internal portal content sync failed. Portal shell remains available:', error);
+      result.issues.push(error instanceof Error ? error.message : 'Internal portal content sync failed.');
     }
 
     try {
@@ -460,9 +484,13 @@ export const customerPortalService = {
       await savePipelineService.withTimeout(publicBatch.commit(), {
         timeoutMessage: 'Portal sync timed out while saving the public portal mirror.',
       });
+      result.publicContentSynced = true;
     } catch (error) {
       console.error('Public portal content sync failed. Public portal shell remains available, but some content may be missing:', error);
+      result.issues.push(error instanceof Error ? error.message : 'Public portal content sync failed.');
     }
+
+    return result;
   },
 
   repairEnabledPortalsForCurrentUser: async () => {
@@ -507,6 +535,21 @@ export const customerPortalService = {
         };
 
         try {
+          if (!customer.portal_token && safeCustomer.id) {
+            await savePipelineService.withTimeout(
+              updateDoc(doc(db, 'customers', safeCustomer.id), {
+                portal_token: safeCustomer.portal_token,
+                portal_enabled: true,
+                portal_show_history: safeCustomer.portal_show_history,
+                portal_show_payment_status: safeCustomer.portal_show_payment_status,
+                portal_show_quotes: safeCustomer.portal_show_quotes,
+                portal_plan_name_snapshot: safeCustomer.portal_plan_name_snapshot,
+              }),
+              {
+                timeoutMessage: 'Portal repair timed out while backfilling a missing portal token.',
+              }
+            );
+          }
           await customerPortalService.syncPortalContent(safeCustomer, jobs, quotes, safeCustomer.portal_plan_name_snapshot);
         } catch (error) {
           console.error(`Portal repair failed for customer ${safeCustomer.id}:`, error);

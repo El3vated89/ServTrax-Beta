@@ -52,8 +52,10 @@ export default function PublicCustomerPortal() {
         return;
       }
 
+      let shouldKeepLoading = false;
       try {
         let portalData: CustomerPortalRecord | null = null;
+        setLoading(true);
         setError('');
 
         try {
@@ -81,6 +83,7 @@ export default function PublicCustomerPortal() {
               query(
                 collection(db, 'public_customer_portals'),
                 where('portal_token', '==', portalToken),
+                where('portal_enabled', '==', true),
                 limit(1)
               )
             );
@@ -105,12 +108,33 @@ export default function PublicCustomerPortal() {
         }
 
         if (!portalData && !authReady) {
+          shouldKeepLoading = true;
           return;
         }
 
         if (!portalData && currentUserUid) {
           try {
-            if (customerId) {
+            const internalPortalQuery = await getDocs(
+              query(
+                collection(db, 'customer_portals'),
+                where('ownerId', '==', currentUserUid),
+                where('portal_token', '==', portalToken),
+                where('portal_enabled', '==', true),
+                limit(1)
+              )
+            );
+
+            if (!internalPortalQuery.empty) {
+              const internalPortalEntry = internalPortalQuery.docs[0];
+              const internalPortalData = {
+                ...internalPortalEntry.data(),
+                customerId: String(internalPortalEntry.data().customerId || customerId || ''),
+              } as CustomerPortalRecord;
+              if (internalPortalData.portal_enabled && internalPortalData.portal_token === portalToken) {
+                portalData = internalPortalData;
+                setPortalSource('internal_preview');
+              }
+            } else if (customerId) {
               const internalPortalSnap = await getDoc(doc(db, 'customer_portals', customerId));
               if (internalPortalSnap.exists()) {
                 const internalPortalData = {
@@ -142,7 +166,9 @@ export default function PublicCustomerPortal() {
         console.error('Error loading customer portal:', err);
         setError('Failed to load customer portal.');
       } finally {
-        setLoading(false);
+        if (!shouldKeepLoading) {
+          setLoading(false);
+        }
       }
     };
 
@@ -235,7 +261,7 @@ export default function PublicCustomerPortal() {
     };
 
     loadPortalContent();
-  }, [customerPortal, isPhoneVerified, portalToken, requiresPhoneGate]);
+  }, [customerPortal, currentUserUid, isPhoneVerified, portalSource, portalToken, requiresPhoneGate]);
 
   const visibleJobs = useMemo(() => {
     if (!customerPortal?.portal_show_history) return [];
