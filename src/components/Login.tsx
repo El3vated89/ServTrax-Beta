@@ -2,7 +2,12 @@ import { useEffect, useState } from 'react';
 import { LogIn, ShieldCheck } from 'lucide-react';
 import { signInWithRedirect } from 'firebase/auth';
 import { auth, googleProvider } from '../firebase';
-import { clearAuthRedirectPending, isAuthRedirectPending, markAuthRedirectPending } from '../services/authUiState';
+import {
+  clearAuthRedirectPending,
+  isAuthRedirectPending,
+  markAuthRedirectPending,
+  subscribeToAuthRedirectPending,
+} from '../services/authUiState';
 
 export default function Login() {
   const [isSigningIn, setIsSigningIn] = useState(() => isAuthRedirectPending());
@@ -12,12 +17,16 @@ export default function Login() {
     if (auth.currentUser) {
       clearAuthRedirectPending();
       setIsSigningIn(false);
-      return;
+      return undefined;
     }
 
-    if (isAuthRedirectPending()) {
-      setIsSigningIn(true);
-    }
+    const unsubscribe = subscribeToAuthRedirectPending((pending) => {
+      setIsSigningIn(pending);
+    });
+
+    return () => {
+      unsubscribe();
+    };
   }, []);
 
   const handleLogin = async () => {

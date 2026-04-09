@@ -1,7 +1,7 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import Login from './Login';
-import { AUTH_REDIRECT_PENDING_KEY } from '../services/authUiState';
+import { AUTH_REDIRECT_PENDING_KEY, clearAuthRedirectPending } from '../services/authUiState';
 
 const { signInWithRedirect } = vi.hoisted(() => ({
   signInWithRedirect: vi.fn(),
@@ -55,5 +55,19 @@ describe('Login', () => {
     render(<Login />);
 
     expect(screen.getByRole('button', { name: 'Finishing Google sign-in...' })).toBeDisabled();
+  });
+
+  it('re-enables login when the redirect pending flag is cleared after return', async () => {
+    window.sessionStorage.setItem(AUTH_REDIRECT_PENDING_KEY, new Date().toISOString());
+
+    render(<Login />);
+
+    expect(screen.getByRole('button', { name: 'Finishing Google sign-in...' })).toBeDisabled();
+
+    await act(async () => {
+      clearAuthRedirectPending();
+    });
+
+    expect(screen.getByRole('button', { name: 'Sign in with Google' })).toBeEnabled();
   });
 });
