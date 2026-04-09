@@ -28,6 +28,22 @@ const getCurrentPeriodKey = () => {
 
 const getDocId = (ownerId: string, periodKey: string) => `${ownerId}_${periodKey}`;
 
+const getResolvedUsageLimits = async (userId: string, debugContext?: SaveDebugContext) => {
+  const businessProfileSnap = await savePipelineService.withTimeout(getDoc(doc(db, 'business_profiles', userId)), {
+    timeoutMessage: 'Timed out while loading the business profile for usage tracking.',
+    debugContext,
+  });
+  const resolvedPlan = planConfigService.resolveBusinessPlan(
+    businessProfileSnap.exists() ? businessProfileSnap.data() : null
+  );
+
+  return {
+    sms_limit: resolvedPlan.limits.monthly_sms_limit,
+    email_limit: resolvedPlan.limits.monthly_email_limit,
+    storage_limit_bytes: resolvedPlan.storageLimitBytes,
+  };
+};
+
 export const usageTrackingService = {
   getCurrentPeriodKey,
 
@@ -37,6 +53,7 @@ export const usageTrackingService = {
 
     try {
       const summary = await storageService.getUsageSummary(debugContext);
+      const resolvedLimits = await getResolvedUsageLimits(user.uid, debugContext);
       const periodKey = getCurrentPeriodKey();
       const docId = getDocId(user.uid, periodKey);
       const usagePayload: UsageCounter = {
@@ -45,9 +62,9 @@ export const usageTrackingService = {
         sms_used: 0,
         email_used: 0,
         storage_used_bytes: summary.used_bytes,
-        sms_limit: 0,
-        email_limit: 0,
-        storage_limit_bytes: summary.limit_bytes,
+        sms_limit: resolvedLimits.sms_limit,
+        email_limit: resolvedLimits.email_limit,
+        storage_limit_bytes: summary.limit_bytes || resolvedLimits.storage_limit_bytes,
       };
 
       if (debugContext) {
@@ -99,8 +116,16 @@ export const usageTrackingService = {
       unsubscribeUsage = onSnapshot(
         doc(db, COLLECTION_NAME, docId),
         async (snapshot) => {
+          const resolvedLimits = await getResolvedUsageLimits(user.uid);
+
           if (snapshot.exists()) {
-            callback(snapshot.data() as UsageCounter);
+            const snapshotData = snapshot.data() as UsageCounter;
+            callback({
+              ...snapshotData,
+              sms_limit: snapshotData.sms_limit || resolvedLimits.sms_limit,
+              email_limit: snapshotData.email_limit || resolvedLimits.email_limit,
+              storage_limit_bytes: snapshotData.storage_limit_bytes || resolvedLimits.storage_limit_bytes,
+            });
             return;
           }
 
@@ -111,9 +136,9 @@ export const usageTrackingService = {
             sms_used: 0,
             email_used: 0,
             storage_used_bytes: summary.used_bytes,
-            sms_limit: 0,
-            email_limit: 0,
-            storage_limit_bytes: summary.limit_bytes,
+            sms_limit: resolvedLimits.sms_limit,
+            email_limit: resolvedLimits.email_limit,
+            storage_limit_bytes: summary.limit_bytes || resolvedLimits.storage_limit_bytes,
           });
         },
         (error) => handleFirestoreError(error, OperationType.GET, COLLECTION_NAME)

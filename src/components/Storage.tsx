@@ -10,6 +10,7 @@ import { usageTrackingService, UsageCounter } from '../services/usageTrackingSer
 import { jobService, Job } from '../services/jobService';
 import { customerService, Customer } from '../services/customerService';
 import { Timestamp } from 'firebase/firestore';
+import { auth } from '../firebase';
 
 export default function Storage() {
   const [assets, setAssets] = useState<StorageAsset[]>([]);
@@ -39,26 +40,64 @@ export default function Storage() {
 
   const loadData = useCallback(async () => {
     setIsLoading(true);
+    setErrorMessage(null);
     try {
-      const [summaryData, assetsData] = await Promise.all([
+      const [summaryResult, assetsResult] = await Promise.allSettled([
         storageService.getUsageSummary(),
         storageService.getAssets()
       ]);
-      await usageTrackingService.syncStorageUsageForCurrentUser();
-      setSummary(summaryData);
-      setAssets(assetsData);
-      return assetsData;
-    } catch (error) {
-      console.error("Error loading storage data:", error);
-      setErrorMessage('Failed to load storage data.');
-      return [];
+
+      let nextAssets: StorageAsset[] = [];
+      let nextError: string | null = null;
+
+      if (summaryResult.status === 'fulfilled') {
+        setSummary(summaryResult.value);
+      } else {
+        console.error('Error loading storage summary:', summaryResult.reason);
+        nextError = 'Some storage data could not be loaded.';
+      }
+
+      if (assetsResult.status === 'fulfilled') {
+        nextAssets = assetsResult.value;
+        setAssets(assetsResult.value);
+      } else {
+        console.error('Error loading storage assets:', assetsResult.reason);
+        nextError = 'Some storage data could not be loaded.';
+      }
+
+      try {
+        await usageTrackingService.syncStorageUsageForCurrentUser();
+      } catch (syncError) {
+        console.error('Error syncing storage usage:', syncError);
+      }
+
+      if (summaryResult.status === 'rejected' && assetsResult.status === 'rejected') {
+        nextError = 'Failed to load storage data.';
+      }
+
+      setErrorMessage(nextError);
+      return nextAssets;
     } finally {
       setIsLoading(false);
     }
   }, []);
 
   useEffect(() => {
-    loadData();
+    const unsubscribeAuth = auth.onAuthStateChanged((user) => {
+      if (user) {
+        loadData();
+        return;
+      }
+
+      setAssets([]);
+      setSummary({ used_bytes: 0, limit_bytes: 0, asset_count: 0, plan_name: '', storage_cap: 0, retention_days: null });
+      setUsage(null);
+      setIsLoading(false);
+    });
+
+    return () => {
+      unsubscribeAuth();
+    };
   }, [loadData]);
 
   useEffect(() => {
@@ -269,7 +308,11 @@ export default function Storage() {
     return Timestamp.fromMillis(Date.now() + boundedDays * 24 * 60 * 60 * 1000);
   };
 
-  const percentageUsed = (summary.used_bytes / summary.limit_bytes) * 100;
+  const effectiveUsedBytes = usage?.storage_used_bytes ?? summary.used_bytes;
+  const effectiveLimitBytes = usage?.storage_limit_bytes || summary.limit_bytes || 0;
+  const percentageUsed = effectiveLimitBytes > 0
+    ? (effectiveUsedBytes / effectiveLimitBytes) * 100
+    : 0;
 
   return (
     <div className="min-h-screen bg-gray-50 pb-32">
@@ -298,7 +341,7 @@ export default function Storage() {
               )}
             </div>
             <div className="flex flex-col items-end">
-              <span className="text-[10px] font-black text-blue-600 uppercase tracking-widest mb-1">{summary.plan_name}</span>
+              <span className="text-[10px] font-black text-blue-600 uppercase tracking-widest mb-1">{summary.plan_name || 'Free'}</span>
               <span className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-2">
                 {summary.retention_days ? `${summary.retention_days} Day Retention` : 'No Auto Expiration'}
               </span>
