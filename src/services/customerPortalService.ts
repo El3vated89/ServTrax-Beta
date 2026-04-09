@@ -464,4 +464,56 @@ export const customerPortalService = {
       console.error('Public portal content sync failed. Public portal shell remains available, but some content may be missing:', error);
     }
   },
+
+  repairEnabledPortalsForCurrentUser: async () => {
+    const user = await waitForCurrentUser();
+    if (!user) return;
+
+    try {
+      const [customersSnapshot, jobsSnapshot, quotesSnapshot] = await Promise.all([
+        savePipelineService.withTimeout(
+          getDocs(query(collection(db, 'customers'), where('ownerId', '==', user.uid), where('portal_enabled', '==', true))),
+          {
+            timeoutMessage: 'Portal repair timed out while loading customers.',
+          }
+        ),
+        savePipelineService.withTimeout(
+          getDocs(query(collection(db, 'jobs'), where('ownerId', '==', user.uid))),
+          {
+            timeoutMessage: 'Portal repair timed out while loading jobs.',
+          }
+        ),
+        savePipelineService.withTimeout(
+          getDocs(query(collection(db, 'quotes'), where('ownerId', '==', user.uid))),
+          {
+            timeoutMessage: 'Portal repair timed out while loading quotes.',
+          }
+        ),
+      ]);
+
+      const jobs = jobsSnapshot.docs.map((entry) => ({ id: entry.id, ...entry.data() } as Job));
+      const quotes = quotesSnapshot.docs.map((entry) => ({ id: entry.id, ...entry.data() } as Quote));
+
+      for (const entry of customersSnapshot.docs) {
+        const customer = { id: entry.id, ...entry.data() } as Customer;
+        const safeCustomer: Customer = {
+          ...customer,
+          portal_enabled: true,
+          portal_token: customer.portal_token || customerPortalService.createPortalToken(),
+          portal_show_history: customer.portal_show_history ?? true,
+          portal_show_payment_status: customer.portal_show_payment_status ?? false,
+          portal_show_quotes: customer.portal_show_quotes ?? true,
+          portal_plan_name_snapshot: customer.portal_plan_name_snapshot || 'Free',
+        };
+
+        try {
+          await customerPortalService.syncPortalContent(safeCustomer, jobs, quotes, safeCustomer.portal_plan_name_snapshot);
+        } catch (error) {
+          console.error(`Portal repair failed for customer ${safeCustomer.id}:`, error);
+        }
+      }
+    } catch (error) {
+      console.error('Portal repair pass failed:', error);
+    }
+  },
 };

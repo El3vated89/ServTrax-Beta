@@ -31,6 +31,7 @@ import { ErrorBoundary } from './components/ErrorBoundary';
 import { userProfileService } from './services/userProfileService';
 import { planConfigService } from './services/planConfigService';
 import { usageTrackingService } from './services/usageTrackingService';
+import { customerPortalService } from './services/customerPortalService';
 
 export default function App() {
   const [user, setUser] = useState<User | null>(null);
@@ -47,6 +48,7 @@ export default function App() {
             planConfigService.hydrateFramework(),
             servicePlanService.initializeDefaultServices(),
             usageTrackingService.syncStorageUsageForCurrentUser(),
+            customerPortalService.repairEnabledPortalsForCurrentUser(),
           ]);
 
           startupTasks.forEach((result, index) => {
@@ -56,6 +58,7 @@ export default function App() {
                 'hydrateFramework',
                 'initializeDefaultServices',
                 'syncStorageUsageForCurrentUser',
+                'repairEnabledPortalsForCurrentUser',
               ];
               console.error(`Startup task failed: ${taskNames[index]}`, result.reason);
             }
