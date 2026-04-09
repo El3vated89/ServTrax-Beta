@@ -1,7 +1,7 @@
 import { doc, getDoc, onSnapshot, serverTimestamp, setDoc, updateDoc } from 'firebase/firestore';
-import { auth, db } from '../firebase';
+import { db } from '../firebase';
 import { handleFirestoreError, OperationType } from './verificationService';
-import { waitForCurrentUser } from './authSessionService';
+import { subscribeToResolvedUser, waitForCurrentUser } from './authSessionService';
 import { SaveDebugContext, savePipelineService } from './savePipelineService';
 
 export interface PlatformMessagingConfig {
@@ -23,6 +23,7 @@ export interface PlatformMessagingConfig {
 
 const DOC_ID = 'messaging_providers';
 const ADMIN_EMAIL = 'thomaslmiller89@gmail.com';
+const normalizeEmail = (value?: string | null) => (value || '').trim().toLowerCase();
 
 const defaultConfig: PlatformMessagingConfig = {
   admin_email_lock: ADMIN_EMAIL,
@@ -45,10 +46,10 @@ export const platformMessagingService = {
   subscribeToConfig: (callback: (config: PlatformMessagingConfig) => void) => {
     let unsubscribeConfig = () => {};
 
-    const unsubscribeAuth = auth.onAuthStateChanged((user) => {
+    const unsubscribeAuth = subscribeToResolvedUser((user) => {
       unsubscribeConfig();
 
-      if (!user || user.email !== ADMIN_EMAIL) {
+      if (!user || normalizeEmail(user.email) !== ADMIN_EMAIL) {
         callback(defaultConfig);
         return;
       }
@@ -70,7 +71,7 @@ export const platformMessagingService = {
 
   ensureConfig: async (debugContext?: SaveDebugContext) => {
     const user = await waitForCurrentUser({ debugContext });
-    if (!user || user.email !== ADMIN_EMAIL) return;
+    if (!user || normalizeEmail(user.email) !== ADMIN_EMAIL) return;
 
     const docRef = doc(db, 'platform_settings', DOC_ID);
     const existing = await savePipelineService.withTimeout(getDoc(docRef), {
@@ -101,7 +102,7 @@ export const platformMessagingService = {
 
   saveConfig: async (updates: Partial<PlatformMessagingConfig>, debugContext?: SaveDebugContext) => {
     const user = await waitForCurrentUser({ debugContext });
-    if (!user || user.email !== ADMIN_EMAIL) {
+    if (!user || normalizeEmail(user.email) !== ADMIN_EMAIL) {
       throw new Error('Only the platform admin can update messaging providers.');
     }
 

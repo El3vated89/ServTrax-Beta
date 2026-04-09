@@ -20,6 +20,7 @@ export interface UserProfile {
 const PLATFORM_ADMIN_EMAIL = 'thomaslmiller89@gmail.com';
 const TEAM_PERMISSION_KEYS = ['route_access', 'customer_access', 'expense_entry_access', 'job_interaction_access'] as const;
 export type TeamPermissionKey = typeof TEAM_PERMISSION_KEYS[number];
+const normalizeEmail = (value?: string | null) => (value || '').trim().toLowerCase();
 
 export const userProfileService = {
   getCurrentUserProfile: async (): Promise<UserProfile | null> => {
@@ -76,7 +77,7 @@ export const userProfileService = {
         email: user.email || '',
         name: user.displayName || '',
         phone: '',
-        role: user.email === PLATFORM_ADMIN_EMAIL ? 'admin' : 'owner',
+        role: normalizeEmail(user.email) === PLATFORM_ADMIN_EMAIL ? 'admin' : 'owner',
         permissions: [],
         team_memberships: [],
         active: true,
@@ -89,7 +90,7 @@ export const userProfileService = {
       await savePipelineService.withTimeout(updateDoc(docRef, {
         email: user.email || docSnap.data().email || '',
         name: user.displayName || docSnap.data().name || '',
-        role: user.email === PLATFORM_ADMIN_EMAIL ? 'admin' : (docSnap.data().role || 'owner'),
+        role: normalizeEmail(user.email) === PLATFORM_ADMIN_EMAIL ? 'admin' : (docSnap.data().role || 'owner'),
         active: true,
         updated_at: serverTimestamp(),
       }), {
@@ -123,7 +124,7 @@ export const userProfileService = {
         email: user.email || '',
         name: updates.name ?? user.displayName ?? '',
         phone: updates.phone ?? '',
-        role: user.email === PLATFORM_ADMIN_EMAIL ? 'admin' : 'owner',
+        role: normalizeEmail(user.email) === PLATFORM_ADMIN_EMAIL ? 'admin' : 'owner',
         permissions: [],
         team_memberships: [],
         active: true,
@@ -138,7 +139,8 @@ export const userProfileService = {
   },
 
   isPlatformAdmin: (profile?: UserProfile | null) => {
-    const email = (auth.currentUser?.email || profile?.email || '').trim().toLowerCase();
+    if (profile?.role === 'admin') return true;
+    const email = normalizeEmail(auth.currentUser?.email || profile?.email || '');
     return email === PLATFORM_ADMIN_EMAIL;
   },
 
