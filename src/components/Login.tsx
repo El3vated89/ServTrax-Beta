@@ -1,13 +1,25 @@
+import { useState } from 'react';
 import { LogIn, ShieldCheck } from 'lucide-react';
-import { signInWithPopup } from 'firebase/auth';
+import { signInWithRedirect } from 'firebase/auth';
 import { auth, googleProvider } from '../firebase';
 
 export default function Login() {
+  const [isSigningIn, setIsSigningIn] = useState(false);
+  const [errorMessage, setErrorMessage] = useState('');
+
   const handleLogin = async () => {
+    setErrorMessage('');
+    setIsSigningIn(true);
     try {
-      await signInWithPopup(auth, googleProvider);
+      await signInWithRedirect(auth, googleProvider);
     } catch (error) {
       console.error('Login failed:', error);
+      setErrorMessage(
+        error instanceof Error && error.message
+          ? error.message
+          : 'Sign-in failed. Please try again.'
+      );
+      setIsSigningIn(false);
     }
   };
 
@@ -30,13 +42,20 @@ export default function Login() {
       <div className="mt-8 sm:mx-auto sm:w-full sm:max-w-md px-4">
         <div className="bg-white py-8 px-4 shadow sm:rounded-lg sm:px-10 border border-gray-100">
           <div className="space-y-6">
+            {errorMessage && (
+              <div className="rounded-2xl border border-red-100 bg-red-50 px-4 py-3">
+                <p className="text-sm font-bold text-red-700">{errorMessage}</p>
+              </div>
+            )}
+
             <div>
               <button
                 onClick={handleLogin}
-                className="w-full flex justify-center py-3 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transition-colors"
+                disabled={isSigningIn}
+                className="w-full flex justify-center py-3 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
               >
                 <LogIn className="w-5 h-5 mr-2" />
-                Sign in with Google
+                {isSigningIn ? 'Redirecting to Google...' : 'Sign in with Google'}
               </button>
             </div>
             
@@ -50,6 +69,10 @@ export default function Login() {
                 </span>
               </div>
             </div>
+
+            <p className="text-center text-xs font-medium text-gray-500">
+              Sign-in opens a standard Google page and returns you to ServTrax automatically.
+            </p>
           </div>
         </div>
       </div>
