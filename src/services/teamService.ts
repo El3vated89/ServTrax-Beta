@@ -15,6 +15,7 @@ import { subscribeToResolvedUser, waitForCurrentUser } from './authSessionServic
 import { localFallbackStore } from './localFallbackStore';
 import { savePipelineService } from './savePipelineService';
 import { cloudBackedLocalIdService } from './cloudBackedLocalIdService';
+import { cloudTruthService } from './cloudTruthService';
 
 export type TeamMemberRole = 'crew_member' | 'crew_lead';
 export type TeamAccountStatus = 'pending' | 'active' | 'inactive';
@@ -202,15 +203,8 @@ export const teamService = {
       await syncLinkedUserProfile(ref.id, member);
       return ref;
     } catch (error) {
-      console.error('Primary team member save failed, saving locally instead:', error);
-      const localId = localFallbackStore.upsertRecord<LocalTeamMember>(LOCAL_FALLBACK_NAMESPACE, user.uid, {
-        id: localFallbackStore.createLocalId(LOCAL_FALLBACK_NAMESPACE),
-        ...member,
-        ownerId: user.uid,
-        created_at: toClientTimestamp() as any,
-        updated_at: toClientTimestamp() as any,
-      });
-      return { id: localId };
+      console.error('Primary team member save failed:', error);
+      throw cloudTruthService.buildCreateError('Team member');
     }
   },
 
@@ -226,12 +220,7 @@ export const teamService = {
       );
 
       if (shouldUseLocalFallback) {
-        localFallbackStore.updateRecord<LocalTeamMember>(LOCAL_FALLBACK_NAMESPACE, user.uid, id, {
-          ...updates,
-          updated_at: toClientTimestamp() as any,
-          _local_deleted: false,
-        });
-        return;
+        throw cloudTruthService.buildUnsyncedRecordError('Team member');
       }
 
       await savePipelineService.withTimeout(
@@ -245,26 +234,8 @@ export const teamService = {
       );
       await syncLinkedUserProfile(id, updates);
     } catch (error) {
-      console.error('Primary team member update failed, updating local fallback instead:', error);
-      const cachedMember = teamCache.get(id);
-      localFallbackStore.upsertRecord<LocalTeamMember>(LOCAL_FALLBACK_NAMESPACE, user.uid, {
-        ...(cachedMember || {
-          id,
-          ownerId: user.uid,
-          name: updates.name || '',
-          email: updates.email || '',
-          role: updates.role || 'crew_member',
-          account_status: updates.account_status || 'pending',
-          route_access: updates.route_access ?? true,
-          customer_access: updates.customer_access ?? false,
-          expense_entry_access: updates.expense_entry_access ?? false,
-          job_interaction_access: updates.job_interaction_access ?? true,
-          created_at: toClientTimestamp() as any,
-        }),
-        ...updates,
-        updated_at: toClientTimestamp() as any,
-        _local_deleted: false,
-      } as LocalTeamMember);
+      console.error('Primary team member update failed:', error);
+      throw cloudTruthService.buildUpdateError('Team member');
     }
   },
 };

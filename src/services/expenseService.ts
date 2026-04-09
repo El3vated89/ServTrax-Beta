@@ -11,7 +11,6 @@ import {
 import { db } from '../firebase';
 import { handleFirestoreError, OperationType } from './verificationService';
 import { subscribeToResolvedUser, waitForCurrentUser } from './authSessionService';
-import { localFallbackStore } from './localFallbackStore';
 import { savePipelineService } from './savePipelineService';
 import { cloudBackedLocalIdService } from './cloudBackedLocalIdService';
 import { cloudTruthService } from './cloudTruthService';
@@ -46,8 +45,6 @@ export interface ExpenseRecord {
 }
 
 const COLLECTION_NAME = 'expenses';
-const LOCAL_FALLBACK_NAMESPACE = 'expenses';
-
 export const expenseService = {
   subscribeToExpenses: (callback: (expenses: ExpenseRecord[]) => void) => {
     let unsubscribeExpenses = () => {};
@@ -70,7 +67,7 @@ export const expenseService = {
           emit();
         },
         (error) => {
-          console.error('Primary expense subscription failed, using local fallback only:', error);
+          console.error('Primary expense subscription failed:', error);
           primaryExpenses = [];
           emit();
         }
@@ -100,14 +97,7 @@ export const expenseService = {
         }
       );
     } catch (error) {
-      console.error('Primary expense save failed, saving locally instead:', error);
-      localFallbackStore.upsertRecord<ExpenseRecord>(LOCAL_FALLBACK_NAMESPACE, user.uid, {
-        id: localFallbackStore.createLocalId(LOCAL_FALLBACK_NAMESPACE),
-        ...expense,
-        ownerId: user.uid,
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-      });
+      console.error('Primary expense save failed:', error);
       throw cloudTruthService.buildCreateError('Expense');
     }
   },
@@ -137,11 +127,7 @@ export const expenseService = {
         }
       );
     } catch (error) {
-      console.error('Primary expense update failed, updating local fallback instead:', error);
-      localFallbackStore.updateRecord<ExpenseRecord>(LOCAL_FALLBACK_NAMESPACE, user.uid, id, {
-        ...updates,
-        updated_at: new Date().toISOString(),
-      });
+      console.error('Primary expense update failed:', error);
       throw cloudTruthService.buildUpdateError('Expense');
     }
   },

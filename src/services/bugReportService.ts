@@ -17,6 +17,7 @@ import { handleFirestoreError, OperationType } from './verificationService';
 import { mediaUploadService } from './mediaUploadService';
 import { localFallbackStore } from './localFallbackStore';
 import { SaveDebugContext, savePipelineService } from './savePipelineService';
+import { cloudTruthService } from './cloudTruthService';
 
 export type BugReportCategory =
   | 'ui_layout'
@@ -281,21 +282,8 @@ export const bugReportService = {
           if (debugContext) {
             savePipelineService.logError(debugContext, 'fallback_write_failed', fallbackError);
           }
-          console.error('User-doc bug report fallback failed, saving locally instead:', fallbackError);
-          const localId = localFallbackStore.upsertRecord(LOCAL_FALLBACK_NAMESPACE, user.uid, {
-            id: localFallbackStore.createLocalId(LOCAL_FALLBACK_NAMESPACE),
-            ...reportPayload,
-            created_at: timestamp,
-            updated_at: timestamp,
-          });
-
-          if (debugContext) {
-            savePipelineService.log(debugContext, 'fallback_write_succeeded', localId);
-          }
-
-          return {
-            id: localId,
-          };
+          console.error('User-doc bug report fallback failed:', fallbackError);
+          throw cloudTruthService.buildCreateError('Bug report');
         }
       }
     } catch (error) {
@@ -306,20 +294,16 @@ export const bugReportService = {
   subscribeToOwnBugReports: (callback: (reports: BugReport[]) => void) => {
     let unsubscribeReports = () => {};
     let unsubscribeFallbacks = () => {};
-    let unsubscribeLocal = () => {};
     let primaryReports: BugReport[] = [];
     let fallbackReports: BugReport[] = [];
-    let localReports: BugReport[] = [];
 
-    const emit = () => callback(sortReports([...localReports, ...fallbackReports, ...primaryReports]));
+    const emit = () => callback(sortReports([...fallbackReports, ...primaryReports]));
 
     const unsubscribeAuth = auth.onAuthStateChanged((user) => {
       unsubscribeReports();
       unsubscribeFallbacks();
-      unsubscribeLocal();
       primaryReports = [];
       fallbackReports = [];
-      localReports = [];
 
       if (!user) {
         callback([]);
@@ -350,16 +334,11 @@ export const bugReportService = {
         }
       );
 
-      unsubscribeLocal = localFallbackStore.subscribeToRecords<any>(LOCAL_FALLBACK_NAMESPACE, user.uid, (records) => {
-        localReports = records.map((record) => mapLocalReport(user.uid, record));
-        emit();
-      });
     });
 
     return () => {
       unsubscribeReports();
       unsubscribeFallbacks();
-      unsubscribeLocal();
       unsubscribeAuth();
     };
   },
@@ -367,10 +346,8 @@ export const bugReportService = {
   subscribeToAllBugReports: (callback: (reports: BugReport[]) => void) => {
     let primaryReports: BugReport[] = [];
     let fallbackReports: BugReport[] = [];
-    let localReports: BugReport[] = [];
-    let unsubscribeLocal = () => {};
 
-    const emit = () => callback(sortReports([...localReports, ...fallbackReports, ...primaryReports]));
+    const emit = () => callback(sortReports([...fallbackReports, ...primaryReports]));
 
     const unsubscribePrimary = onSnapshot(
       query(collection(db, COLLECTION_NAME), orderBy('created_at', 'desc')),
@@ -396,24 +373,9 @@ export const bugReportService = {
       }
     );
 
-    const unsubscribeAuth = auth.onAuthStateChanged((user) => {
-      unsubscribeLocal();
-      localReports = [];
-      emit();
-
-      if (!user) return;
-
-      unsubscribeLocal = localFallbackStore.subscribeToRecords<any>(LOCAL_FALLBACK_NAMESPACE, user.uid, (records) => {
-        localReports = records.map((record) => mapLocalReport(user.uid, record));
-        emit();
-      });
-    });
-
     return () => {
       unsubscribePrimary();
       unsubscribeFallbacks();
-      unsubscribeLocal();
-      unsubscribeAuth();
     };
   },
 
@@ -423,11 +385,7 @@ export const bugReportService = {
 
     try {
       if (localFallbackStore.isLocalId(reportId, LOCAL_FALLBACK_NAMESPACE)) {
-        localFallbackStore.updateRecord<any>(LOCAL_FALLBACK_NAMESPACE, user.uid, reportId, {
-          status,
-          updated_at: createClientTimestamp(),
-        });
-        return;
+        throw cloudTruthService.buildUnsyncedRecordError('Bug report');
       }
 
       if (reportId.startsWith('fallback:')) {

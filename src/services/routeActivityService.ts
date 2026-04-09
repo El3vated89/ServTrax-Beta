@@ -148,26 +148,8 @@ export const routeActivityService = {
         created_at: serverTimestamp(),
       });
     } catch (error) {
-      console.error('Primary route activity save failed, saving locally instead:', error);
-      const timestamp = toClientTimestamp();
-      const localId = localFallbackStore.upsertRecord<LocalRouteActivityLog>(LOCAL_FALLBACK_NAMESPACE, user.uid, {
-        id: localFallbackStore.createLocalId(LOCAL_FALLBACK_NAMESPACE),
-        ownerId: user.uid,
-        route_id: route.id,
-        route_stop_id: stop?.id || '',
-        template_id: route.template_id || '',
-        route_name_snapshot: route.template_name || route.name,
-        route_run_label_snapshot: route.route_run_label || '',
-        assigned_team_name_snapshot: route.assigned_team_name_snapshot || '',
-        stop_customer_name_snapshot: stop?.customer_name_snapshot || '',
-        event_type: eventType,
-        actor_user_id: actor.userId,
-        actor_name: actor.name,
-        summary,
-        occurred_at: timestamp as any,
-        created_at: timestamp as any,
-      });
-      return { id: localId };
+      console.error('Primary route activity save failed:', error);
+      return null;
     }
   },
 };

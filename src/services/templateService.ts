@@ -3,6 +3,7 @@ import { collection, addDoc, onSnapshot, query, where, serverTimestamp, updateDo
 import { subscribeToResolvedUser, waitForCurrentUser } from './authSessionService';
 import { localFallbackStore } from './localFallbackStore';
 import { cloudBackedLocalIdService } from './cloudBackedLocalIdService';
+import { cloudTruthService } from './cloudTruthService';
 
 export interface MessageTemplate {
   id?: string;
@@ -139,14 +140,8 @@ export const templateService = {
     try {
       return await addDoc(collection(db, COLLECTION_NAME), newTemplate);
     } catch (error) {
-      console.error('Primary message template save failed, saving locally instead:', error);
-      const localId = localFallbackStore.upsertRecord<LocalMessageTemplate>(LOCAL_FALLBACK_NAMESPACE, user.uid, {
-        id: localFallbackStore.createLocalId(LOCAL_FALLBACK_NAMESPACE),
-        ...template,
-        ownerId: user.uid,
-        created_at: toClientTimestamp() as any,
-      });
-      return { id: localId };
+      console.error('Primary message template save failed:', error);
+      throw cloudTruthService.buildCreateError('Message template');
     }
   },
 
@@ -161,29 +156,14 @@ export const templateService = {
       );
 
       if (shouldUseLocalFallback) {
-        localFallbackStore.updateRecord<LocalMessageTemplate>(LOCAL_FALLBACK_NAMESPACE, user.uid, id, {
-          ...template,
-          _local_deleted: false,
-        });
-        return;
+        throw cloudTruthService.buildUnsyncedRecordError('Message template');
       }
 
       const templateRef = doc(db, COLLECTION_NAME, id);
       await updateDoc(templateRef, template);
     } catch (error) {
-      console.error('Primary message template update failed, updating local fallback instead:', error);
-      const cachedTemplate = templateCache.get(id);
-      localFallbackStore.upsertRecord<LocalMessageTemplate>(LOCAL_FALLBACK_NAMESPACE, user.uid, {
-        ...(cachedTemplate || {
-          id,
-          ownerId: user.uid,
-          name: template.name || '',
-          content: template.content || '',
-          created_at: toClientTimestamp() as any,
-        }),
-        ...template,
-        _local_deleted: false,
-      } as LocalMessageTemplate);
+      console.error('Primary message template update failed:', error);
+      throw cloudTruthService.buildUpdateError('Message template');
     }
   },
 
@@ -198,26 +178,14 @@ export const templateService = {
       );
 
       if (shouldUseLocalFallback) {
-        localFallbackStore.removeRecord<LocalMessageTemplate>(LOCAL_FALLBACK_NAMESPACE, user.uid, id);
-        templateCache.delete(id);
-        return;
+        throw cloudTruthService.buildUnsyncedRecordError('Message template');
       }
 
       const templateRef = doc(db, COLLECTION_NAME, id);
       await deleteDoc(templateRef);
     } catch (error) {
-      console.error('Primary message template delete failed, hiding it locally instead:', error);
-      const cachedTemplate = templateCache.get(id);
-      localFallbackStore.upsertRecord<LocalMessageTemplate>(LOCAL_FALLBACK_NAMESPACE, user.uid, {
-        ...(cachedTemplate || {
-          id,
-          ownerId: user.uid,
-          name: '',
-          content: '',
-          created_at: toClientTimestamp() as any,
-        }),
-        _local_deleted: true,
-      } as LocalMessageTemplate);
+      console.error('Primary message template delete failed:', error);
+      throw cloudTruthService.buildDeleteError('Message template');
     }
   }
 };

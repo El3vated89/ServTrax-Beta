@@ -91,7 +91,7 @@ describe('core cloud-truth save handling', () => {
     vi.useRealTimers();
   });
 
-  it('stores a local backup and rejects when customer creation stalls', async () => {
+  it('does not store a local backup when customer creation stalls', async () => {
     addDoc.mockImplementation(() => never());
 
     const promise = customerService.addCustomer({
@@ -109,17 +109,10 @@ describe('core cloud-truth save handling', () => {
 
     await vi.advanceTimersByTimeAsync(15001);
     await rejection;
-    expect(readLocalFallback<any>('customers')).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          name: 'Acme',
-          city: 'Tampa',
-        }),
-      ])
-    );
+    expect(readLocalFallback<any>('customers')).toEqual([]);
   });
 
-  it('stores a local backup and rejects when customer updates stall', async () => {
+  it('does not store a local backup when customer updates stall', async () => {
     updateDoc.mockImplementation(() => never());
 
     const promise = customerService.updateCustomer('cust-1', {
@@ -131,18 +124,10 @@ describe('core cloud-truth save handling', () => {
     await vi.advanceTimersByTimeAsync(15001);
     await rejection;
 
-    expect(readLocalFallback<any>('customers')).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          id: 'cust-1',
-          name: 'Updated Client',
-          phone: '5550000000',
-        }),
-      ])
-    );
+    expect(readLocalFallback<any>('customers')).toEqual([]);
   });
 
-  it('stores a local backup and rejects when service plan creation stalls', async () => {
+  it('does not store a local backup when service plan creation stalls', async () => {
     addDoc.mockImplementation(() => never());
 
     const promise = servicePlanService.addServicePlan({
@@ -158,17 +143,10 @@ describe('core cloud-truth save handling', () => {
 
     await vi.advanceTimersByTimeAsync(15001);
     await rejection;
-    expect(readLocalFallback<any>('service_plans')).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          name: 'Weekly Mow',
-          billing_frequency: 'weekly',
-        }),
-      ])
-    );
+    expect(readLocalFallback<any>('service_plans')).toEqual([]);
   });
 
-  it('stores a local backup and rejects when job creation stalls', async () => {
+  it('does not store a local backup when job creation stalls', async () => {
     addDoc.mockImplementation(() => never());
 
     const promise = jobService.addJob({
@@ -191,17 +169,10 @@ describe('core cloud-truth save handling', () => {
 
     await vi.advanceTimersByTimeAsync(15001);
     await rejection;
-    expect(readLocalFallback<any>('jobs')).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          customerId: 'cust-1',
-          service_snapshot: 'Mowing',
-        }),
-      ])
-    );
+    expect(readLocalFallback<any>('jobs')).toEqual([]);
   });
 
-  it('stores a local backup and rejects when job updates stall', async () => {
+  it('does not store a local backup when job updates stall', async () => {
     updateDoc.mockImplementation(() => never());
 
     const promise = jobService.updateJob('job-1', {
@@ -213,18 +184,10 @@ describe('core cloud-truth save handling', () => {
     await vi.advanceTimersByTimeAsync(15001);
     await rejection;
 
-    expect(readLocalFallback<any>('jobs')).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          id: 'job-1',
-          internal_notes: 'Updated notes',
-          status: 'delayed',
-        }),
-      ])
-    );
+    expect(readLocalFallback<any>('jobs')).toEqual([]);
   });
 
-  it('stores a local backup and rejects when expense creation stalls', async () => {
+  it('does not store a local backup when expense creation stalls', async () => {
     addDoc.mockImplementation(() => never());
 
     const promise = expenseService.addExpense({
@@ -243,13 +206,6 @@ describe('core cloud-truth save handling', () => {
 
     await vi.advanceTimersByTimeAsync(15001);
     await rejection;
-    expect(readLocalFallback<any>('expenses')).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          title: 'Fuel',
-          amount: 42,
-        }),
-      ])
-    );
+    expect(readLocalFallback<any>('expenses')).toEqual([]);
   });
 });

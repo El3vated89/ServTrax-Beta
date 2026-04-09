@@ -4,6 +4,7 @@ import { RouteTemplate } from '../modules/routes/types';
 import { subscribeToResolvedUser, waitForCurrentUser } from './authSessionService';
 import { localFallbackStore } from './localFallbackStore';
 import { cloudBackedLocalIdService } from './cloudBackedLocalIdService';
+import { cloudTruthService } from './cloudTruthService';
 
 const COLLECTION_NAME = 'route_templates';
 const DEFAULT_MAX_STOPS_PER_RUN = 15;
@@ -130,16 +131,8 @@ export const routeTemplateService = {
         updated_at: serverTimestamp(),
       });
     } catch (error) {
-      console.error('Primary route template save failed, saving locally instead:', error);
-      const createdAt = toClientTimestamp();
-      const localId = localFallbackStore.upsertRecord<LocalRouteTemplate>(LOCAL_FALLBACK_NAMESPACE, user.uid, {
-        id: localFallbackStore.createLocalId(LOCAL_FALLBACK_NAMESPACE),
-        ...normalizeTemplate(template),
-        ownerId: user.uid,
-        created_at: createdAt as any,
-        updated_at: createdAt as any,
-      });
-      return { id: localId };
+      console.error('Primary route template save failed:', error);
+      throw cloudTruthService.buildCreateError('Route template');
     }
   },
 
@@ -162,35 +155,12 @@ export const routeTemplateService = {
       );
 
       if (shouldUseLocalFallback) {
-        localFallbackStore.updateRecord<LocalRouteTemplate>(LOCAL_FALLBACK_NAMESPACE, user.uid, id, {
-          ...nextData,
-          updated_at: toClientTimestamp() as any,
-          _local_deleted: false,
-        });
-        return;
+        throw cloudTruthService.buildUnsyncedRecordError('Route template');
       }
       return await updateDoc(docRef, nextData);
     } catch (error) {
-      console.error('Primary route template update failed, updating local fallback instead:', error);
-      const cachedTemplate = templateCache.get(id);
-      localFallbackStore.upsertRecord<LocalRouteTemplate>(LOCAL_FALLBACK_NAMESPACE, user.uid, {
-        ...(cachedTemplate || {
-          id,
-          ownerId: user.uid,
-          name: updates.name || 'Route Template',
-          mode: (updates.mode as any) || 'custom',
-          cadence: (updates.cadence as any) || 'manual',
-          include_overdue: updates.include_overdue ?? true,
-          include_skipped: updates.include_skipped ?? true,
-          include_delayed: updates.include_delayed ?? true,
-        }),
-        ...updates,
-        preferred_day: updates.preferred_day ?? cachedTemplate?.preferred_day ?? null,
-        service_area: updates.service_area?.trim() || cachedTemplate?.service_area || '',
-        max_stops_per_run: Math.min(ABSOLUTE_MAX_STOPS_PER_RUN, Math.max(1, updates.max_stops_per_run || cachedTemplate?.max_stops_per_run || DEFAULT_MAX_STOPS_PER_RUN)),
-        updated_at: toClientTimestamp() as any,
-        _local_deleted: false,
-      } as LocalRouteTemplate);
+      console.error('Primary route template update failed:', error);
+      throw cloudTruthService.buildUpdateError('Route template');
     }
   },
 
@@ -205,28 +175,12 @@ export const routeTemplateService = {
       );
 
       if (shouldUseLocalFallback) {
-        localFallbackStore.removeRecord<LocalRouteTemplate>(LOCAL_FALLBACK_NAMESPACE, user.uid, id);
-        templateCache.delete(id);
-        return;
+        throw cloudTruthService.buildUnsyncedRecordError('Route template');
       }
       return await deleteDoc(doc(db, COLLECTION_NAME, id));
     } catch (error) {
-      console.error('Primary route template delete failed, hiding it locally instead:', error);
-      const cachedTemplate = templateCache.get(id);
-      localFallbackStore.upsertRecord<LocalRouteTemplate>(LOCAL_FALLBACK_NAMESPACE, user.uid, {
-        ...(cachedTemplate || {
-          id,
-          ownerId: user.uid,
-          name: 'Route Template',
-          mode: 'custom',
-          cadence: 'manual',
-          include_overdue: true,
-          include_skipped: true,
-          include_delayed: true,
-        }),
-        updated_at: toClientTimestamp() as any,
-        _local_deleted: true,
-      } as LocalRouteTemplate);
+      console.error('Primary route template delete failed:', error);
+      throw cloudTruthService.buildDeleteError('Route template');
     }
   },
 };

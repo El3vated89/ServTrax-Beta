@@ -1,10 +1,18 @@
 const LOCAL_FALLBACK_EVENT = 'servtrax-local-fallback-updated';
+const LOCAL_RUNTIME_WRITE_ERROR =
+  'Local browser fallback writes are disabled. The shared database is the only live source of truth.';
 
 const canUseLocalStorage = () =>
   typeof window !== 'undefined' && typeof window.localStorage !== 'undefined';
 
 const buildStorageKey = (namespace: string, ownerId: string) =>
   `servtrax:fallback:${namespace}:${ownerId}`;
+
+const persistRecords = <T>(namespace: string, ownerId: string, records: T[]) => {
+  if (!canUseLocalStorage()) return;
+  window.localStorage.setItem(buildStorageKey(namespace, ownerId), JSON.stringify(records));
+  emitLocalFallbackUpdate(namespace, ownerId);
+};
 
 const emitLocalFallbackUpdate = (namespace: string, ownerId: string) => {
   if (typeof window === 'undefined') return;
@@ -45,9 +53,7 @@ export const localFallbackStore = {
   },
 
   writeRecords: <T>(namespace: string, ownerId: string, records: T[]) => {
-    if (!canUseLocalStorage()) return;
-    window.localStorage.setItem(buildStorageKey(namespace, ownerId), JSON.stringify(records));
-    emitLocalFallbackUpdate(namespace, ownerId);
+    persistRecords(namespace, ownerId, records);
   },
 
   upsertRecord: <T extends { id?: string }>(
@@ -55,14 +61,7 @@ export const localFallbackStore = {
     ownerId: string,
     record: T
   ) => {
-    const existingRecords = localFallbackStore.readRecords<T>(namespace, ownerId);
-    const recordId = record.id || createLocalId(namespace);
-    const nextRecords = [
-      ...existingRecords.filter((entry) => entry.id !== recordId),
-      { ...record, id: recordId },
-    ];
-    localFallbackStore.writeRecords(namespace, ownerId, nextRecords);
-    return recordId;
+    throw new Error(LOCAL_RUNTIME_WRITE_ERROR);
   },
 
   updateRecord: <T extends { id?: string }>(
@@ -71,48 +70,17 @@ export const localFallbackStore = {
     recordId: string,
     updates: Partial<T>
   ) => {
-    const existingRecords = localFallbackStore.readRecords<T>(namespace, ownerId);
-    const nextRecords = existingRecords.map((entry) =>
-      entry.id === recordId ? ({ ...entry, ...updates } as T) : entry
-    );
-    localFallbackStore.writeRecords(namespace, ownerId, nextRecords);
+    throw new Error(LOCAL_RUNTIME_WRITE_ERROR);
   },
 
   removeRecord: <T extends { id?: string }>(namespace: string, ownerId: string, recordId: string) => {
     const existingRecords = localFallbackStore.readRecords<T>(namespace, ownerId);
     const nextRecords = existingRecords.filter((entry) => entry.id !== recordId);
-    localFallbackStore.writeRecords(namespace, ownerId, nextRecords);
+    persistRecords(namespace, ownerId, nextRecords);
   },
 
   subscribeToRecords: <T>(namespace: string, ownerId: string, callback: (records: T[]) => void) => {
-    if (!canUseLocalStorage()) {
-      callback([]);
-      return () => {};
-    }
-
-    const emit = () => {
-      callback(localFallbackStore.readRecords<T>(namespace, ownerId));
-    };
-
-    const handleCustomEvent = (event: Event) => {
-      const detail = (event as CustomEvent<{ namespace?: string; ownerId?: string }>).detail;
-      if (!detail) return;
-      if (detail.namespace !== namespace || detail.ownerId !== ownerId) return;
-      emit();
-    };
-
-    const handleStorageEvent = (event: StorageEvent) => {
-      if (event.key !== buildStorageKey(namespace, ownerId)) return;
-      emit();
-    };
-
-    emit();
-    window.addEventListener(LOCAL_FALLBACK_EVENT, handleCustomEvent as EventListener);
-    window.addEventListener('storage', handleStorageEvent);
-
-    return () => {
-      window.removeEventListener(LOCAL_FALLBACK_EVENT, handleCustomEvent as EventListener);
-      window.removeEventListener('storage', handleStorageEvent);
-    };
+    callback([]);
+    return () => {};
   },
 };

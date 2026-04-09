@@ -1,7 +1,6 @@
 import { collection, addDoc, updateDoc, deleteDoc, doc, getDocs, query, where, serverTimestamp, onSnapshot } from 'firebase/firestore';
 import { db } from '../firebase';
 import { subscribeToResolvedUser, waitForCurrentUser } from './authSessionService';
-import { localFallbackStore } from './localFallbackStore';
 import { savePipelineService } from './savePipelineService';
 import { cloudBackedLocalIdService } from './cloudBackedLocalIdService';
 import { cloudTruthService } from './cloudTruthService';
@@ -34,37 +33,7 @@ export interface Customer {
 }
 
 const COLLECTION_NAME = 'customers';
-const LOCAL_FALLBACK_NAMESPACE = 'customers';
-type LocalCustomer = Customer & { _local_deleted?: boolean };
 const customerCache = new Map<string, Customer>();
-const toClientTimestamp = () => new Date().toISOString();
-
-const normalizeCustomerRecord = (ownerId: string, entry: Partial<LocalCustomer>): Customer => ({
-  id: entry.id,
-  ownerId,
-  name: entry.name || '',
-  phone: entry.phone || '',
-  email: entry.email || '',
-  street: entry.street || '',
-  line2: entry.line2 || '',
-  city: entry.city || '',
-  state: entry.state || '',
-  zip: entry.zip || '',
-  notes: entry.notes || '',
-  access_notes: entry.access_notes || '',
-  status: entry.status || 'active',
-  last_service_date: entry.last_service_date as any,
-  created_at: entry.created_at as any,
-  off_season_enabled: entry.off_season_enabled ?? false,
-  off_season_rules: entry.off_season_rules || [],
-  portal_enabled: entry.portal_enabled ?? false,
-  portal_token: entry.portal_token || '',
-  portal_plan_name_snapshot: entry.portal_plan_name_snapshot || '',
-  portal_persistent_allowed: entry.portal_persistent_allowed ?? false,
-  portal_show_history: entry.portal_show_history ?? false,
-  portal_show_payment_status: entry.portal_show_payment_status ?? false,
-  portal_show_quotes: entry.portal_show_quotes ?? false,
-});
 
 const mergeCustomers = (primaryCustomers: Customer[]) => {
   const merged = [...primaryCustomers].sort((left, right) => left.name.localeCompare(right.name));
@@ -95,18 +64,13 @@ export const customerService = {
       const q = query(collection(db, COLLECTION_NAME), where('ownerId', '==', user.uid));
       
       unsubscribeCustomers = onSnapshot(q, (snapshot) => {
-        primaryCustomers = snapshot.docs.map((entry) =>
-          normalizeCustomerRecord(
-            String(entry.data().ownerId || user.uid),
-            {
-              id: entry.id,
-              ...entry.data(),
-            } as Partial<LocalCustomer>
-          )
-        );
+        primaryCustomers = snapshot.docs.map((entry) => ({
+          id: entry.id,
+          ...entry.data(),
+        })) as Customer[];
         emit();
       }, (error) => {
-        console.error('Primary customer subscription failed, using local fallback only:', error);
+        console.error('Primary customer subscription failed:', error);
         primaryCustomers = [];
         emit();
       });
@@ -134,13 +98,7 @@ export const customerService = {
         }
       );
     } catch (error) {
-      console.error('Primary customer save failed, saving locally instead:', error);
-      localFallbackStore.upsertRecord<LocalCustomer>(LOCAL_FALLBACK_NAMESPACE, user.uid, {
-        id: localFallbackStore.createLocalId(LOCAL_FALLBACK_NAMESPACE),
-        ...customerData,
-        ownerId: user.uid,
-        created_at: toClientTimestamp() as any,
-      });
+      console.error('Primary customer save failed:', error);
       throw cloudTruthService.buildCreateError('Client');
     }
   },
@@ -176,24 +134,7 @@ export const customerService = {
         timeoutMessage: 'Customer update timed out while writing to the database.',
       });
     } catch (error) {
-      console.error('Primary customer update failed, updating local fallback instead:', error);
-      const cachedCustomer = customerCache.get(id);
-      const normalizedFallback = normalizeCustomerRecord(
-        user.uid,
-        {
-          id,
-          ...(cachedCustomer || {}),
-          ...data,
-        } as Partial<LocalCustomer>
-      );
-      localFallbackStore.upsertRecord<LocalCustomer>(LOCAL_FALLBACK_NAMESPACE, user.uid, {
-        ...(cachedCustomer || {
-          created_at: toClientTimestamp() as any,
-        }),
-        ...normalizedFallback,
-        id,
-        _local_deleted: false,
-      } as LocalCustomer);
+      console.error('Primary customer update failed:', error);
       throw cloudTruthService.buildUpdateError('Client');
     }
   },
@@ -216,25 +157,7 @@ export const customerService = {
         timeoutMessage: 'Customer delete timed out while writing to the database.',
       });
     } catch (error) {
-      console.error('Primary customer delete failed, hiding it locally instead:', error);
-      const cachedCustomer = customerCache.get(id);
-      localFallbackStore.upsertRecord<LocalCustomer>(LOCAL_FALLBACK_NAMESPACE, user.uid, {
-        ...(cachedCustomer || {
-          id,
-          ownerId: user.uid,
-          name: '',
-          phone: '',
-          email: '',
-          street: '',
-          city: '',
-          state: '',
-          zip: '',
-          notes: '',
-          status: 'active',
-          created_at: toClientTimestamp() as any,
-        }),
-        _local_deleted: true,
-      } as LocalCustomer);
+      console.error('Primary customer delete failed:', error);
       throw cloudTruthService.buildDeleteError('Client');
     }
   }

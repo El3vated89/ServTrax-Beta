@@ -14,7 +14,6 @@ import {
 import { auth, db } from '../firebase';
 import { Job, jobService } from './jobService';
 import { handleFirestoreError, OperationType } from './verificationService';
-import { localFallbackStore } from './localFallbackStore';
 import { subscribeToResolvedUser, waitForCurrentUser } from './authSessionService';
 import { SaveDebugContext, savePipelineService } from './savePipelineService';
 import { cloudBackedLocalIdService } from './cloudBackedLocalIdService';
@@ -48,7 +47,7 @@ export interface BillingRecord {
   notes?: string;
   created_at?: any;
   updated_at?: any;
-  storage_source?: 'primary' | 'fallback_user_doc' | 'local_storage';
+  storage_source?: 'primary' | 'fallback_user_doc';
   source_billing_record_id?: string;
 }
 
@@ -63,7 +62,7 @@ export interface PaymentEntry {
   note?: string;
   received_at: any;
   created_at?: any;
-  storage_source?: 'primary' | 'fallback_user_doc' | 'local_storage';
+  storage_source?: 'primary' | 'fallback_user_doc';
   source_billing_record_id?: string;
 }
 
@@ -81,9 +80,6 @@ const BILLING_COLLECTION = 'billing_records';
 const PAYMENT_COLLECTION = 'payment_entries';
 const FALLBACK_BILLING_FIELD = 'billing_record_fallbacks';
 const FALLBACK_PAYMENT_FIELD = 'payment_entry_fallbacks';
-const LOCAL_BILLING_NAMESPACE = 'billing_records';
-const LOCAL_PAYMENT_NAMESPACE = 'payment_entries';
-
 const toDate = (value: any) => {
   if (!value) return null;
   if (value instanceof Timestamp) return value.toDate();
@@ -143,47 +139,6 @@ const normalizeFallbackPaymentEntry = (ownerId: string, raw: any): PaymentEntry 
   received_at: raw.received_at || raw.created_at || null,
   created_at: raw.created_at,
   storage_source: 'fallback_user_doc',
-  source_billing_record_id: raw.source_billing_record_id || '',
-});
-const normalizeLocalBillingRecord = (ownerId: string, raw: any): BillingRecord => ({
-  id: raw.id,
-  ownerId,
-  customerId: raw.customerId || '',
-  customer_name_snapshot: raw.customer_name_snapshot || '',
-  label: raw.label || '',
-  billing_type: raw.billing_type || 'one_time',
-  billing_frequency: raw.billing_frequency || '',
-  status: raw.status || 'due',
-  source: raw.source || 'manual',
-  total_amount: Number(raw.total_amount || 0),
-  amount_paid: Number(raw.amount_paid || 0),
-  balance_due: Number(raw.balance_due || 0),
-  covered_job_ids: Array.isArray(raw.covered_job_ids) ? raw.covered_job_ids : [],
-  covered_service_count: Number(raw.covered_service_count || 0),
-  auto_bill_enabled: !!raw.auto_bill_enabled,
-  billing_period_key: raw.billing_period_key || '',
-  billing_period_start: raw.billing_period_start || null,
-  billing_period_end: raw.billing_period_end || null,
-  due_date: raw.due_date || null,
-  paid_at: raw.paid_at || null,
-  notes: raw.notes || '',
-  created_at: raw.created_at,
-  updated_at: raw.updated_at,
-  storage_source: 'local_storage',
-  source_billing_record_id: raw.source_billing_record_id || '',
-});
-const normalizeLocalPaymentEntry = (ownerId: string, raw: any): PaymentEntry => ({
-  id: raw.id,
-  ownerId,
-  billing_record_id: raw.billing_record_id || raw.source_billing_record_id || '',
-  customerId: raw.customerId || '',
-  customer_name_snapshot: raw.customer_name_snapshot || '',
-  amount: Number(raw.amount || 0),
-  method: raw.method || 'other',
-  note: raw.note || '',
-  received_at: raw.received_at || raw.created_at || null,
-  created_at: raw.created_at,
-  storage_source: 'local_storage',
   source_billing_record_id: raw.source_billing_record_id || '',
 });
 const extractFallbackBillingRecords = (ownerId: string, data: any): BillingRecord[] =>
@@ -471,29 +426,7 @@ export const billingService = {
         if (debugContext) {
           savePipelineService.logError(debugContext, 'fallback_write_failed', fallbackError);
         }
-        console.error('User-doc billing fallback failed, saving locally instead:', fallbackError);
-        const localId = localFallbackStore.upsertRecord(LOCAL_BILLING_NAMESPACE, user.uid, {
-          id: localFallbackStore.createLocalId(LOCAL_BILLING_NAMESPACE),
-          ...fallbackRecord,
-          storage_source: 'local_storage',
-        });
-
-        try {
-          await syncCoveredJobs({
-            ...record,
-            id: localId,
-            ownerId: user.uid,
-            amount_paid: 0,
-            balance_due: totalAmount,
-            status,
-          });
-        } catch (syncError) {
-          console.error('Covered job sync failed after local billing fallback save:', syncError);
-        }
-
-        if (debugContext) {
-          savePipelineService.log(debugContext, 'fallback_write_succeeded', LOCAL_BILLING_NAMESPACE);
-        }
+        console.error('User-doc billing fallback failed:', fallbackError);
         throw cloudTruthService.buildCreateError('Billing record');
       }
     }
@@ -559,15 +492,7 @@ export const billingService = {
         }
       );
     } catch (error) {
-      console.error('Billing update failed, updating local fallback instead:', error);
-      localFallbackStore.updateRecord(LOCAL_BILLING_NAMESPACE, user.uid, id, {
-        ...updates,
-        due_date: serializeDateValue((updates as any).due_date),
-        billing_period_start: serializeDateValue((updates as any).billing_period_start),
-        billing_period_end: serializeDateValue((updates as any).billing_period_end),
-        paid_at: serializeDateValue((updates as any).paid_at),
-        updated_at: createClientTimestamp(),
-      });
+      console.error('Billing update failed:', error);
       throw cloudTruthService.buildUpdateError('Billing record');
     }
   },
@@ -615,34 +540,6 @@ export const billingService = {
         : false;
 
       if (billingRecord.id && shouldUseLocalFallback) {
-        localFallbackStore.upsertRecord(LOCAL_PAYMENT_NAMESPACE, user.uid, {
-          id: localFallbackStore.createLocalId(LOCAL_PAYMENT_NAMESPACE),
-          ownerId: user.uid,
-          billing_record_id: billingRecord.id,
-          customerId: record.customerId,
-          customer_name_snapshot: record.customer_name_snapshot,
-          amount: Number(record.amount || 0),
-          method: record.method,
-          note: record.note?.trim() || '',
-          received_at: serializeDateValue(record.received_at),
-          created_at: createClientTimestamp(),
-          source_billing_record_id: billingRecord.source_billing_record_id || billingRecord.id,
-        });
-
-        localFallbackStore.updateRecord(LOCAL_BILLING_NAMESPACE, user.uid, billingRecord.id, {
-          ...updates,
-          updated_at: createClientTimestamp(),
-        });
-
-        try {
-          await syncCoveredJobs({
-            ...billingRecord,
-            ...updates,
-          } as BillingRecord);
-        } catch (syncError) {
-          console.error('Covered job sync failed after local payment save:', syncError);
-        }
-
         throw cloudTruthService.buildUnsyncedRecordError('Payment');
       }
 
@@ -839,51 +736,7 @@ export const billingService = {
         if (debugContext) {
           savePipelineService.logError(debugContext, 'fallback_write_failed', fallbackError);
         }
-        console.error('User-doc payment fallback failed, saving locally instead:', fallbackError);
-        const localBillingId = billingRecord.id && localFallbackStore.isLocalId(billingRecord.id)
-          ? billingRecord.id
-          : localFallbackStore.upsertRecord(LOCAL_BILLING_NAMESPACE, user.uid, {
-              id: localFallbackStore.createLocalId(LOCAL_BILLING_NAMESPACE),
-              source_billing_record_id: mirroredBillingId,
-              ownerId: user.uid,
-              customerId: billingRecord.customerId,
-              customer_name_snapshot: billingRecord.customer_name_snapshot,
-              label: billingRecord.label,
-              billing_type: billingRecord.billing_type,
-              billing_frequency: billingRecord.billing_frequency,
-              status: nextStatus,
-              source: billingRecord.source,
-              total_amount: Number(billingRecord.total_amount || 0),
-              amount_paid: nextAmountPaid,
-              balance_due: nextBalanceDue,
-              covered_job_ids: billingRecord.covered_job_ids || [],
-              covered_service_count: Number(billingRecord.covered_service_count || 0),
-              auto_bill_enabled: !!billingRecord.auto_bill_enabled,
-              billing_period_key: billingRecord.billing_period_key || '',
-              billing_period_start: serializeDateValue(billingRecord.billing_period_start),
-              billing_period_end: serializeDateValue(billingRecord.billing_period_end),
-              due_date: serializeDateValue(billingRecord.due_date),
-              paid_at: nextStatus === 'paid' ? serializeDateValue(record.received_at) : serializeDateValue(billingRecord.paid_at),
-              notes: billingRecord.notes || '',
-              created_at: serializeDateValue(billingRecord.created_at) || fallbackTimestamp,
-              updated_at: fallbackTimestamp,
-              storage_source: 'local_storage',
-            });
-
-        localFallbackStore.updateRecord(LOCAL_BILLING_NAMESPACE, user.uid, localBillingId, {
-          ...updates,
-          updated_at: fallbackTimestamp,
-        });
-
-        localFallbackStore.upsertRecord(LOCAL_PAYMENT_NAMESPACE, user.uid, {
-          id: localFallbackStore.createLocalId(LOCAL_PAYMENT_NAMESPACE),
-          ...fallbackPaymentRecord,
-          billing_record_id: localBillingId,
-          storage_source: 'local_storage',
-        });
-        if (debugContext) {
-          savePipelineService.log(debugContext, 'fallback_write_succeeded', localBillingId);
-        }
+        console.error('User-doc payment fallback failed:', fallbackError);
         throw cloudTruthService.buildCreateError('Payment');
       }
 
@@ -1012,15 +865,7 @@ export const billingService = {
           if (debugContext) {
             savePipelineService.logError(debugContext, 'fallback_write_failed', fallbackError);
           }
-          console.error('User-doc manual payment fallback failed, saving locally instead:', fallbackError);
-          localFallbackStore.upsertRecord(LOCAL_PAYMENT_NAMESPACE, user.uid, {
-            id: localFallbackStore.createLocalId(LOCAL_PAYMENT_NAMESPACE),
-            ...paymentFallbackRecord,
-            storage_source: 'local_storage',
-          });
-          if (debugContext) {
-            savePipelineService.log(debugContext, 'fallback_write_succeeded', LOCAL_PAYMENT_NAMESPACE);
-          }
+          console.error('User-doc manual payment fallback failed:', fallbackError);
           throw cloudTruthService.buildCreateError('Payment');
         }
       }
@@ -1094,22 +939,7 @@ export const billingService = {
         if (debugContext) {
           savePipelineService.logError(debugContext, 'fallback_write_failed', fallbackError);
         }
-        console.error('User-doc manual payment save failed, saving locally instead:', fallbackError);
-        const localBillingId = localFallbackStore.upsertRecord(LOCAL_BILLING_NAMESPACE, user.uid, {
-          id: localFallbackStore.createLocalId(LOCAL_BILLING_NAMESPACE),
-          ...fallbackBillingRecord,
-          storage_source: 'local_storage',
-        });
-        localFallbackStore.upsertRecord(LOCAL_PAYMENT_NAMESPACE, user.uid, {
-          id: localFallbackStore.createLocalId(LOCAL_PAYMENT_NAMESPACE),
-          ...fallbackPaymentRecord,
-          billing_record_id: localBillingId,
-          storage_source: 'local_storage',
-        });
-
-        if (debugContext) {
-          savePipelineService.log(debugContext, 'fallback_write_succeeded', localBillingId);
-        }
+        console.error('User-doc manual payment save failed:', fallbackError);
         throw cloudTruthService.buildCreateError('Manual payment');
       }
     }

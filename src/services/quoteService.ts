@@ -2,7 +2,6 @@ import { collection, addDoc, updateDoc, deleteDoc, doc, query, where, serverTime
 import { db } from '../firebase';
 import { subscribeToResolvedUser, waitForCurrentUser } from './authSessionService';
 import { BillingFrequency } from './recurringService';
-import { localFallbackStore } from './localFallbackStore';
 import { cloudBackedLocalIdService } from './cloudBackedLocalIdService';
 import { cloudTruthService } from './cloudTruthService';
 
@@ -24,27 +23,7 @@ export interface Quote {
 }
 
 const COLLECTION_NAME = 'quotes';
-const LOCAL_FALLBACK_NAMESPACE = 'quotes';
-type LocalQuote = Quote & { _local_deleted?: boolean };
 const quoteCache = new Map<string, Quote>();
-const toClientTimestamp = () => new Date().toISOString();
-
-const normalizeLocalQuote = (ownerId: string, entry: Partial<LocalQuote>): Quote => ({
-  id: entry.id,
-  ownerId,
-  customerId: entry.customerId || '',
-  customer_name_snapshot: entry.customer_name_snapshot || '',
-  address_snapshot: entry.address_snapshot || '',
-  phone_snapshot: entry.phone_snapshot || '',
-  service_snapshot: entry.service_snapshot || '',
-  price_snapshot: entry.price_snapshot || 0,
-  billing_frequency: (entry.billing_frequency as BillingFrequency) || 'one-time',
-  status: entry.status || 'draft',
-  notes: entry.notes || '',
-  portal_visible: entry.portal_visible,
-  created_at: entry.created_at as any,
-  approved_at: entry.approved_at as any,
-});
 
 const mergeQuotes = (primaryQuotes: Quote[]) => {
   const merged = [...primaryQuotes];
@@ -81,7 +60,7 @@ export const quoteService = {
         })) as Quote[];
         emit();
       }, (error) => {
-        console.error('Primary quote subscription failed, using local fallback only:', error);
+        console.error('Primary quote subscription failed:', error);
         primaryQuotes = [];
         emit();
       });
@@ -104,13 +83,7 @@ export const quoteService = {
         created_at: serverTimestamp(),
       });
     } catch (error) {
-      console.error('Primary quote save failed, saving locally instead:', error);
-      localFallbackStore.upsertRecord<LocalQuote>(LOCAL_FALLBACK_NAMESPACE, user.uid, {
-        id: localFallbackStore.createLocalId(LOCAL_FALLBACK_NAMESPACE),
-        ...quoteData,
-        ownerId: user.uid,
-        created_at: toClientTimestamp() as any,
-      });
+      console.error('Primary quote save failed:', error);
       throw cloudTruthService.buildCreateError('Quote');
     }
   },
@@ -133,26 +106,7 @@ export const quoteService = {
 
       return await updateDoc(docRef, data);
     } catch (error) {
-      console.error('Primary quote update failed, updating local fallback instead:', error);
-      const cachedQuote = quoteCache.get(id);
-      localFallbackStore.upsertRecord<LocalQuote>(LOCAL_FALLBACK_NAMESPACE, user.uid, {
-        ...(cachedQuote || {
-          id,
-          ownerId: user.uid,
-          customerId: data.customerId || '',
-          customer_name_snapshot: data.customer_name_snapshot || '',
-          address_snapshot: data.address_snapshot || '',
-          phone_snapshot: data.phone_snapshot || '',
-          service_snapshot: data.service_snapshot || '',
-          price_snapshot: data.price_snapshot || 0,
-          billing_frequency: (data.billing_frequency as BillingFrequency) || 'one-time',
-          status: data.status || 'draft',
-          notes: data.notes || '',
-          created_at: toClientTimestamp() as any,
-        }),
-        ...data,
-        _local_deleted: false,
-      } as LocalQuote);
+      console.error('Primary quote update failed:', error);
       throw cloudTruthService.buildUpdateError('Quote');
     }
   },
@@ -175,25 +129,7 @@ export const quoteService = {
 
       return await deleteDoc(docRef);
     } catch (error) {
-      console.error('Primary quote delete failed, hiding it locally instead:', error);
-      const cachedQuote = quoteCache.get(id);
-      localFallbackStore.upsertRecord<LocalQuote>(LOCAL_FALLBACK_NAMESPACE, user.uid, {
-        ...(cachedQuote || {
-          id,
-          ownerId: user.uid,
-          customerId: '',
-          customer_name_snapshot: '',
-          address_snapshot: '',
-          phone_snapshot: '',
-          service_snapshot: '',
-          price_snapshot: 0,
-          billing_frequency: 'one-time',
-          status: 'draft',
-          notes: '',
-          created_at: toClientTimestamp() as any,
-        }),
-        _local_deleted: true,
-      } as LocalQuote);
+      console.error('Primary quote delete failed:', error);
       throw cloudTruthService.buildDeleteError('Quote');
     }
   },

@@ -1,8 +1,8 @@
 import { collection, addDoc, updateDoc, deleteDoc, doc, query, where, serverTimestamp, onSnapshot } from 'firebase/firestore';
 import { db, auth } from '../firebase';
 import { subscribeToResolvedUser, waitForCurrentUser } from './authSessionService';
-import { localFallbackStore } from './localFallbackStore';
 import { cloudBackedLocalIdService } from './cloudBackedLocalIdService';
+import { cloudTruthService } from './cloudTruthService';
 
 export interface Equipment {
   id?: string;
@@ -21,39 +21,9 @@ export interface Equipment {
 }
 
 const COLLECTION_NAME = 'equipment';
-const LOCAL_FALLBACK_NAMESPACE = 'equipment';
-type LocalEquipment = Equipment & { _local_deleted?: boolean };
 const equipmentCache = new Map<string, Equipment>();
-const toClientTimestamp = () => new Date().toISOString();
-
-const normalizeLocalEquipment = (ownerId: string, entry: Partial<LocalEquipment>): Equipment => ({
-  id: entry.id,
-  ownerId,
-  name: entry.name || '',
-  brand: entry.brand || '',
-  model: entry.model || '',
-  serial_number: entry.serial_number || '',
-  part_number: entry.part_number || '',
-  notes: entry.notes || '',
-  service_history: entry.service_history || [],
-  created_at: entry.created_at as any,
-});
-
-const mergeEquipment = (primaryEquipment: Equipment[], localEquipment: LocalEquipment[]) => {
-  const next = new Map<string, Equipment>();
-  primaryEquipment.forEach((entry) => {
-    if (!entry.id) return;
-    next.set(entry.id, entry);
-  });
-  localEquipment.forEach((entry) => {
-    if (!entry.id) return;
-    if (entry._local_deleted) {
-      next.delete(entry.id);
-      return;
-    }
-    next.set(entry.id, normalizeLocalEquipment(entry.ownerId, entry));
-  });
-  const merged = Array.from(next.values()).sort((left, right) => left.name.localeCompare(right.name));
+const mergeEquipment = (primaryEquipment: Equipment[]) => {
+  const merged = [...primaryEquipment].sort((left, right) => left.name.localeCompare(right.name));
   equipmentCache.clear();
   merged.forEach((entry) => {
     if (entry.id) equipmentCache.set(entry.id, entry);
@@ -64,17 +34,13 @@ const mergeEquipment = (primaryEquipment: Equipment[], localEquipment: LocalEqui
 export const equipmentService = {
   subscribeToEquipment: (callback: (equipment: Equipment[]) => void) => {
     let unsubscribeEquipment = () => {};
-    let unsubscribeLocal = () => {};
     let primaryEquipment: Equipment[] = [];
-    let localEquipment: LocalEquipment[] = [];
 
-    const emit = () => callback(mergeEquipment(primaryEquipment, localEquipment));
+    const emit = () => callback(mergeEquipment(primaryEquipment));
 
     const unsubscribeAuth = subscribeToResolvedUser((user) => {
       unsubscribeEquipment();
-      unsubscribeLocal();
       primaryEquipment = [];
-      localEquipment = [];
 
       if (!user) {
         equipmentCache.clear();
@@ -91,20 +57,14 @@ export const equipmentService = {
         })) as Equipment[];
         emit();
       }, (error) => {
-        console.error('Primary equipment subscription failed, using local fallback only:', error);
+        console.error('Primary equipment subscription failed:', error);
         primaryEquipment = [];
-        emit();
-      });
-
-      unsubscribeLocal = localFallbackStore.subscribeToRecords<LocalEquipment>(LOCAL_FALLBACK_NAMESPACE, user.uid, (records) => {
-        localEquipment = records;
         emit();
       });
     });
 
     return () => {
       unsubscribeEquipment();
-      unsubscribeLocal();
       unsubscribeAuth();
     };
   },
@@ -120,14 +80,8 @@ export const equipmentService = {
         created_at: serverTimestamp()
       });
     } catch (error) {
-      console.error('Primary equipment save failed, saving locally instead:', error);
-      const localId = localFallbackStore.upsertRecord<LocalEquipment>(LOCAL_FALLBACK_NAMESPACE, user.uid, {
-        id: localFallbackStore.createLocalId(LOCAL_FALLBACK_NAMESPACE),
-        ...equipmentData,
-        ownerId: user.uid,
-        created_at: toClientTimestamp() as any,
-      });
-      return { id: localId };
+      console.error('Primary equipment save failed:', error);
+      throw cloudTruthService.buildCreateError('Equipment');
     }
   },
 
@@ -143,32 +97,12 @@ export const equipmentService = {
       );
 
       if (shouldUseLocalFallback) {
-        localFallbackStore.updateRecord<LocalEquipment>(LOCAL_FALLBACK_NAMESPACE, user.uid, id, {
-          ...data,
-          _local_deleted: false,
-        });
-        return;
+        throw cloudTruthService.buildUnsyncedRecordError('Equipment');
       }
       return await updateDoc(docRef, data);
     } catch (error) {
-      console.error('Primary equipment update failed, updating local fallback instead:', error);
-      const cachedEquipment = equipmentCache.get(id);
-      localFallbackStore.upsertRecord<LocalEquipment>(LOCAL_FALLBACK_NAMESPACE, user.uid, {
-        ...(cachedEquipment || {
-          id,
-          ownerId: user.uid,
-          name: data.name || '',
-          brand: data.brand || '',
-          model: data.model || '',
-          serial_number: data.serial_number || '',
-          part_number: data.part_number || '',
-          notes: data.notes || '',
-          service_history: data.service_history || [],
-          created_at: toClientTimestamp() as any,
-        }),
-        ...data,
-        _local_deleted: false,
-      } as LocalEquipment);
+      console.error('Primary equipment update failed:', error);
+      throw cloudTruthService.buildUpdateError('Equipment');
     }
   },
 
@@ -184,29 +118,12 @@ export const equipmentService = {
       );
 
       if (shouldUseLocalFallback) {
-        localFallbackStore.removeRecord<LocalEquipment>(LOCAL_FALLBACK_NAMESPACE, user.uid, id);
-        equipmentCache.delete(id);
-        return;
+        throw cloudTruthService.buildUnsyncedRecordError('Equipment');
       }
       return await deleteDoc(docRef);
     } catch (error) {
-      console.error('Primary equipment delete failed, hiding it locally instead:', error);
-      const cachedEquipment = equipmentCache.get(id);
-      localFallbackStore.upsertRecord<LocalEquipment>(LOCAL_FALLBACK_NAMESPACE, user.uid, {
-        ...(cachedEquipment || {
-          id,
-          ownerId: user.uid,
-          name: '',
-          brand: '',
-          model: '',
-          serial_number: '',
-          part_number: '',
-          notes: '',
-          service_history: [],
-          created_at: toClientTimestamp() as any,
-        }),
-        _local_deleted: true,
-      } as LocalEquipment);
+      console.error('Primary equipment delete failed:', error);
+      throw cloudTruthService.buildDeleteError('Equipment');
     }
   }
 };

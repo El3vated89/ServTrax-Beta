@@ -13,6 +13,7 @@ import { localFallbackStore } from './localFallbackStore';
 import { subscribeToResolvedUser, waitForCurrentUser } from './authSessionService';
 import { SaveDebugContext, savePipelineService } from './savePipelineService';
 import { cloudBackedLocalIdService } from './cloudBackedLocalIdService';
+import { cloudTruthService } from './cloudTruthService';
 
 export interface SupplyRecord {
   id?: string;
@@ -149,20 +150,9 @@ export const supplyService = {
     } catch (error) {
       if (debugContext) {
         savePipelineService.logError(debugContext, 'db_write_failed', error);
-        savePipelineService.log(debugContext, 'fallback_write_attempted', { collection: COLLECTION_NAME, action: 'add_supply' });
       }
-      console.error('Primary supply save failed, saving locally instead:', error);
-      const localId = localFallbackStore.upsertRecord<LocalSupplyRecord>(LOCAL_FALLBACK_NAMESPACE, user.uid, {
-        id: localFallbackStore.createLocalId(LOCAL_FALLBACK_NAMESPACE),
-        ...supply,
-        ownerId: user.uid,
-        created_at: toClientTimestamp() as any,
-        updated_at: toClientTimestamp() as any,
-      });
-      if (debugContext) {
-        savePipelineService.log(debugContext, 'fallback_write_succeeded', { id: localId, action: 'add_supply' });
-      }
-      return { id: localId };
+      console.error('Primary supply save failed:', error);
+      throw cloudTruthService.buildCreateError('Supply');
     }
   },
 
@@ -178,18 +168,7 @@ export const supplyService = {
       );
 
       if (shouldUseLocalFallback) {
-        if (debugContext) {
-          savePipelineService.log(debugContext, 'fallback_write_attempted', { id, action: 'update_supply' });
-        }
-        localFallbackStore.updateRecord<LocalSupplyRecord>(LOCAL_FALLBACK_NAMESPACE, user.uid, id, {
-          ...updates,
-          updated_at: toClientTimestamp() as any,
-          _local_deleted: false,
-        });
-        if (debugContext) {
-          savePipelineService.log(debugContext, 'fallback_write_succeeded', { id, action: 'update_supply' });
-        }
-        return;
+        throw cloudTruthService.buildUnsyncedRecordError('Supply');
       }
       if (debugContext) {
         savePipelineService.log(debugContext, 'payload_built', { id, keys: Object.keys(updates) });
@@ -208,29 +187,9 @@ export const supplyService = {
     } catch (error) {
       if (debugContext) {
         savePipelineService.logError(debugContext, 'db_write_failed', error);
-        savePipelineService.log(debugContext, 'fallback_write_attempted', { id, action: 'update_supply' });
       }
-      console.error('Primary supply update failed, updating local fallback instead:', error);
-      const cachedSupply = supplyCache.get(id);
-      localFallbackStore.upsertRecord<LocalSupplyRecord>(LOCAL_FALLBACK_NAMESPACE, user.uid, {
-        ...(cachedSupply || {
-          id,
-          ownerId: user.uid,
-          name: updates.name || '',
-          category: updates.category || '',
-          unit: updates.unit || '',
-          quantity_on_hand: updates.quantity_on_hand || 0,
-          reorder_threshold: updates.reorder_threshold || 0,
-          active: updates.active ?? true,
-          created_at: toClientTimestamp() as any,
-        }),
-        ...updates,
-        updated_at: toClientTimestamp() as any,
-        _local_deleted: false,
-      } as LocalSupplyRecord);
-      if (debugContext) {
-        savePipelineService.log(debugContext, 'fallback_write_succeeded', { id, action: 'update_supply' });
-      }
+      console.error('Primary supply update failed:', error);
+      throw cloudTruthService.buildUpdateError('Supply');
     }
   },
 };

@@ -5,6 +5,7 @@ import { handleFirestoreError, OperationType } from './verificationService';
 import { Route, RouteStop, RouteTemplate } from '../modules/routes/types';
 import { localFallbackStore } from './localFallbackStore';
 import { cloudBackedLocalIdService } from './cloudBackedLocalIdService';
+import { cloudTruthService } from './cloudTruthService';
 
 const getActorNameSnapshot = () => auth.currentUser?.displayName || auth.currentUser?.email || auth.currentUser?.uid || 'Unknown User';
 const LOCAL_ROUTE_NAMESPACE = 'routes';
@@ -190,20 +191,14 @@ export const routeService = {
 
     try {
       const querySnapshot = await getDocs(q);
-      const primaryRoutes = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Route));
-      const localRoutes = localFallbackStore.readRecords<LocalRoute>(LOCAL_ROUTE_NAMESPACE, user.uid);
-      const routes = mergeRoutes(primaryRoutes, localRoutes).filter((route) => {
+      const routes = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Route)).filter((route) => {
         const routeDate = toJsDate(route.route_date);
         return routeDate >= start && routeDate <= end;
       });
       return routes[0] || null;
     } catch (error) {
-      console.error('Primary route lookup failed, using local fallback only:', error);
-      const localRoutes = localFallbackStore.readRecords<LocalRoute>(LOCAL_ROUTE_NAMESPACE, user.uid);
-      return mergeRoutes([], localRoutes).find((route) => {
-        const routeDate = toJsDate(route.route_date);
-        return routeDate >= start && routeDate <= end;
-      }) || null;
+      console.error('Primary route lookup failed:', error);
+      return null;
     }
   },
 
@@ -225,19 +220,13 @@ export const routeService = {
 
     try {
       const querySnapshot = await getDocs(q);
-      const primaryRoutes = querySnapshot.docs.map((entry) => ({ id: entry.id, ...entry.data() } as Route));
-      const localRoutes = localFallbackStore.readRecords<LocalRoute>(LOCAL_ROUTE_NAMESPACE, user.uid);
-      return mergeRoutes(primaryRoutes, localRoutes).filter((route) => {
+      return querySnapshot.docs.map((entry) => ({ id: entry.id, ...entry.data() } as Route)).filter((route) => {
         const routeDate = toJsDate(route.route_date);
         return routeDate >= start && routeDate <= end;
       });
     } catch (error) {
-      console.error('Primary route list lookup failed, using local fallback only:', error);
-      const localRoutes = localFallbackStore.readRecords<LocalRoute>(LOCAL_ROUTE_NAMESPACE, user.uid);
-      return mergeRoutes([], localRoutes).filter((route) => {
-        const routeDate = toJsDate(route.route_date);
-        return routeDate >= start && routeDate <= end;
-      });
+      console.error('Primary route list lookup failed:', error);
+      return [];
     }
   },
 
@@ -468,13 +457,10 @@ export const routeService = {
 
     try {
       const querySnapshot = await getDocs(q);
-      const primaryStops = querySnapshot.docs.map((entry) => ({ id: entry.id, ...entry.data() } as RouteStop));
-      const localStops = localFallbackStore.readRecords<LocalRouteStop>(LOCAL_ROUTE_STOP_NAMESPACE, user.uid);
-      return mergeRouteStops(primaryStops, localStops).filter((stop) => stop.route_id === routeId);
+      return querySnapshot.docs.map((entry) => ({ id: entry.id, ...entry.data() } as RouteStop));
     } catch (error) {
-      console.error('Primary route stop lookup failed, using local fallback only:', error);
-      const localStops = localFallbackStore.readRecords<LocalRouteStop>(LOCAL_ROUTE_STOP_NAMESPACE, user.uid);
-      return mergeRouteStops([], localStops).filter((stop) => stop.route_id === routeId);
+      console.error('Primary route stop lookup failed:', error);
+      return [];
     }
   },
 
@@ -500,18 +486,8 @@ export const routeService = {
         updated_at: serverTimestamp()
       });
     } catch (error) {
-      console.error('Primary route save failed, saving locally instead:', error);
-      const timestamp = toClientTimestamp();
-      const localId = localFallbackStore.upsertRecord<LocalRoute>(LOCAL_ROUTE_NAMESPACE, user.uid, {
-        id: localFallbackStore.createLocalId(LOCAL_ROUTE_NAMESPACE),
-        ...routeData,
-        ownerId: user.uid,
-        created_by: user.uid,
-        created_by_name: getActorNameSnapshot(),
-        created_at: timestamp as any,
-        updated_at: timestamp as any,
-      });
-      return { id: localId };
+      console.error('Primary route save failed:', error);
+      throw cloudTruthService.buildCreateError('Route');
     }
   },
 
@@ -526,42 +502,15 @@ export const routeService = {
         'Route update timed out while checking the recovered cloud record.'
       );
       if (shouldUseLocalFallback) {
-        localFallbackStore.updateRecord<LocalRoute>(LOCAL_ROUTE_NAMESPACE, user.uid, id, {
-          ...data,
-          updated_at: toClientTimestamp() as any,
-          _local_deleted: false,
-        });
-        return;
+        throw cloudTruthService.buildUnsyncedRecordError('Route');
       }
       return await updateDoc(docRef, {
         ...data,
         updated_at: serverTimestamp()
       });
     } catch (error) {
-      console.error('Primary route update failed, updating local fallback instead:', error);
-      const cachedRoute = routeCache.get(id);
-      localFallbackStore.upsertRecord<LocalRoute>(LOCAL_ROUTE_NAMESPACE, user.uid, {
-        ...(cachedRoute || {
-          id,
-          ownerId: user.uid,
-          name: data.name || 'Route',
-          route_date: data.route_date || toClientTimestamp(),
-          status: data.status || 'draft',
-          base_camp_label: data.base_camp_label || 'Base Camp',
-          base_camp_address: data.base_camp_address || '',
-          base_camp_lat: data.base_camp_lat || 0,
-          base_camp_lng: data.base_camp_lng || 0,
-          return_to_base: data.return_to_base ?? true,
-          optimization_mode: data.optimization_mode || 'none',
-          manual_override: data.manual_override ?? false,
-          created_by: user.uid,
-          created_by_name: getActorNameSnapshot(),
-          created_at: toClientTimestamp() as any,
-        }),
-        ...data,
-        updated_at: toClientTimestamp() as any,
-        _local_deleted: false,
-      } as LocalRoute);
+      console.error('Primary route update failed:', error);
+      throw cloudTruthService.buildUpdateError('Route');
     }
   },
 
@@ -576,16 +525,8 @@ export const routeService = {
         updated_at: serverTimestamp()
       });
     } catch (error) {
-      console.error('Primary route stop save failed, saving locally instead:', error);
-      const timestamp = toClientTimestamp();
-      const localId = localFallbackStore.upsertRecord<LocalRouteStop>(LOCAL_ROUTE_STOP_NAMESPACE, user.uid, {
-        id: localFallbackStore.createLocalId(LOCAL_ROUTE_STOP_NAMESPACE),
-        ...stopData,
-        ownerId: stopData.ownerId || user.uid,
-        created_at: timestamp as any,
-        updated_at: timestamp as any,
-      });
-      return { id: localId };
+      console.error('Primary route stop save failed:', error);
+      throw cloudTruthService.buildCreateError('Route stop');
     }
   },
 
@@ -600,44 +541,15 @@ export const routeService = {
         'Route stop update timed out while checking the recovered cloud record.'
       );
       if (shouldUseLocalFallback) {
-        localFallbackStore.updateRecord<LocalRouteStop>(LOCAL_ROUTE_STOP_NAMESPACE, user.uid, id, {
-          ...data,
-          updated_at: toClientTimestamp() as any,
-          _local_deleted: false,
-        });
-        return;
+        throw cloudTruthService.buildUnsyncedRecordError('Route stop');
       }
       return await updateDoc(docRef, {
         ...data,
         updated_at: serverTimestamp()
       });
     } catch (error) {
-      console.error('Primary route stop update failed, updating local fallback instead:', error);
-      const cachedStop = routeStopCache.get(id);
-      localFallbackStore.upsertRecord<LocalRouteStop>(LOCAL_ROUTE_STOP_NAMESPACE, user.uid, {
-        ...(cachedStop || {
-          id,
-          ownerId: user.uid,
-          route_id: data.route_id || '',
-          stop_order: data.stop_order || 0,
-          manual_order: data.manual_order || data.stop_order || 0,
-          optimized_order: data.optimized_order || data.stop_order || 0,
-          status: data.status || 'pending',
-          due_state: data.due_state || 'due',
-          city_snapshot: data.city_snapshot || '',
-          address_snapshot: data.address_snapshot || '',
-          lat_snapshot: data.lat_snapshot || 0,
-          lng_snapshot: data.lng_snapshot || 0,
-          service_type_snapshot: data.service_type_snapshot || '',
-          customer_name_snapshot: data.customer_name_snapshot || '',
-          scheduled_date: data.scheduled_date || toClientTimestamp(),
-          due_date: data.due_date || toClientTimestamp(),
-          created_at: toClientTimestamp() as any,
-        }),
-        ...data,
-        updated_at: toClientTimestamp() as any,
-        _local_deleted: false,
-      } as LocalRouteStop);
+      console.error('Primary route stop update failed:', error);
+      throw cloudTruthService.buildUpdateError('Route stop');
     }
   },
 
@@ -652,37 +564,12 @@ export const routeService = {
         'Route stop delete timed out while checking the recovered cloud record.'
       );
       if (shouldUseLocalFallback) {
-        localFallbackStore.removeRecord<LocalRouteStop>(LOCAL_ROUTE_STOP_NAMESPACE, user.uid, id);
-        routeStopCache.delete(id);
-        return;
+        throw cloudTruthService.buildUnsyncedRecordError('Route stop');
       }
       return await deleteDoc(docRef);
     } catch (error) {
-      console.error('Primary route stop delete failed, hiding it locally instead:', error);
-      const cachedStop = routeStopCache.get(id);
-      localFallbackStore.upsertRecord<LocalRouteStop>(LOCAL_ROUTE_STOP_NAMESPACE, user.uid, {
-        ...(cachedStop || {
-          id,
-          ownerId: user.uid,
-          route_id: '',
-          stop_order: 0,
-          manual_order: 0,
-          optimized_order: 0,
-          status: 'pending',
-          due_state: 'due',
-          city_snapshot: '',
-          address_snapshot: '',
-          lat_snapshot: 0,
-          lng_snapshot: 0,
-          service_type_snapshot: '',
-          customer_name_snapshot: '',
-          scheduled_date: toClientTimestamp(),
-          due_date: toClientTimestamp(),
-          created_at: toClientTimestamp() as any,
-        }),
-        updated_at: toClientTimestamp() as any,
-        _local_deleted: true,
-      } as LocalRouteStop);
+      console.error('Primary route stop delete failed:', error);
+      throw cloudTruthService.buildDeleteError('Route stop');
     }
   },
 
@@ -697,35 +584,12 @@ export const routeService = {
         'Route delete timed out while checking the recovered cloud record.'
       );
       if (shouldUseLocalFallback) {
-        localFallbackStore.removeRecord<LocalRoute>(LOCAL_ROUTE_NAMESPACE, user.uid, id);
-        routeCache.delete(id);
-        return;
+        throw cloudTruthService.buildUnsyncedRecordError('Route');
       }
       return await deleteDoc(docRef);
     } catch (error) {
-      console.error('Primary route delete failed, hiding it locally instead:', error);
-      const cachedRoute = routeCache.get(id);
-      localFallbackStore.upsertRecord<LocalRoute>(LOCAL_ROUTE_NAMESPACE, user.uid, {
-        ...(cachedRoute || {
-          id,
-          ownerId: user.uid,
-          name: 'Route',
-          route_date: toClientTimestamp(),
-          status: 'draft',
-          base_camp_label: 'Base Camp',
-          base_camp_address: '',
-          base_camp_lat: 0,
-          base_camp_lng: 0,
-          return_to_base: true,
-          optimization_mode: 'none',
-          manual_override: false,
-          created_by: user.uid,
-          created_by_name: getActorNameSnapshot(),
-          created_at: toClientTimestamp() as any,
-        }),
-        updated_at: toClientTimestamp() as any,
-        _local_deleted: true,
-      } as LocalRoute);
+      console.error('Primary route delete failed:', error);
+      throw cloudTruthService.buildDeleteError('Route');
     }
   },
 
@@ -837,13 +701,7 @@ export const routeService = {
           'Route stop order save timed out while checking the recovered cloud record.'
         );
         if (shouldUseLocalFallback) {
-          localFallbackStore.updateRecord<LocalRouteStop>(LOCAL_ROUTE_STOP_NAMESPACE, user.uid, stop.id, {
-            stop_order: stop.stop_order,
-            manual_order: stop.manual_order,
-            updated_at: toClientTimestamp() as any,
-            _local_deleted: false,
-          });
-          return;
+          throw cloudTruthService.buildUnsyncedRecordError('Route stop');
         }
 
         try {
@@ -853,34 +711,12 @@ export const routeService = {
             updated_at: serverTimestamp()
           });
         } catch (error) {
-          const cachedStop = routeStopCache.get(stop.id);
-          localFallbackStore.upsertRecord<LocalRouteStop>(LOCAL_ROUTE_STOP_NAMESPACE, user.uid, {
-            ...(cachedStop || {
-              id: stop.id,
-              ownerId: user.uid,
-              route_id: '',
-              status: 'pending',
-              due_state: 'due',
-              city_snapshot: '',
-              address_snapshot: '',
-              lat_snapshot: 0,
-              lng_snapshot: 0,
-              service_type_snapshot: '',
-              customer_name_snapshot: '',
-              scheduled_date: toClientTimestamp(),
-              due_date: toClientTimestamp(),
-              created_at: toClientTimestamp() as any,
-            }),
-            stop_order: stop.stop_order,
-            manual_order: stop.manual_order,
-            optimized_order: stop.manual_order,
-            updated_at: toClientTimestamp() as any,
-            _local_deleted: false,
-          } as LocalRouteStop);
+          throw error;
         }
       }));
     } catch (error) {
-      handleFirestoreError(error, OperationType.UPDATE, 'route_stops_batch');
+      console.error('Primary route stop order update failed:', error);
+      throw cloudTruthService.buildUpdateError('Route stop');
     }
   },
 

@@ -1,7 +1,6 @@
 import { collection, addDoc, updateDoc, deleteDoc, doc, query, where, serverTimestamp, onSnapshot } from 'firebase/firestore';
 import { db } from '../firebase';
 import { subscribeToResolvedUser, waitForCurrentUser } from './authSessionService';
-import { localFallbackStore } from './localFallbackStore';
 import { savePipelineService } from './savePipelineService';
 import { cloudBackedLocalIdService } from './cloudBackedLocalIdService';
 import { cloudTruthService } from './cloudTruthService';
@@ -42,45 +41,7 @@ export interface Job {
 }
 
 const COLLECTION_NAME = 'jobs';
-const LOCAL_FALLBACK_NAMESPACE = 'jobs';
-type LocalJob = Job & { _local_deleted?: boolean };
 const jobCache = new Map<string, Job>();
-const toClientTimestamp = () => new Date().toISOString();
-
-const normalizeLocalJob = (ownerId: string, entry: Partial<LocalJob>): Job => ({
-  id: entry.id,
-  ownerId,
-  customerId: entry.customerId || '',
-  servicePlanId: entry.servicePlanId || '',
-  recurringPlanId: entry.recurringPlanId || '',
-  customer_name_snapshot: entry.customer_name_snapshot || '',
-  address_snapshot: entry.address_snapshot || '',
-  phone_snapshot: entry.phone_snapshot || '',
-  service_snapshot: entry.service_snapshot || '',
-  price_snapshot: entry.price_snapshot || 0,
-  billing_frequency: entry.billing_frequency,
-  scheduled_date: entry.scheduled_date as any,
-  completed_date: entry.completed_date as any,
-  last_completed_date: entry.last_completed_date as any,
-  next_due_date: entry.next_due_date as any,
-  status: entry.status || 'pending',
-  payment_status: entry.payment_status || 'unpaid',
-  visibility_mode: entry.visibility_mode || 'internal_only',
-  share_token: entry.share_token || '',
-  share_expires_at: entry.share_expires_at as any,
-  is_billable: entry.is_billable ?? true,
-  is_recurring: entry.is_recurring ?? false,
-  internal_notes: entry.internal_notes || '',
-  customer_notes: entry.customer_notes || '',
-  created_at: entry.created_at as any,
-  approved_at: entry.approved_at as any,
-  service_setup_type: entry.service_setup_type,
-  interval_days: entry.interval_days,
-  override_enabled: entry.override_enabled,
-  seasonal_enabled: entry.seasonal_enabled,
-  seasonal_rules: entry.seasonal_rules,
-  portal_visible: entry.portal_visible,
-});
 
 const mergeJobs = (primaryJobs: Job[]) => {
   const merged = [...primaryJobs];
@@ -117,7 +78,7 @@ export const jobService = {
         })) as Job[];
         emit();
       }, (error) => {
-        console.error('Primary jobs subscription failed, using local fallback only:', error);
+        console.error('Primary jobs subscription failed:', error);
         primaryJobs = [];
         emit();
       });
@@ -145,13 +106,7 @@ export const jobService = {
         }
       );
     } catch (error) {
-      console.error('Primary job save failed, saving locally instead:', error);
-      localFallbackStore.upsertRecord<LocalJob>(LOCAL_FALLBACK_NAMESPACE, user.uid, {
-        id: localFallbackStore.createLocalId(LOCAL_FALLBACK_NAMESPACE),
-        ...jobData,
-        ownerId: user.uid,
-        created_at: toClientTimestamp() as any,
-      });
+      console.error('Primary job save failed:', error);
       throw cloudTruthService.buildCreateError('Job');
     }
   },
@@ -186,30 +141,7 @@ export const jobService = {
       if (options.requirePrimaryWrite) {
         throw error;
       }
-      console.error('Primary job update failed, updating local fallback instead:', error);
-      const cachedJob = jobCache.get(id);
-      localFallbackStore.upsertRecord<LocalJob>(LOCAL_FALLBACK_NAMESPACE, user.uid, {
-        ...(cachedJob || {
-          id,
-          ownerId: user.uid,
-          customerId: data.customerId || '',
-          customer_name_snapshot: data.customer_name_snapshot || '',
-          address_snapshot: data.address_snapshot || '',
-          phone_snapshot: data.phone_snapshot || '',
-          service_snapshot: data.service_snapshot || '',
-          price_snapshot: data.price_snapshot || 0,
-          status: data.status || 'pending',
-          payment_status: data.payment_status || 'unpaid',
-          visibility_mode: data.visibility_mode || 'internal_only',
-          is_billable: data.is_billable ?? true,
-          is_recurring: data.is_recurring ?? false,
-          internal_notes: data.internal_notes || '',
-          customer_notes: data.customer_notes || '',
-          created_at: toClientTimestamp() as any,
-        }),
-        ...data,
-        _local_deleted: false,
-        } as LocalJob);
+      console.error('Primary job update failed:', error);
       throw cloudTruthService.buildUpdateError('Job');
     }
   },
@@ -232,29 +164,7 @@ export const jobService = {
         timeoutMessage: 'Job delete timed out while writing to the database.',
       });
     } catch (error) {
-      console.error('Primary job delete failed, hiding it locally instead:', error);
-      const cachedJob = jobCache.get(id);
-      localFallbackStore.upsertRecord<LocalJob>(LOCAL_FALLBACK_NAMESPACE, user.uid, {
-        ...(cachedJob || {
-          id,
-          ownerId: user.uid,
-          customerId: '',
-          customer_name_snapshot: '',
-          address_snapshot: '',
-          phone_snapshot: '',
-          service_snapshot: '',
-          price_snapshot: 0,
-          status: 'pending',
-          payment_status: 'unpaid',
-          visibility_mode: 'internal_only',
-          is_billable: true,
-          is_recurring: false,
-          internal_notes: '',
-          customer_notes: '',
-          created_at: toClientTimestamp() as any,
-        }),
-        _local_deleted: true,
-      } as LocalJob);
+      console.error('Primary job delete failed:', error);
       throw cloudTruthService.buildDeleteError('Job');
     }
   }

@@ -1,7 +1,6 @@
 import { db } from '../firebase';
 import { collection, addDoc, onSnapshot, query, where, serverTimestamp, updateDoc, doc, deleteDoc, getDocs, getDoc } from 'firebase/firestore';
 import { subscribeToResolvedUser, waitForCurrentUser } from './authSessionService';
-import { localFallbackStore } from './localFallbackStore';
 import { savePipelineService } from './savePipelineService';
 import { cloudBackedLocalIdService } from './cloudBackedLocalIdService';
 import { cloudTruthService } from './cloudTruthService';
@@ -20,10 +19,7 @@ export interface ServicePlan {
 }
 
 const COLLECTION_NAME = 'service_plans';
-const LOCAL_FALLBACK_NAMESPACE = 'service_plans';
-type LocalServicePlan = ServicePlan & { _local_deleted?: boolean };
 const servicePlanCache = new Map<string, ServicePlan>();
-const toClientTimestamp = () => new Date().toISOString();
 
 const normalizeBillingFrequency = (frequency?: string) => {
   if (frequency === 'one-time') return 'one_time';
@@ -59,19 +55,6 @@ export const servicePlanService = {
     let unsubscribePlans = () => {};
     let primaryPlans: ServicePlan[] = [];
 
-    const normalizeLocalPlan = (ownerId: string, entry: Partial<LocalServicePlan>): ServicePlan => ({
-      id: entry.id,
-      ownerId,
-      name: entry.name || '',
-      description: entry.description || '',
-      price: entry.price || 0,
-      billing_frequency: normalizeBillingFrequency(entry.billing_frequency),
-      requires_photos: entry.requires_photos ?? false,
-      seasonal_enabled: entry.seasonal_enabled ?? false,
-      seasonal_rules: normalizeSeasonalRules(entry.seasonal_rules),
-      created_at: entry.created_at as any,
-    });
-
     const emit = () => {
       const merged = [...primaryPlans].sort((left, right) => left.name.localeCompare(right.name));
       servicePlanCache.clear();
@@ -103,7 +86,7 @@ export const servicePlanService = {
         })) as ServicePlan[];
         emit();
       }, (error) => {
-        console.error('Primary service plan subscription failed, using local fallback only:', error);
+        console.error('Primary service plan subscription failed:', error);
         primaryPlans = [];
         emit();
       });
@@ -132,12 +115,7 @@ export const servicePlanService = {
         timeoutMessage: 'Service plan save timed out while writing to the database.',
       });
     } catch (error) {
-      console.error('Primary service plan save failed, saving locally instead:', error);
-      localFallbackStore.upsertRecord<LocalServicePlan>(LOCAL_FALLBACK_NAMESPACE, user.uid, {
-        id: localFallbackStore.createLocalId(LOCAL_FALLBACK_NAMESPACE),
-        ...newPlan,
-        created_at: toClientTimestamp() as any,
-      });
+      console.error('Primary service plan save failed:', error);
       throw cloudTruthService.buildCreateError('Service');
     }
   },
@@ -183,14 +161,7 @@ export const servicePlanService = {
         timeoutMessage: 'Service plan update timed out while writing to the database.',
       });
     } catch (error) {
-      console.error('Primary service plan update failed, updating local fallback instead:', error);
-      localFallbackStore.upsertRecord<LocalServicePlan>(LOCAL_FALLBACK_NAMESPACE, user.uid, {
-        ...(currentPlan as LocalServicePlan),
-        id,
-        ownerId: user.uid,
-        ...safeUpdates,
-        _local_deleted: false,
-      });
+      console.error('Primary service plan update failed:', error);
       throw cloudTruthService.buildUpdateError('Service');
     }
   },
@@ -213,20 +184,7 @@ export const servicePlanService = {
         timeoutMessage: 'Service plan delete timed out while writing to the database.',
       });
     } catch (error) {
-      console.error('Primary service plan delete failed, hiding it locally instead:', error);
-      const currentPlan = servicePlanCache.get(id);
-      localFallbackStore.upsertRecord<LocalServicePlan>(LOCAL_FALLBACK_NAMESPACE, user.uid, {
-        ...(currentPlan || {
-          id,
-          ownerId: user.uid,
-          name: '',
-          description: '',
-          price: 0,
-          billing_frequency: 'one_time',
-          created_at: toClientTimestamp() as any,
-        }),
-        _local_deleted: true,
-      } as LocalServicePlan);
+      console.error('Primary service plan delete failed:', error);
       throw cloudTruthService.buildDeleteError('Service');
     }
   },

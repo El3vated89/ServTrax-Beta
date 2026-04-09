@@ -6,6 +6,7 @@ import { mediaUploadService } from './mediaUploadService';
 import { localFallbackStore } from './localFallbackStore';
 import { SaveDebugContext, savePipelineService } from './savePipelineService';
 import { cloudBackedLocalIdService } from './cloudBackedLocalIdService';
+import { cloudTruthService } from './cloudTruthService';
 
 export enum OperationType {
   CREATE = 'create',
@@ -121,29 +122,13 @@ const normalizeVerificationPhotos = async (
   return nextRecord;
 };
 
-const normalizeLocalVerification = (ownerId: string, record: any): VerificationRecord => ({
-  id: record.id,
-  ownerId,
-  jobId: record.jobId,
-  customerId: record.customerId,
-  photo_url: record.photo_url,
-  photo_urls: record.photo_urls || [],
-  file_size_bytes: Number(record.file_size_bytes || 0),
-  notes: record.notes || '',
-  visibility: record.visibility || 'shareable',
-  expires_at: record.expires_at || null,
-  created_at: record.created_at || new Date().toISOString(),
-});
-
 export const verificationService = {
   subscribeToJobVerifications: (jobId: string, callback: (records: VerificationRecord[]) => void) => {
     let unsubscribeRecords = () => {};
-    let unsubscribeLocal = () => {};
     let primaryRecords: VerificationRecord[] = [];
-    let localRecords: VerificationRecord[] = [];
 
     const emit = () => {
-      const next = [...localRecords, ...primaryRecords]
+      const next = [...primaryRecords]
         .filter((entry) => entry.jobId === jobId)
         .sort((left, right) => {
           const leftTime = new Date(left.created_at?.toDate?.() || left.created_at || 0).getTime();
@@ -155,9 +140,7 @@ export const verificationService = {
 
     const unsubscribeAuth = auth.onAuthStateChanged((user) => {
       unsubscribeRecords();
-      unsubscribeLocal();
       primaryRecords = [];
-      localRecords = [];
 
       if (!user) {
         callback([]);
@@ -177,20 +160,14 @@ export const verificationService = {
         })) as VerificationRecord[];
         emit();
       }, (error) => {
-        console.error('Primary job verification subscription failed, using local fallback only:', error);
+        console.error('Primary job verification subscription failed:', error);
         primaryRecords = [];
-        emit();
-      });
-
-      unsubscribeLocal = localFallbackStore.subscribeToRecords<any>(LOCAL_FALLBACK_NAMESPACE, user.uid, (records) => {
-        localRecords = records.map((entry) => normalizeLocalVerification(user.uid, entry));
         emit();
       });
     });
 
     return () => {
       unsubscribeRecords();
-      unsubscribeLocal();
       unsubscribeAuth();
     };
   },
@@ -252,20 +229,9 @@ export const verificationService = {
     } catch (error) {
       if (debugContext) {
         savePipelineService.logError(debugContext, 'db_write_failed', error);
-        savePipelineService.log(debugContext, 'fallback_write_attempted', LOCAL_FALLBACK_NAMESPACE);
       }
-      console.error('Primary verification save failed, saving locally instead:', error);
-      const localId = localFallbackStore.upsertRecord<VerificationRecord>(LOCAL_FALLBACK_NAMESPACE, user.uid, {
-        id: localFallbackStore.createLocalId(LOCAL_FALLBACK_NAMESPACE),
-        ...newRecord,
-        notes: newRecord.notes || '',
-        expires_at: expiresAt ? expiresAt.toDate().toISOString() : null,
-        created_at: new Date().toISOString(),
-      });
-      if (debugContext) {
-        savePipelineService.log(debugContext, 'fallback_write_succeeded', localId);
-      }
-      return { id: localId };
+      console.error('Primary verification save failed:', error);
+      throw cloudTruthService.buildCreateError('Verification');
     }
   },
   
@@ -284,14 +250,7 @@ export const verificationService = {
         'Verification update timed out while checking the recovered cloud record.'
       );
       if (shouldUseLocalFallback) {
-        localFallbackStore.updateRecord<VerificationRecord>(LOCAL_FALLBACK_NAMESPACE, user.uid, id, {
-          ...normalizedData,
-          updated_at: new Date().toISOString(),
-        } as Partial<VerificationRecord>);
-        if (debugContext) {
-          savePipelineService.log(debugContext, 'fallback_write_succeeded', id);
-        }
-        return;
+        throw cloudTruthService.buildUnsyncedRecordError('Verification');
       }
       if (debugContext) {
         savePipelineService.log(debugContext, 'db_write_attempted', `${COLLECTION_NAME}/${id}`);
@@ -306,27 +265,18 @@ export const verificationService = {
     } catch (error) {
       if (debugContext) {
         savePipelineService.logError(debugContext, 'db_write_failed', error);
-        savePipelineService.log(debugContext, 'fallback_write_attempted', id);
       }
-      console.error('Primary verification update failed, updating local fallback instead:', error);
-      localFallbackStore.updateRecord<VerificationRecord>(LOCAL_FALLBACK_NAMESPACE, user.uid, id, {
-        ...data,
-        updated_at: new Date().toISOString(),
-      } as Partial<VerificationRecord>);
-      if (debugContext) {
-        savePipelineService.log(debugContext, 'fallback_write_succeeded', id);
-      }
+      console.error('Primary verification update failed:', error);
+      throw cloudTruthService.buildUpdateError('Verification');
     }
   },
 
   subscribeToAllVerifications: (callback: (records: VerificationRecord[]) => void) => {
     let unsubscribeRecords = () => {};
-    let unsubscribeLocal = () => {};
     let primaryRecords: VerificationRecord[] = [];
-    let localRecords: VerificationRecord[] = [];
 
     const emit = () => {
-      const next = [...localRecords, ...primaryRecords].sort((left, right) => {
+      const next = [...primaryRecords].sort((left, right) => {
         const leftTime = new Date(left.created_at?.toDate?.() || left.created_at || 0).getTime();
         const rightTime = new Date(right.created_at?.toDate?.() || right.created_at || 0).getTime();
         return rightTime - leftTime;
@@ -336,9 +286,7 @@ export const verificationService = {
 
     const unsubscribeAuth = subscribeToResolvedUser((user) => {
       unsubscribeRecords();
-      unsubscribeLocal();
       primaryRecords = [];
-      localRecords = [];
 
       if (!user) {
         callback([]);
@@ -357,20 +305,14 @@ export const verificationService = {
         })) as VerificationRecord[];
         emit();
       }, (error) => {
-        console.error('Primary verification subscription failed, using local fallback only:', error);
+        console.error('Primary verification subscription failed:', error);
         primaryRecords = [];
-        emit();
-      });
-
-      unsubscribeLocal = localFallbackStore.subscribeToRecords<any>(LOCAL_FALLBACK_NAMESPACE, user.uid, (records) => {
-        localRecords = records.map((entry) => normalizeLocalVerification(user.uid, entry));
         emit();
       });
     });
 
     return () => {
       unsubscribeRecords();
-      unsubscribeLocal();
       unsubscribeAuth();
     };
   },
@@ -395,12 +337,6 @@ export const verificationService = {
 
     if (snapshotHasPhotos) return true;
 
-    const localRecords = localFallbackStore
-      .readRecords<any>(LOCAL_FALLBACK_NAMESPACE, user.uid)
-      .map((entry) => normalizeLocalVerification(user.uid, entry));
-
-    return localRecords.some((entry) =>
-      entry.jobId === jobId && (!!entry.photo_url || !!entry.photo_urls?.length)
-    );
+    return false;
   }
 };
