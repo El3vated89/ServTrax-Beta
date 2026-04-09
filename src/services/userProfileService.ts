@@ -30,6 +30,28 @@ const normalizeAdminIdentityEmail = (value?: string | null) => {
   const localPart = match[1].replace(/\./g, '');
   return `${localPart}@gmail.com`;
 };
+const isPlatformAdminIdentityEmail = (value?: string | null) =>
+  normalizeAdminIdentityEmail(value) === PLATFORM_ADMIN_EMAIL;
+const normalizeBusinessRole = (email?: string | null, fallbackRole?: UserProfile['role']) => {
+  if (isPlatformAdminIdentityEmail(email)) return 'owner';
+  if (fallbackRole === 'staff') return 'staff';
+  return fallbackRole || 'owner';
+};
+const buildResolvedProfile = (
+  user: { uid: string; email?: string | null; displayName?: string | null },
+  data?: Partial<UserProfile> | null
+): UserProfile => ({
+  uid: user.uid,
+  email: data?.email || user.email || '',
+  name: data?.name || user.displayName || '',
+  phone: data?.phone || '',
+  role: normalizeBusinessRole(user.email || data?.email || '', data?.role),
+  permissions: Array.isArray(data?.permissions) ? data.permissions : [],
+  team_memberships: Array.isArray(data?.team_memberships) ? data.team_memberships : [],
+  active: data?.active ?? true,
+  created_at: data?.created_at,
+  updated_at: data?.updated_at,
+});
 
 export const userProfileService = {
   getCurrentUserProfile: async (): Promise<UserProfile | null> => {
@@ -41,7 +63,7 @@ export const userProfileService = {
       const docSnap = await savePipelineService.withTimeout(getDoc(docRef), {
         timeoutMessage: 'Profile load timed out while reading the user profile.',
       });
-      return docSnap.exists() ? ({ uid: user.uid, ...docSnap.data() } as UserProfile) : null;
+      return docSnap.exists() ? buildResolvedProfile(user, docSnap.data() as Partial<UserProfile>) : buildResolvedProfile(user);
     } catch (error) {
       handleFirestoreError(error, OperationType.GET, 'users');
       return null;
@@ -59,41 +81,17 @@ export const userProfileService = {
         return;
       }
 
-      callback({
-        uid: user.uid,
-        email: user.email || '',
-        name: user.displayName || '',
-        role: normalizeAdminIdentityEmail(user.email) === PLATFORM_ADMIN_EMAIL ? 'admin' : 'owner',
-        permissions: [],
-        team_memberships: [],
-        active: true,
-      });
+      callback(buildResolvedProfile(user));
 
       unsubscribeProfile = onSnapshot(doc(db, 'users', user.uid), (snapshot) => {
         callback(
           snapshot.exists()
-            ? ({ uid: user.uid, ...snapshot.data() } as UserProfile)
-            : {
-                uid: user.uid,
-                email: user.email || '',
-                name: user.displayName || '',
-                role: normalizeAdminIdentityEmail(user.email) === PLATFORM_ADMIN_EMAIL ? 'admin' : 'owner',
-                permissions: [],
-                team_memberships: [],
-                active: true,
-              }
+            ? buildResolvedProfile(user, snapshot.data() as Partial<UserProfile>)
+            : buildResolvedProfile(user)
         );
       }, (error) => {
         handleFirestoreError(error, OperationType.GET, 'users');
-        callback({
-          uid: user.uid,
-          email: user.email || '',
-          name: user.displayName || '',
-          role: normalizeAdminIdentityEmail(user.email) === PLATFORM_ADMIN_EMAIL ? 'admin' : 'owner',
-          permissions: [],
-          team_memberships: [],
-          active: true,
-        });
+        callback(buildResolvedProfile(user));
       });
     });
 
@@ -117,7 +115,7 @@ export const userProfileService = {
         email: user.email || '',
         name: user.displayName || '',
         phone: '',
-        role: normalizeAdminIdentityEmail(user.email) === PLATFORM_ADMIN_EMAIL ? 'admin' : 'owner',
+        role: normalizeBusinessRole(user.email),
         permissions: [],
         team_memberships: [],
         active: true,
@@ -130,7 +128,7 @@ export const userProfileService = {
       await savePipelineService.withTimeout(updateDoc(docRef, {
         email: user.email || docSnap.data().email || '',
         name: user.displayName || docSnap.data().name || '',
-        role: normalizeAdminIdentityEmail(user.email) === PLATFORM_ADMIN_EMAIL ? 'admin' : (docSnap.data().role || 'owner'),
+        role: normalizeBusinessRole(user.email, docSnap.data().role),
         active: true,
         updated_at: serverTimestamp(),
       }), {
@@ -164,7 +162,7 @@ export const userProfileService = {
         email: user.email || '',
         name: updates.name ?? user.displayName ?? '',
         phone: updates.phone ?? '',
-        role: normalizeAdminIdentityEmail(user.email) === PLATFORM_ADMIN_EMAIL ? 'admin' : 'owner',
+        role: normalizeBusinessRole(user.email),
         permissions: [],
         team_memberships: [],
         active: true,
