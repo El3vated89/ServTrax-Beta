@@ -350,7 +350,9 @@ describe('PublicCustomerPortal', () => {
       expect(screen.getByText('Phone Customer')).toBeInTheDocument();
     });
 
-    expect(window.sessionStorage.getItem('portal-phone-ok-portal-token-phone')).toBe('1');
+    const storedSession = window.sessionStorage.getItem('portal-phone-ok-portal-token-phone');
+    expect(storedSession).toBeTruthy();
+    expect(JSON.parse(storedSession || '{}').verifiedAt).toBeTruthy();
   });
 
   it('shows an explicit error when the wrong phone number is entered', async () => {
@@ -410,7 +412,10 @@ describe('PublicCustomerPortal', () => {
   });
 
   it('reuses the session flag so the phone gate does not reappear in the same session', async () => {
-    window.sessionStorage.setItem('portal-phone-ok-portal-token-session', '1');
+    window.sessionStorage.setItem(
+      'portal-phone-ok-portal-token-session',
+      JSON.stringify({ verifiedAt: new Date().toISOString() })
+    );
 
     getDoc.mockImplementation(async (path: string) => {
       if (path === 'public_customer_portals/portal-token-session') {
@@ -457,6 +462,57 @@ describe('PublicCustomerPortal', () => {
     expect(screen.queryByText('Open Customer Portal')).not.toBeInTheDocument();
   });
 
+  it('expires an old phone-verification session and shows the phone gate again', async () => {
+    window.sessionStorage.setItem(
+      'portal-phone-ok-portal-token-expired-session',
+      JSON.stringify({ verifiedAt: '2020-01-01T00:00:00.000Z' })
+    );
+
+    getDoc.mockImplementation(async (path: string) => {
+      if (path === 'public_customer_portals/portal-token-expired-session') {
+        return {
+          exists: () => true,
+          data: () => ({
+            customerId: 'customer-expired',
+            ownerId: 'owner-1',
+            portal_enabled: true,
+            portal_token: 'portal-token-expired-session',
+            portal_access_mode: 'phone_only_temporary',
+            portal_phone_hash: 'hash',
+            portal_phone_last4: '2222',
+            portal_show_history: true,
+            portal_show_payment_status: false,
+            portal_show_quotes: false,
+            portal_plan_name_snapshot: 'Free',
+            customer_name_snapshot: 'Expired Session Customer',
+            address_snapshot: '300 Session St',
+          }),
+        };
+      }
+
+      return {
+        exists: () => false,
+        data: () => ({}),
+      };
+    });
+
+    getDocs.mockResolvedValue({ docs: [], empty: true });
+
+    render(
+      <MemoryRouter initialEntries={['/portal/portal-token-expired-session']}>
+        <Routes>
+          <Route path="/portal/:portalToken" element={<PublicCustomerPortal />} />
+        </Routes>
+      </MemoryRouter>
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText('Open Customer Portal')).toBeInTheDocument();
+    });
+
+    expect(window.sessionStorage.getItem('portal-phone-ok-portal-token-expired-session')).toBeNull();
+  });
+
   it('shows the no-data message when the portal shell loads without customer-visible content', async () => {
     getDoc.mockImplementation(async (path: string) => {
       if (path === 'public_customer_portals/portal-token-empty') {
@@ -499,6 +555,51 @@ describe('PublicCustomerPortal', () => {
 
     expect(screen.getByText('No customer-visible proof history is available right now.')).toBeInTheDocument();
     expect(screen.getByText('No customer-visible quotes are available right now.')).toBeInTheDocument();
+  });
+
+  it('hides history and quote sections when portal visibility settings disable them', async () => {
+    getDoc.mockImplementation(async (path: string) => {
+      if (path === 'public_customer_portals/portal-token-hidden') {
+        return {
+          exists: () => true,
+          data: () => ({
+            customerId: 'customer-hidden',
+            ownerId: 'owner-1',
+            portal_enabled: true,
+            portal_token: 'portal-token-hidden',
+            portal_show_history: false,
+            portal_show_payment_status: false,
+            portal_show_quotes: false,
+            portal_plan_name_snapshot: 'Free',
+            customer_name_snapshot: 'Hidden Content Customer',
+            address_snapshot: '400 Hidden St',
+          }),
+        };
+      }
+
+      return {
+        exists: () => false,
+        data: () => ({}),
+      };
+    });
+
+    getDocs.mockResolvedValue({ docs: [], empty: true });
+
+    render(
+      <MemoryRouter initialEntries={['/portal/portal-token-hidden']}>
+        <Routes>
+          <Route path="/portal/:portalToken" element={<PublicCustomerPortal />} />
+        </Routes>
+      </MemoryRouter>
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText('Hidden Content Customer')).toBeInTheDocument();
+    });
+
+    expect(screen.getByText('This portal is active, but there is no customer-facing content enabled yet.')).toBeInTheDocument();
+    expect(screen.queryByText('Job History')).not.toBeInTheDocument();
+    expect(screen.queryByText('Quotes')).not.toBeInTheDocument();
   });
 
   it('shows the explicit unavailable state when no public or preview portal record can be found', async () => {

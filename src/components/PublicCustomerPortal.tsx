@@ -16,6 +16,40 @@ const toDate = (value: any) => {
   return new Date(value);
 };
 
+const PORTAL_PHONE_SESSION_MAX_AGE_MS = 12 * 60 * 60 * 1000;
+
+const getPortalPhoneSessionKey = (portalToken: string) => `portal-phone-ok-${portalToken}`;
+
+const readPortalPhoneSession = (portalToken: string) => {
+  try {
+    const rawValue = window.sessionStorage.getItem(getPortalPhoneSessionKey(portalToken));
+    if (!rawValue) return false;
+    if (rawValue === '1') return true;
+
+    const parsed = JSON.parse(rawValue) as { verifiedAt?: string };
+    if (!parsed?.verifiedAt) return false;
+
+    const verifiedAt = new Date(parsed.verifiedAt).getTime();
+    if (Number.isNaN(verifiedAt)) return false;
+
+    const isFresh = Date.now() - verifiedAt <= PORTAL_PHONE_SESSION_MAX_AGE_MS;
+    if (!isFresh) {
+      window.sessionStorage.removeItem(getPortalPhoneSessionKey(portalToken));
+    }
+
+    return isFresh;
+  } catch {
+    return false;
+  }
+};
+
+const writePortalPhoneSession = (portalToken: string) => {
+  window.sessionStorage.setItem(
+    getPortalPhoneSessionKey(portalToken),
+    JSON.stringify({ verifiedAt: new Date().toISOString() })
+  );
+};
+
 export default function PublicCustomerPortal() {
   const { customerId, portalToken } = useParams<{ customerId?: string; portalToken?: string }>();
   const [customerPortal, setCustomerPortal] = useState<CustomerPortalRecord | null>(null);
@@ -177,13 +211,7 @@ export default function PublicCustomerPortal() {
 
   useEffect(() => {
     if (!portalToken) return;
-    try {
-      if (window.sessionStorage.getItem(`portal-phone-ok-${portalToken}`) === '1') {
-        setIsPhoneVerified(true);
-      }
-    } catch {
-      // Ignore sessionStorage errors
-    }
+    setIsPhoneVerified(readPortalPhoneSession(portalToken));
   }, [portalToken]);
 
   useEffect(() => {
@@ -352,7 +380,7 @@ export default function PublicCustomerPortal() {
                 }
 
                 try {
-                  window.sessionStorage.setItem(`portal-phone-ok-${portalToken}`, '1');
+                  writePortalPhoneSession(portalToken);
                 } catch {
                   // Ignore sessionStorage errors
                 }
