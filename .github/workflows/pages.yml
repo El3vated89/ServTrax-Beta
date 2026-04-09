@@ -3,7 +3,7 @@ name: Deploy Pages
 on:
   push:
     branches:
-      - main
+      - alpha
   workflow_dispatch:
 
 permissions:
