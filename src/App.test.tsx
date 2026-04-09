@@ -9,16 +9,19 @@ const {
   initializeDefaultServices,
   ensureCurrentUserProfile,
   hydrateFramework,
-  syncStorageUsageForCurrentUser,
-  repairEnabledPortalsForCurrentUser,
 } = vi.hoisted(() => ({
   onAuthStateChanged: vi.fn(),
   getRedirectResult: vi.fn(),
   initializeDefaultServices: vi.fn(),
   ensureCurrentUserProfile: vi.fn(),
   hydrateFramework: vi.fn(),
-  syncStorageUsageForCurrentUser: vi.fn(),
-  repairEnabledPortalsForCurrentUser: vi.fn(),
+}));
+const { reportIssue } = vi.hoisted(() => ({
+  reportIssue: vi.fn(() => ({
+    kind: 'quota_exhausted',
+    message: 'quota',
+    detectedAt: Date.now(),
+  })),
 }));
 
 vi.mock('firebase/auth', () => ({
@@ -130,13 +133,19 @@ vi.mock('./services/planConfigService', () => ({
 
 vi.mock('./services/usageTrackingService', () => ({
   usageTrackingService: {
-    syncStorageUsageForCurrentUser,
+    syncStorageUsageForCurrentUser: vi.fn(),
   },
 }));
 
 vi.mock('./services/customerPortalService', () => ({
   customerPortalService: {
-    repairEnabledPortalsForCurrentUser,
+    repairEnabledPortalsForCurrentUser: vi.fn(),
+  },
+}));
+
+vi.mock('./services/databaseStatusService', () => ({
+  databaseStatusService: {
+    reportIssue,
   },
 }));
 
@@ -148,8 +157,7 @@ describe('App Safari-safe bootstrap', () => {
     initializeDefaultServices.mockReset().mockResolvedValue(undefined);
     ensureCurrentUserProfile.mockReset().mockResolvedValue(undefined);
     hydrateFramework.mockReset().mockResolvedValue(undefined);
-    syncStorageUsageForCurrentUser.mockReset().mockResolvedValue(undefined);
-    repairEnabledPortalsForCurrentUser.mockReset().mockResolvedValue(undefined);
+    reportIssue.mockClear();
   });
 
   afterEach(() => {
@@ -181,5 +189,38 @@ describe('App Safari-safe bootstrap', () => {
 
     expect(screen.getByText('LOGIN_SCREEN')).toBeInTheDocument();
     expect(screen.queryByText('Loading...')).not.toBeInTheDocument();
+  });
+
+  it('does not run storage sync or portal repair during startup auth bootstrap', async () => {
+    onAuthStateChanged.mockImplementation((_auth, callback) => {
+      callback({ uid: 'user-1' });
+      return () => {};
+    });
+    window.location.hash = '#/';
+
+    await act(async () => {
+      render(<App />);
+    });
+
+    expect(ensureCurrentUserProfile).toHaveBeenCalledTimes(1);
+    expect(hydrateFramework).toHaveBeenCalledTimes(1);
+    expect(initializeDefaultServices).toHaveBeenCalledTimes(1);
+  });
+
+  it('stops remaining startup tasks after a quota-exhausted startup failure', async () => {
+    ensureCurrentUserProfile.mockRejectedValueOnce(new Error('RESOURCE_EXHAUSTED: free daily read units per project exceeded'));
+    onAuthStateChanged.mockImplementation((_auth, callback) => {
+      callback({ uid: 'user-1' });
+      return () => {};
+    });
+    window.location.hash = '#/';
+
+    await act(async () => {
+      render(<App />);
+    });
+
+    expect(reportIssue).toHaveBeenCalledTimes(1);
+    expect(hydrateFramework).not.toHaveBeenCalled();
+    expect(initializeDefaultServices).not.toHaveBeenCalled();
   });
 });

@@ -35,6 +35,7 @@ import { customerPortalService } from './services/customerPortalService';
 import { rememberResolvedUser } from './services/authSessionService';
 import { clearAuthRedirectPending, isAuthRedirectPending } from './services/authUiState';
 import { localFallbackRecoveryService } from './services/localFallbackRecoveryService';
+import { databaseStatusService } from './services/databaseStatusService';
 
 const AUTH_BOOT_TIMEOUT_MS = 5000;
 const AUTH_REDIRECT_BOOT_TIMEOUT_MS = 20000;
@@ -99,16 +100,12 @@ export default function App() {
               'recoverCurrentUserData',
               'hydrateFramework',
               'initializeDefaultServices',
-              'syncStorageUsageForCurrentUser',
-              'repairEnabledPortalsForCurrentUser',
             ] as const;
             const startupTasks: Array<() => Promise<unknown>> = [
               () => userProfileService.ensureCurrentUserProfile(),
               () => localFallbackRecoveryService.recoverCurrentUserData(),
               () => planConfigService.hydrateFramework(),
               () => servicePlanService.initializeDefaultServices(),
-              () => usageTrackingService.syncStorageUsageForCurrentUser(),
-              () => customerPortalService.repairEnabledPortalsForCurrentUser(),
             ];
 
             for (let index = 0; index < startupTasks.length; index += 1) {
@@ -122,6 +119,11 @@ export default function App() {
                 }
               } catch (taskError) {
                 console.error(`Startup task failed: ${taskNames[index]}`, taskError);
+                const issue = databaseStatusService.reportIssue(taskError, taskNames[index]);
+                if (issue.kind === 'quota_exhausted') {
+                  console.warn('Stopping non-essential startup tasks because Firestore quota is exhausted.');
+                  break;
+                }
               }
             }
           }
