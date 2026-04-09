@@ -4,6 +4,7 @@ import { subscribeToResolvedUser, waitForCurrentUser } from './authSessionServic
 import { savePipelineService } from './savePipelineService';
 import { cloudBackedLocalIdService } from './cloudBackedLocalIdService';
 import { cloudTruthService } from './cloudTruthService';
+import { databaseStatusService } from './databaseStatusService';
 
 export interface Customer {
   id?: string;
@@ -71,6 +72,7 @@ export const customerService = {
         emit();
       }, (error) => {
         console.error('Primary customer subscription failed:', error);
+        databaseStatusService.reportIssue(error, 'customers');
         primaryCustomers = [];
         emit();
       });

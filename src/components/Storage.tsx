@@ -11,6 +11,7 @@ import { jobService, Job } from '../services/jobService';
 import { customerService, Customer } from '../services/customerService';
 import { Timestamp } from 'firebase/firestore';
 import { subscribeToResolvedUser } from '../services/authSessionService';
+import { databaseStatusService } from '../services/databaseStatusService';
 
 export default function Storage() {
   const [assets, setAssets] = useState<StorageAsset[]>([]);
@@ -54,7 +55,8 @@ export default function Storage() {
         setSummary(summaryResult.value);
       } else {
         console.error('Error loading storage summary:', summaryResult.reason);
-        nextError = 'Some storage data could not be loaded.';
+        databaseStatusService.reportIssue(summaryResult.reason, 'storage_summary');
+        nextError = databaseStatusService.getUserMessage(summaryResult.reason, 'storage_summary');
       }
 
       if (assetsResult.status === 'fulfilled') {
@@ -62,7 +64,8 @@ export default function Storage() {
         setAssets(assetsResult.value);
       } else {
         console.error('Error loading storage assets:', assetsResult.reason);
-        nextError = 'Some storage data could not be loaded.';
+        databaseStatusService.reportIssue(assetsResult.reason, 'storage_assets');
+        nextError = databaseStatusService.getUserMessage(assetsResult.reason, 'storage_assets');
       }
 
       try {
@@ -72,7 +75,7 @@ export default function Storage() {
       }
 
       if (summaryResult.status === 'rejected' && assetsResult.status === 'rejected') {
-        nextError = 'Failed to load storage data.';
+        nextError = databaseStatusService.getUserMessage(assetsResult.reason, 'storage');
       }
 
       setErrorMessage(nextError);

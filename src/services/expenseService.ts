@@ -14,6 +14,7 @@ import { subscribeToResolvedUser, waitForCurrentUser } from './authSessionServic
 import { savePipelineService } from './savePipelineService';
 import { cloudBackedLocalIdService } from './cloudBackedLocalIdService';
 import { cloudTruthService } from './cloudTruthService';
+import { databaseStatusService } from './databaseStatusService';
 
 export type ExpenseCategory =
   | 'fuel'
@@ -68,6 +69,7 @@ export const expenseService = {
         },
         (error) => {
           console.error('Primary expense subscription failed:', error);
+          databaseStatusService.reportIssue(error, 'expenses');
           primaryExpenses = [];
           emit();
         }

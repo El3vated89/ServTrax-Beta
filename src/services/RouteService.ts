@@ -6,6 +6,7 @@ import { Route, RouteStop, RouteTemplate } from '../modules/routes/types';
 import { localFallbackStore } from './localFallbackStore';
 import { cloudBackedLocalIdService } from './cloudBackedLocalIdService';
 import { cloudTruthService } from './cloudTruthService';
+import { databaseStatusService } from './databaseStatusService';
 
 const getActorNameSnapshot = () => auth.currentUser?.displayName || auth.currentUser?.email || auth.currentUser?.uid || 'Unknown User';
 const LOCAL_ROUTE_NAMESPACE = 'routes';
@@ -278,6 +279,7 @@ export const routeService = {
         emit();
       }, (error) => {
         console.error('Primary route-by-date subscription failed, using local fallback only:', error);
+        databaseStatusService.reportIssue(error, 'routes_by_date');
         primaryRoutes = [];
         emit();
       });
@@ -328,6 +330,7 @@ export const routeService = {
         emit();
       }, (error) => {
         console.error('Primary routes subscription failed, using local fallback only:', error);
+        databaseStatusService.reportIssue(error, 'routes');
         primaryRoutes = [];
         emit();
       });
@@ -379,6 +382,7 @@ export const routeService = {
         emit();
       }, (error) => {
         console.error('Primary route stop subscription failed, using local fallback only:', error);
+        databaseStatusService.reportIssue(error, 'route_stops');
         primaryStops = [];
         emit();
       });
@@ -428,6 +432,7 @@ export const routeService = {
         emit();
       }, (error) => {
         console.error('Primary route stops subscription failed, using local fallback only:', error);
+        databaseStatusService.reportIssue(error, 'all_route_stops');
         primaryStops = [];
         emit();
       });

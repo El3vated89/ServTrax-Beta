@@ -13,6 +13,7 @@ import { userProfileService } from '../services/userProfileService';
 import { quoteService, Quote } from '../services/quoteService';
 import { bugReportService, BugReportCategory } from '../services/bugReportService';
 import { savePipelineService } from '../services/savePipelineService';
+import { databaseStatusService, DatabaseIssue } from '../services/databaseStatusService';
 
 export default function Layout() {
   const location = useLocation();
@@ -31,6 +32,7 @@ export default function Layout() {
   const [isSubmittingReport, setIsSubmittingReport] = useState(false);
   const [reportErrorMessage, setReportErrorMessage] = useState<string | null>(null);
   const [reportSuccessMessage, setReportSuccessMessage] = useState<string | null>(null);
+  const [databaseIssue, setDatabaseIssue] = useState<DatabaseIssue | null>(databaseStatusService.getCurrentIssue());
   
   const defaultBottomNavItems = [
     { path: '/', icon: Home, label: 'Home' },
@@ -50,6 +52,11 @@ export default function Layout() {
     { path: '/storage', icon: HardDrive, label: 'Storage' },
     { path: '/settings', icon: SettingsIcon, label: 'Settings' },
   ];
+
+  useEffect(() => {
+    const unsubscribeDatabaseIssue = databaseStatusService.subscribe(setDatabaseIssue);
+    return () => unsubscribeDatabaseIssue();
+  }, []);
 
   useEffect(() => {
     let latestJobs: Job[] = [];
@@ -342,6 +349,25 @@ export default function Layout() {
               </div>
             </div>
           </div>
+          {databaseIssue && (
+            <div className="border-t border-red-100 bg-red-50/95">
+              <div className="max-w-7xl mx-auto px-4 sm:px-8 py-3 flex items-start justify-between gap-4">
+                <div className="flex items-start gap-3">
+                  <AlertCircle className="h-5 w-5 text-red-600 shrink-0 mt-0.5" />
+                  <div>
+                    <p className="text-[10px] font-black uppercase tracking-widest text-red-600">Database Warning</p>
+                    <p className="text-sm font-bold text-red-700">{databaseIssue.message}</p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => databaseStatusService.clearIssue()}
+                  className="text-[10px] font-black uppercase tracking-widest text-red-600 hover:text-red-700"
+                >
+                  Dismiss
+                </button>
+              </div>
+            </div>
+          )}
         </header>
 
         {/* Mobile Side Menu Overlay */}

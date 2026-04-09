@@ -4,6 +4,7 @@ import { subscribeToResolvedUser, waitForCurrentUser } from './authSessionServic
 import { savePipelineService } from './savePipelineService';
 import { cloudBackedLocalIdService } from './cloudBackedLocalIdService';
 import { cloudTruthService } from './cloudTruthService';
+import { databaseStatusService } from './databaseStatusService';
 
 export interface Job {
   id?: string;
@@ -79,6 +80,7 @@ export const jobService = {
         emit();
       }, (error) => {
         console.error('Primary jobs subscription failed:', error);
+        databaseStatusService.reportIssue(error, 'jobs');
         primaryJobs = [];
         emit();
       });

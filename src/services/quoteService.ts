@@ -4,6 +4,7 @@ import { subscribeToResolvedUser, waitForCurrentUser } from './authSessionServic
 import { BillingFrequency } from './recurringService';
 import { cloudBackedLocalIdService } from './cloudBackedLocalIdService';
 import { cloudTruthService } from './cloudTruthService';
+import { databaseStatusService } from './databaseStatusService';
 
 export interface Quote {
   id?: string;
@@ -61,6 +62,7 @@ export const quoteService = {
         emit();
       }, (error) => {
         console.error('Primary quote subscription failed:', error);
+        databaseStatusService.reportIssue(error, 'quotes');
         primaryQuotes = [];
         emit();
       });

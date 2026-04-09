@@ -7,6 +7,7 @@ import { localFallbackStore } from './localFallbackStore';
 import { SaveDebugContext, savePipelineService } from './savePipelineService';
 import { cloudBackedLocalIdService } from './cloudBackedLocalIdService';
 import { cloudTruthService } from './cloudTruthService';
+import { databaseStatusService } from './databaseStatusService';
 
 export enum OperationType {
   CREATE = 'create',
@@ -56,6 +57,7 @@ export function handleFirestoreError(error: unknown, operationType: OperationTyp
     path
   }
   console.error('Firestore Error: ', JSON.stringify(errInfo));
+  databaseStatusService.reportIssue(error, path || operationType);
   throw new Error(JSON.stringify(errInfo));
 }
 

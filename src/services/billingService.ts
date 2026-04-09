@@ -18,6 +18,7 @@ import { subscribeToResolvedUser, waitForCurrentUser } from './authSessionServic
 import { SaveDebugContext, savePipelineService } from './savePipelineService';
 import { cloudBackedLocalIdService } from './cloudBackedLocalIdService';
 import { cloudTruthService } from './cloudTruthService';
+import { databaseStatusService } from './databaseStatusService';
 
 export type BillingStatus = 'draft' | 'scheduled' | 'due' | 'partial' | 'paid' | 'overdue' | 'canceled';
 export type BillingType = 'one_time' | 'auto_bill';
@@ -238,6 +239,7 @@ export const billingService = {
         },
         (error) => {
           console.error('Primary billing subscription failed, using fallback only:', error);
+          databaseStatusService.reportIssue(error, 'billing_records');
           primaryRecords = [];
           emit();
         }
@@ -289,6 +291,7 @@ export const billingService = {
         },
         (error) => {
           console.error('Primary payment subscription failed, using fallback only:', error);
+          databaseStatusService.reportIssue(error, 'payment_entries');
           primaryEntries = [];
           emit();
         }
