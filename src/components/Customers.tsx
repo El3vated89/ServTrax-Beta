@@ -172,8 +172,9 @@ export default function Customers() {
           state,
           zip,
           notes,
+          status: editingCustomer.status || 'active',
           portal_enabled: nextPortalEnabled,
-          portal_token: nextPortalToken || undefined,
+          portal_token: nextPortalToken || '',
           portal_plan_name_snapshot: portalCapabilities.planLabel,
           portal_persistent_allowed: portalCapabilities.allowsPersistentPortal,
           portal_show_history: nextPortalEnabled ? portalShowHistory : false,
@@ -203,7 +204,7 @@ export default function Customers() {
           state,
           zip,
           notes,
-          portal_token: nextPortalToken || undefined,
+          portal_token: nextPortalToken || '',
         };
 
         if (nextPortalEnabled) {

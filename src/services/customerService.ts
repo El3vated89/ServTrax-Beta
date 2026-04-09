@@ -37,7 +37,7 @@ type LocalCustomer = Customer & { _local_deleted?: boolean };
 const customerCache = new Map<string, Customer>();
 const toClientTimestamp = () => new Date().toISOString();
 
-const normalizeLocalCustomer = (ownerId: string, entry: Partial<LocalCustomer>): Customer => ({
+const normalizeCustomerRecord = (ownerId: string, entry: Partial<LocalCustomer>): Customer => ({
   id: entry.id,
   ownerId,
   name: entry.name || '',
@@ -76,7 +76,7 @@ const mergeCustomers = (primaryCustomers: Customer[], localCustomers: LocalCusto
       next.delete(customer.id);
       return;
     }
-    next.set(customer.id, normalizeLocalCustomer(customer.ownerId, customer));
+    next.set(customer.id, normalizeCustomerRecord(customer.ownerId, customer));
   });
   const merged = Array.from(next.values()).sort((left, right) => left.name.localeCompare(right.name));
   customerCache.clear();
@@ -110,10 +110,15 @@ export const customerService = {
       const q = query(collection(db, COLLECTION_NAME), where('ownerId', '==', user.uid));
       
       unsubscribeCustomers = onSnapshot(q, (snapshot) => {
-        primaryCustomers = snapshot.docs.map(doc => ({
-          id: doc.id,
-          ...doc.data()
-        })) as Customer[];
+        primaryCustomers = snapshot.docs.map((entry) =>
+          normalizeCustomerRecord(
+            String(entry.data().ownerId || user.uid),
+            {
+              id: entry.id,
+              ...entry.data(),
+            } as Partial<LocalCustomer>
+          )
+        );
         emit();
       }, (error) => {
         console.error('Primary customer subscription failed, using local fallback only:', error);
@@ -166,35 +171,46 @@ export const customerService = {
     if (!user) throw new Error('User not authenticated');
     const docRef = doc(db, COLLECTION_NAME, id);
     try {
+      const cachedCustomer = customerCache.get(id);
+      const safeData: Partial<Customer> = {
+        ...data,
+        status: data.status ?? cachedCustomer?.status ?? 'active',
+        portal_enabled: data.portal_enabled ?? cachedCustomer?.portal_enabled ?? false,
+        portal_token: data.portal_token ?? cachedCustomer?.portal_token ?? '',
+        portal_plan_name_snapshot: data.portal_plan_name_snapshot ?? cachedCustomer?.portal_plan_name_snapshot ?? '',
+        portal_persistent_allowed: data.portal_persistent_allowed ?? cachedCustomer?.portal_persistent_allowed ?? false,
+        portal_show_history: data.portal_show_history ?? cachedCustomer?.portal_show_history ?? false,
+        portal_show_payment_status: data.portal_show_payment_status ?? cachedCustomer?.portal_show_payment_status ?? false,
+        portal_show_quotes: data.portal_show_quotes ?? cachedCustomer?.portal_show_quotes ?? false,
+      };
+
       if (localFallbackStore.isLocalId(id, LOCAL_FALLBACK_NAMESPACE)) {
         localFallbackStore.updateRecord<LocalCustomer>(LOCAL_FALLBACK_NAMESPACE, user.uid, id, {
-          ...data,
+          ...safeData,
           _local_deleted: false,
         });
         return;
       }
-      return await savePipelineService.withTimeout(updateDoc(docRef, data), {
+      return await savePipelineService.withTimeout(updateDoc(docRef, safeData), {
         timeoutMessage: 'Customer update timed out while writing to the database.',
       });
     } catch (error) {
       console.error('Primary customer update failed, updating local fallback instead:', error);
       const cachedCustomer = customerCache.get(id);
+      const normalizedFallback = normalizeCustomerRecord(
+        user.uid,
+        {
+          id,
+          ...(cachedCustomer || {}),
+          ...data,
+        } as Partial<LocalCustomer>
+      );
       localFallbackStore.upsertRecord<LocalCustomer>(LOCAL_FALLBACK_NAMESPACE, user.uid, {
         ...(cachedCustomer || {
-          id,
-          ownerId: user.uid,
-          name: data.name || '',
-          phone: data.phone || '',
-          email: data.email || '',
-          street: data.street || '',
-          city: data.city || '',
-          state: data.state || '',
-          zip: data.zip || '',
-          notes: data.notes || '',
-          status: data.status || 'active',
           created_at: toClientTimestamp() as any,
         }),
-        ...data,
+        ...normalizedFallback,
+        id,
         _local_deleted: false,
       } as LocalCustomer);
     }
