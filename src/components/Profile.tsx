@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react';
 import { CheckCircle, Save, Shield, Users, User as UserIcon, Plus, Route, Receipt, ClipboardList } from 'lucide-react';
-import { auth, db } from '../firebase';
+import { db } from '../firebase';
 import { userProfileService, UserProfile } from '../services/userProfileService';
 import { teamService, TeamMember } from '../services/teamService';
 import { doc, getDoc } from 'firebase/firestore';
 import { savePipelineService } from '../services/savePipelineService';
+import { subscribeToResolvedUser } from '../services/authSessionService';
 
 const permissionLabels: Array<{
   key: keyof Pick<TeamMember, 'route_access' | 'customer_access' | 'expense_entry_access' | 'job_interaction_access'>;
@@ -38,7 +39,7 @@ export default function Profile() {
     });
 
     const unsubscribeTeamMembers = teamService.subscribeToTeamMembers(setTeamMembers);
-    const unsubscribeAuth = auth.onAuthStateChanged(async (user) => {
+    const unsubscribeAuth = subscribeToResolvedUser(async (user) => {
       if (!user) {
         setBusinessPlanName('Free');
         return;

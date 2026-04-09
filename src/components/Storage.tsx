@@ -10,7 +10,7 @@ import { usageTrackingService, UsageCounter } from '../services/usageTrackingSer
 import { jobService, Job } from '../services/jobService';
 import { customerService, Customer } from '../services/customerService';
 import { Timestamp } from 'firebase/firestore';
-import { auth } from '../firebase';
+import { subscribeToResolvedUser } from '../services/authSessionService';
 
 export default function Storage() {
   const [assets, setAssets] = useState<StorageAsset[]>([]);
@@ -83,7 +83,7 @@ export default function Storage() {
   }, []);
 
   useEffect(() => {
-    const unsubscribeAuth = auth.onAuthStateChanged((user) => {
+    const unsubscribeAuth = subscribeToResolvedUser((user) => {
       if (user) {
         loadData();
         return;

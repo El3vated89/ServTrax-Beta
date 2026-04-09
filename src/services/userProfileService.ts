@@ -1,6 +1,6 @@
 import { doc, getDoc, onSnapshot, serverTimestamp, setDoc, updateDoc, collection, getDocs } from 'firebase/firestore';
 import { auth, db } from '../firebase';
-import { waitForCurrentUser } from './authSessionService';
+import { subscribeToResolvedUser, waitForCurrentUser } from './authSessionService';
 import { handleFirestoreError, OperationType } from './verificationService';
 import { savePipelineService } from './savePipelineService';
 
@@ -41,7 +41,7 @@ export const userProfileService = {
   subscribeToCurrentUserProfile: (callback: (profile: UserProfile | null) => void) => {
     let unsubscribeProfile = () => {};
 
-    const unsubscribeAuth = auth.onAuthStateChanged((user) => {
+    const unsubscribeAuth = subscribeToResolvedUser((user) => {
       unsubscribeProfile();
 
       if (!user) {
@@ -138,7 +138,7 @@ export const userProfileService = {
   },
 
   isPlatformAdmin: (profile?: UserProfile | null) => {
-    const email = auth.currentUser?.email || profile?.email || '';
+    const email = (auth.currentUser?.email || profile?.email || '').trim().toLowerCase();
     return email === PLATFORM_ADMIN_EMAIL;
   },
 

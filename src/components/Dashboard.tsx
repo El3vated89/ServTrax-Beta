@@ -13,7 +13,7 @@ import {
   Route as RouteIcon,
   Users,
 } from 'lucide-react';
-import { auth, db } from '../firebase';
+import { db } from '../firebase';
 import { jobService, Job } from '../services/jobService';
 import { routeService } from '../services/RouteService';
 import { Route, RouteStop } from '../modules/routes/types';
@@ -22,6 +22,7 @@ import { billingService, BillingRecord, PaymentEntry } from '../services/billing
 import { expenseService, ExpenseRecord } from '../services/expenseService';
 import { planConfigService, BillingFramework, BusinessPlanProfile } from '../services/planConfigService';
 import { settingsService, BusinessSettings, DEFAULT_SETTINGS } from '../services/settingsService';
+import { subscribeToResolvedUser } from '../services/authSessionService';
 
 const currencyFormatter = new Intl.NumberFormat('en-US', {
   style: 'currency',
@@ -88,7 +89,7 @@ export default function Dashboard() {
     const unsubscribeFramework = planConfigService.subscribeToFramework(setBillingFramework);
 
     let unsubscribeBusinessProfile = () => {};
-    const unsubscribeAuth = auth.onAuthStateChanged((user) => {
+    const unsubscribeAuth = subscribeToResolvedUser((user) => {
       unsubscribeBusinessProfile();
 
       if (!user) {

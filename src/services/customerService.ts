@@ -1,6 +1,6 @@
 import { collection, addDoc, updateDoc, deleteDoc, doc, getDocs, query, where, serverTimestamp, onSnapshot } from 'firebase/firestore';
-import { db, auth } from '../firebase';
-import { waitForCurrentUser } from './authSessionService';
+import { db } from '../firebase';
+import { subscribeToResolvedUser, waitForCurrentUser } from './authSessionService';
 import { localFallbackStore } from './localFallbackStore';
 import { savePipelineService } from './savePipelineService';
 
@@ -95,7 +95,7 @@ export const customerService = {
 
     const emit = () => callback(mergeCustomers(primaryCustomers, localCustomers));
 
-    const unsubscribeAuth = auth.onAuthStateChanged((user) => {
+    const unsubscribeAuth = subscribeToResolvedUser((user) => {
       unsubscribeCustomers();
       unsubscribeLocal();
       primaryCustomers = [];

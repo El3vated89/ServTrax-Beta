@@ -1,6 +1,6 @@
 import { collection, addDoc, updateDoc, deleteDoc, doc, query, where, serverTimestamp, onSnapshot, orderBy, Timestamp, getDoc, getDocs } from 'firebase/firestore';
 import { db, auth } from '../firebase';
-import { waitForCurrentUser } from './authSessionService';
+import { subscribeToResolvedUser, waitForCurrentUser } from './authSessionService';
 import { handleFirestoreError, OperationType } from './verificationService';
 import { Route, RouteStop, RouteTemplate } from '../modules/routes/types';
 import { localFallbackStore } from './localFallbackStore';
@@ -256,7 +256,7 @@ export const routeService = {
       );
     };
 
-    const unsubscribeAuth = auth.onAuthStateChanged((user) => {
+    const unsubscribeAuth = subscribeToResolvedUser((user) => {
       unsubscribeRoutes();
       unsubscribeLocal();
       primaryRoutes = [];
@@ -310,7 +310,7 @@ export const routeService = {
 
     const emit = () => callback(mergeRoutes(primaryRoutes, localRoutes));
 
-    const unsubscribeAuth = auth.onAuthStateChanged((user) => {
+    const unsubscribeAuth = subscribeToResolvedUser((user) => {
       unsubscribeRoutes();
       unsubscribeLocal();
       primaryRoutes = [];
@@ -361,7 +361,7 @@ export const routeService = {
     const emit = () =>
       callback(mergeRouteStops(primaryStops, localStops).filter((stop) => stop.route_id === routeId));
 
-    const unsubscribeAuth = auth.onAuthStateChanged((user) => {
+    const unsubscribeAuth = subscribeToResolvedUser((user) => {
       unsubscribeStops();
       unsubscribeLocal();
       primaryStops = [];
@@ -411,7 +411,7 @@ export const routeService = {
 
     const emit = () => callback(mergeRouteStops(primaryStops, localStops));
 
-    const unsubscribeAuth = auth.onAuthStateChanged((user) => {
+    const unsubscribeAuth = subscribeToResolvedUser((user) => {
       unsubscribeStops();
       unsubscribeLocal();
       primaryStops = [];

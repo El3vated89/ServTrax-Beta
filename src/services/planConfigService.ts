@@ -1,7 +1,7 @@
 import { doc, getDoc, onSnapshot, serverTimestamp, setDoc } from 'firebase/firestore';
-import { auth, db } from '../firebase';
+import { db } from '../firebase';
 import { handleFirestoreError, OperationType } from './verificationService';
-import { waitForCurrentUser } from './authSessionService';
+import { subscribeToResolvedUser, waitForCurrentUser } from './authSessionService';
 import { SaveDebugContext, savePipelineService } from './savePipelineService';
 
 export type PlanKey = 'free' | 'starter_lite' | 'starter' | 'pro';
@@ -315,7 +315,7 @@ export const planConfigService = {
   subscribeToFramework: (callback: (framework: BillingFramework) => void) => {
     let unsubscribeDoc = () => {};
 
-    const unsubscribeAuth = auth.onAuthStateChanged((user) => {
+    const unsubscribeAuth = subscribeToResolvedUser((user) => {
       unsubscribeDoc();
 
       if (!user) {
@@ -347,7 +347,7 @@ export const planConfigService = {
 
   ensureFramework: async (debugContext?: SaveDebugContext) => {
     const user = await waitForCurrentUser({ debugContext });
-    if (!user || user.email !== ADMIN_EMAIL) return;
+    if (!user || (user.email || '').trim().toLowerCase() !== ADMIN_EMAIL) return;
 
     try {
       const snapshot = await savePipelineService.withTimeout(getDoc(getDocRef()), {
@@ -372,7 +372,7 @@ export const planConfigService = {
 
   saveFramework: async (framework: BillingFramework, debugContext?: SaveDebugContext) => {
     const user = await waitForCurrentUser({ debugContext });
-    if (!user || user.email !== ADMIN_EMAIL) {
+    if (!user || (user.email || '').trim().toLowerCase() !== ADMIN_EMAIL) {
       throw new Error('Only the platform admin can update plan settings.');
     }
 

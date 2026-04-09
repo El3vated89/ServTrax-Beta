@@ -8,9 +8,9 @@ import {
   updateDoc,
   where,
 } from 'firebase/firestore';
-import { auth, db } from '../firebase';
+import { db } from '../firebase';
 import { handleFirestoreError, OperationType } from './verificationService';
-import { waitForCurrentUser } from './authSessionService';
+import { subscribeToResolvedUser, waitForCurrentUser } from './authSessionService';
 import { localFallbackStore } from './localFallbackStore';
 import { savePipelineService } from './savePipelineService';
 
@@ -62,7 +62,7 @@ export const expenseService = {
       callback(Array.from(deduped.values()));
     };
 
-    const unsubscribeAuth = auth.onAuthStateChanged((user) => {
+    const unsubscribeAuth = subscribeToResolvedUser((user) => {
       unsubscribeExpenses();
       unsubscribeLocal();
       primaryExpenses = [];

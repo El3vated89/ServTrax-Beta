@@ -32,6 +32,7 @@ import { userProfileService } from './services/userProfileService';
 import { planConfigService } from './services/planConfigService';
 import { usageTrackingService } from './services/usageTrackingService';
 import { customerPortalService } from './services/customerPortalService';
+import { rememberResolvedUser } from './services/authSessionService';
 
 const AUTH_BOOT_TIMEOUT_MS = 5000;
 
@@ -68,6 +69,7 @@ export default function App() {
         if (!isActive) return;
 
         window.clearTimeout(timeout);
+        rememberResolvedUser(currentUser);
         setUser(currentUser);
 
         try {
@@ -105,6 +107,7 @@ export default function App() {
         if (!isActive) return;
 
         window.clearTimeout(timeout);
+        rememberResolvedUser(null);
         console.error('Firebase Auth bootstrap failed:', error);
         setLoading(false);
       }

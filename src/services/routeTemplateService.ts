@@ -1,7 +1,7 @@
 import { addDoc, collection, deleteDoc, doc, onSnapshot, query, serverTimestamp, updateDoc, where } from 'firebase/firestore';
-import { auth, db } from '../firebase';
+import { db } from '../firebase';
 import { RouteTemplate } from '../modules/routes/types';
-import { waitForCurrentUser } from './authSessionService';
+import { subscribeToResolvedUser, waitForCurrentUser } from './authSessionService';
 import { localFallbackStore } from './localFallbackStore';
 
 const COLLECTION_NAME = 'route_templates';
@@ -75,7 +75,7 @@ export const routeTemplateService = {
 
     const emit = () => callback(mergeTemplates(primaryTemplates, localTemplates));
 
-    const unsubscribeAuth = auth.onAuthStateChanged((user) => {
+    const unsubscribeAuth = subscribeToResolvedUser((user) => {
       unsubscribeTemplates();
       unsubscribeLocal();
       primaryTemplates = [];

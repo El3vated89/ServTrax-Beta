@@ -1,6 +1,6 @@
 import { collection, addDoc, updateDoc, deleteDoc, doc, query, where, serverTimestamp, onSnapshot } from 'firebase/firestore';
-import { db, auth } from '../firebase';
-import { waitForCurrentUser } from './authSessionService';
+import { db } from '../firebase';
+import { subscribeToResolvedUser, waitForCurrentUser } from './authSessionService';
 import { BillingFrequency } from './recurringService';
 import { localFallbackStore } from './localFallbackStore';
 
@@ -78,7 +78,7 @@ export const quoteService = {
 
     const emit = () => callback(mergeQuotes(primaryQuotes, localQuotes));
 
-    const unsubscribeAuth = auth.onAuthStateChanged((user) => {
+    const unsubscribeAuth = subscribeToResolvedUser((user) => {
       unsubscribeQuotes();
       unsubscribeLocal();
       primaryQuotes = [];

@@ -1,9 +1,9 @@
 import { doc, getDoc, increment, onSnapshot, serverTimestamp, setDoc } from 'firebase/firestore';
-import { auth, db } from '../firebase';
+import { db } from '../firebase';
 import { planConfigService } from './planConfigService';
 import { storageService } from './StorageService';
 import { handleFirestoreError, OperationType } from './verificationService';
-import { waitForCurrentUser } from './authSessionService';
+import { subscribeToResolvedUser, waitForCurrentUser } from './authSessionService';
 import { SaveDebugContext, savePipelineService } from './savePipelineService';
 
 export interface UsageCounter {
@@ -102,7 +102,7 @@ export const usageTrackingService = {
   subscribeToCurrentUsage: (callback: (usage: UsageCounter | null) => void) => {
     let unsubscribeUsage = () => {};
 
-    const unsubscribeAuth = auth.onAuthStateChanged(async (user) => {
+    const unsubscribeAuth = subscribeToResolvedUser(async (user) => {
       unsubscribeUsage();
 
       if (!user) {

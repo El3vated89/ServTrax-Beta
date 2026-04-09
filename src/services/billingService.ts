@@ -15,7 +15,7 @@ import { auth, db } from '../firebase';
 import { Job, jobService } from './jobService';
 import { handleFirestoreError, OperationType } from './verificationService';
 import { localFallbackStore } from './localFallbackStore';
-import { waitForCurrentUser } from './authSessionService';
+import { subscribeToResolvedUser, waitForCurrentUser } from './authSessionService';
 import { SaveDebugContext, savePipelineService } from './savePipelineService';
 
 export type BillingStatus = 'draft' | 'scheduled' | 'due' | 'partial' | 'paid' | 'overdue' | 'canceled';
@@ -250,7 +250,7 @@ export const billingService = {
 
     const emit = () => callback(dedupeBillingRecords([...localRecords, ...fallbackRecords, ...primaryRecords]));
 
-    const unsubscribeAuth = auth.onAuthStateChanged((user) => {
+    const unsubscribeAuth = subscribeToResolvedUser((user) => {
       unsubscribeRecords();
       unsubscribeFallbacks();
       unsubscribeLocal();
@@ -311,7 +311,7 @@ export const billingService = {
 
     const emit = () => callback(dedupePaymentEntries([...localEntries, ...fallbackEntries, ...primaryEntries]));
 
-    const unsubscribeAuth = auth.onAuthStateChanged((user) => {
+    const unsubscribeAuth = subscribeToResolvedUser((user) => {
       unsubscribeEntries();
       unsubscribeFallbacks();
       unsubscribeLocal();

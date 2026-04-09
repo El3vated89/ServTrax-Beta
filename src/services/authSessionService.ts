@@ -3,6 +3,34 @@ import { auth } from '../firebase';
 import { SaveDebugContext, savePipelineService } from './savePipelineService';
 
 const DEFAULT_AUTH_WAIT_TIMEOUT_MS = 8000;
+let lastResolvedUser: User | null = auth.currentUser;
+
+export const rememberResolvedUser = (user: User | null) => {
+  lastResolvedUser = user;
+};
+
+export const getResolvedCurrentUser = () => auth.currentUser || lastResolvedUser;
+
+export const subscribeToResolvedUser = (callback: (user: User | null) => void) => {
+  let lastDeliveredUid: string | null | undefined;
+
+  const emit = (user: User | null) => {
+    rememberResolvedUser(user);
+    const nextUid = user?.uid || null;
+    if (lastDeliveredUid === nextUid) return;
+    lastDeliveredUid = nextUid;
+    callback(user);
+  };
+
+  const currentUser = getResolvedCurrentUser();
+  if (currentUser) {
+    emit(currentUser);
+  }
+
+  return auth.onAuthStateChanged((user) => {
+    emit(user);
+  });
+};
 
 export const waitForCurrentUser = async ({
   timeoutMs = DEFAULT_AUTH_WAIT_TIMEOUT_MS,
@@ -11,11 +39,12 @@ export const waitForCurrentUser = async ({
   timeoutMs?: number;
   debugContext?: SaveDebugContext;
 } = {}): Promise<User | null> => {
-  if (auth.currentUser) {
+  const resolvedUser = getResolvedCurrentUser();
+  if (resolvedUser) {
     if (debugContext) {
-      savePipelineService.log(debugContext, 'auth_wait_resolved', { userId: auth.currentUser.uid });
+      savePipelineService.log(debugContext, 'auth_wait_resolved', { userId: resolvedUser.uid });
     }
-    return auth.currentUser;
+    return resolvedUser;
   }
 
   if (debugContext) {
@@ -42,6 +71,7 @@ export const waitForCurrentUser = async ({
       settled = true;
       clearTimeout(timeout);
       unsubscribe();
+      rememberResolvedUser(user);
       if (debugContext) {
         savePipelineService.log(debugContext, 'auth_wait_resolved', { userId: user?.uid || null });
       }

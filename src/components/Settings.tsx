@@ -3,9 +3,10 @@ import { Settings as SettingsIcon, Plus, X, Save, AlertCircle, CheckCircle, Tras
 import { servicePlanService, ServicePlan } from '../services/servicePlanService';
 import { settingsService, BusinessSettings, DEFAULT_SETTINGS } from '../services/settingsService';
 import { planConfigService } from '../services/planConfigService';
-import { db, auth } from '../firebase';
+import { auth, db } from '../firebase';
 import { doc, getDoc, setDoc, updateDoc } from 'firebase/firestore';
 import { savePipelineService } from '../services/savePipelineService';
+import { subscribeToResolvedUser } from '../services/authSessionService';
 
 const getDefaultOffSeasonIntervalDays = (frequency?: string) => {
   if (frequency === 'weekly') return 7;
@@ -166,7 +167,7 @@ export default function Settings() {
       setAllowNoExpiration(settingsData.storage_settings.allow_no_expiration || false);
     };
 
-    const unsubscribeAuth = auth.onAuthStateChanged((user) => {
+    const unsubscribeAuth = subscribeToResolvedUser((user) => {
       if (!user) return;
       loadBusinessProfile(user.uid);
     });

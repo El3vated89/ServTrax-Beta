@@ -7,8 +7,9 @@ import { quoteService, Quote } from '../services/quoteService';
 import { customerPortalService } from '../services/customerPortalService';
 import { BillingFramework, BusinessPlanProfile, planConfigService } from '../services/planConfigService';
 import { Timestamp, doc, onSnapshot } from 'firebase/firestore';
-import { auth, db } from '../firebase';
+import { db } from '../firebase';
 import { savePipelineService } from '../services/savePipelineService';
+import { subscribeToResolvedUser } from '../services/authSessionService';
 
 export default function Customers() {
   const location = useLocation();
@@ -71,7 +72,7 @@ export default function Customers() {
     const unsubscribeFramework = planConfigService.subscribeToFramework(setBillingFramework);
     let unsubscribeProfile = () => {};
 
-    const unsubscribeAuth = auth.onAuthStateChanged((user) => {
+    const unsubscribeAuth = subscribeToResolvedUser((user) => {
       unsubscribeProfile();
 
       if (!user) {

@@ -11,13 +11,14 @@ vi.mock('../firebase', () => ({
   auth,
 }));
 
-import { waitForCurrentUser } from './authSessionService';
+import { rememberResolvedUser, subscribeToResolvedUser, waitForCurrentUser } from './authSessionService';
 
 describe('waitForCurrentUser', () => {
   beforeEach(() => {
     vi.useFakeTimers();
     auth.currentUser = null;
     auth.onAuthStateChanged.mockReset();
+    rememberResolvedUser(null);
   });
 
   afterEach(() => {
@@ -37,5 +38,16 @@ describe('waitForCurrentUser', () => {
     const rejection = expect(promise).rejects.toThrow('Authentication timed out while waiting for the current session.');
     await vi.advanceTimersByTimeAsync(101);
     await rejection;
+  });
+
+  it('replays an already-resolved user to later subscriptions immediately', () => {
+    const callback = vi.fn();
+    auth.currentUser = { uid: 'owner-1' };
+    auth.onAuthStateChanged.mockImplementation(() => () => {});
+
+    const unsubscribe = subscribeToResolvedUser(callback);
+
+    expect(callback).toHaveBeenCalledWith({ uid: 'owner-1' });
+    unsubscribe();
   });
 });

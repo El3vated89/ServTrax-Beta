@@ -9,9 +9,9 @@ import {
   updateDoc,
   where,
 } from 'firebase/firestore';
-import { auth, db } from '../firebase';
+import { db } from '../firebase';
 import { planConfigService } from './planConfigService';
-import { waitForCurrentUser } from './authSessionService';
+import { subscribeToResolvedUser, waitForCurrentUser } from './authSessionService';
 import { localFallbackStore } from './localFallbackStore';
 import { savePipelineService } from './savePipelineService';
 
@@ -144,7 +144,7 @@ export const teamService = {
       callback(merged);
     };
 
-    const unsubscribeAuth = auth.onAuthStateChanged((user) => {
+    const unsubscribeAuth = subscribeToResolvedUser((user) => {
       unsubscribeMembers();
       unsubscribeLocal();
       primaryMembers = [];

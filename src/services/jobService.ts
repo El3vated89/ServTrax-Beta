@@ -1,6 +1,6 @@
 import { collection, addDoc, updateDoc, deleteDoc, doc, query, where, serverTimestamp, onSnapshot } from 'firebase/firestore';
-import { db, auth } from '../firebase';
-import { waitForCurrentUser } from './authSessionService';
+import { db } from '../firebase';
+import { subscribeToResolvedUser, waitForCurrentUser } from './authSessionService';
 import { localFallbackStore } from './localFallbackStore';
 import { savePipelineService } from './savePipelineService';
 
@@ -111,7 +111,7 @@ export const jobService = {
 
     const emit = () => callback(mergeJobs(primaryJobs, localJobs));
 
-    const unsubscribeAuth = auth.onAuthStateChanged((user) => {
+    const unsubscribeAuth = subscribeToResolvedUser((user) => {
       unsubscribeJobs();
       unsubscribeLocal();
       primaryJobs = [];
