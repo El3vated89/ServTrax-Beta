@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { LogIn, ShieldCheck } from 'lucide-react';
-import { signInWithRedirect } from 'firebase/auth';
+import { signInWithPopup, signInWithRedirect } from 'firebase/auth';
 import { auth, googleProvider } from '../firebase';
 import {
   clearAuthRedirectPending,
@@ -8,6 +8,12 @@ import {
   markAuthRedirectPending,
   subscribeToAuthRedirectPending,
 } from '../services/authUiState';
+
+const REDIRECT_FALLBACK_ERROR_CODES = new Set([
+  'auth/popup-blocked',
+  'auth/operation-not-supported-in-this-environment',
+  'auth/cancelled-popup-request',
+]);
 
 export default function Login() {
   const [isSigningIn, setIsSigningIn] = useState(() => isAuthRedirectPending());
@@ -33,9 +39,32 @@ export default function Login() {
     setErrorMessage('');
     setIsSigningIn(true);
     try {
-      markAuthRedirectPending();
-      await signInWithRedirect(auth, googleProvider);
+      await signInWithPopup(auth, googleProvider);
+      clearAuthRedirectPending();
+      setIsSigningIn(false);
     } catch (error) {
+      const errorCode = error && typeof error === 'object' && 'code' in error
+        ? String((error as { code?: string }).code || '')
+        : '';
+
+      if (REDIRECT_FALLBACK_ERROR_CODES.has(errorCode)) {
+        try {
+          markAuthRedirectPending();
+          await signInWithRedirect(auth, googleProvider);
+          return;
+        } catch (redirectError) {
+          clearAuthRedirectPending();
+          console.error('Redirect fallback failed:', redirectError);
+          setErrorMessage(
+            redirectError instanceof Error && redirectError.message
+              ? redirectError.message
+              : 'Sign-in failed. Please try again.'
+          );
+          setIsSigningIn(false);
+          return;
+        }
+      }
+
       clearAuthRedirectPending();
       console.error('Login failed:', error);
       setErrorMessage(
@@ -97,7 +126,7 @@ export default function Login() {
             <p className="text-center text-xs font-medium text-gray-500">
               {isSigningIn
                 ? 'ServTrax is completing your Google sign-in and will continue automatically.'
-                : 'Sign-in opens a standard Google page and returns you to ServTrax automatically.'}
+                : 'Sign-in opens Google securely and returns you to ServTrax automatically.'}
             </p>
           </div>
         </div>
