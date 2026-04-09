@@ -1,4 +1,4 @@
-import { collection, doc, getDoc, setDoc } from 'firebase/firestore';
+import { collection, doc, getDoc, setDoc, Timestamp } from 'firebase/firestore';
 import { db } from '../firebase';
 import { waitForCurrentUser } from './authSessionService';
 import { cloudBackedLocalIdService } from './cloudBackedLocalIdService';
@@ -35,12 +35,97 @@ const RECOVERY_TARGETS: RecoveryTarget[] = [
   { namespace: 'payment_entries', collectionName: 'payment_entries' },
 ];
 
+const DATE_LIKE_KEYS = new Set([
+  'created_at',
+  'updated_at',
+  'approved_at',
+  'completed_at',
+  'started_at',
+  'occurred_at',
+  'timestamp',
+  'expires_at',
+  'received_at',
+  'route_date',
+  'due_date',
+  'scheduled_date',
+  'completed_date',
+  'last_completed_date',
+  'last_service_date',
+  'next_due_date',
+  'start_date',
+  'billing_period_start',
+  'billing_period_end',
+  'paid_at',
+]);
+
+const isMonthDayString = (value: unknown) =>
+  typeof value === 'string' && /^\d{2}-\d{2}$/.test(value);
+
+const toTimestampIfPossible = (value: unknown) => {
+  if (value == null) return value;
+  if (value instanceof Timestamp) return value;
+  if (value instanceof Date && !Number.isNaN(value.getTime())) {
+    return Timestamp.fromDate(value);
+  }
+  if (typeof value === 'string') {
+    const parsed = new Date(value);
+    if (!Number.isNaN(parsed.getTime())) {
+      return Timestamp.fromDate(parsed);
+    }
+  }
+  return value;
+};
+
+const normalizeRecoveryValue = (key: string, value: unknown): unknown => {
+  if (Array.isArray(value)) {
+    return value.map((entry) =>
+      entry && typeof entry === 'object'
+        ? normalizeLocalFallbackRecordForRecovery(entry as Record<string, any>, '')
+        : entry
+    );
+  }
+
+  if (value && typeof value === 'object' && !(value instanceof Timestamp) && !(value instanceof Date)) {
+    return normalizeLocalFallbackRecordForRecovery(value as Record<string, any>, '');
+  }
+
+  if ((key === 'start_date' || key === 'end_date') && isMonthDayString(value)) {
+    return value;
+  }
+
+  if (DATE_LIKE_KEYS.has(key) || key.endsWith('_at') || key.endsWith('_date')) {
+    return toTimestampIfPossible(value);
+  }
+
+  return value;
+};
+
 const stripLocalOnlyFields = (record: Record<string, any>, ownerId: string) => {
-  const nextRecord: Record<string, any> = { ...record };
+  const nextRecord = normalizeLocalFallbackRecordForRecovery(record, ownerId);
   delete nextRecord._local_deleted;
   nextRecord.ownerId = ownerId;
   return nextRecord;
 };
+
+export function normalizeLocalFallbackRecordForRecovery(record: Record<string, any>, ownerId: string): Record<string, any> {
+  const nextRecord: Record<string, any> = {};
+
+  Object.entries(record || {}).forEach(([key, value]) => {
+    if (key === '_local_deleted') return;
+    if (key === 'ownerId') {
+      nextRecord.ownerId = ownerId || String(value || '');
+      return;
+    }
+
+    nextRecord[key] = normalizeRecoveryValue(key, value);
+  });
+
+  if (ownerId) {
+    nextRecord.ownerId = ownerId;
+  }
+
+  return nextRecord;
+}
 
 const recoverNamespace = async (
   ownerId: string,

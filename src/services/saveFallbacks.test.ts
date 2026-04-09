@@ -59,7 +59,7 @@ const never = () => new Promise<never>(() => {});
 const readLocalFallback = <T>(namespace: string) =>
   JSON.parse(window.localStorage.getItem(`servtrax:fallback:${namespace}:owner-1`) || '[]') as T[];
 
-describe('core save fallbacks', () => {
+describe('core cloud-truth save handling', () => {
   beforeEach(() => {
     vi.useFakeTimers();
     window.localStorage.clear();
@@ -91,7 +91,7 @@ describe('core save fallbacks', () => {
     vi.useRealTimers();
   });
 
-  it('falls back locally when customer creation stalls', async () => {
+  it('stores a local backup and rejects when customer creation stalls', async () => {
     addDoc.mockImplementation(() => never());
 
     const promise = customerService.addCustomer({
@@ -105,11 +105,10 @@ describe('core save fallbacks', () => {
       notes: '',
       status: 'active',
     });
+    const rejection = expect(promise).rejects.toThrow('Client could not be saved to the shared database.');
 
     await vi.advanceTimersByTimeAsync(15001);
-    const result = await promise;
-
-    expect(String(result.id)).toContain('local:customers:');
+    await rejection;
     expect(readLocalFallback<any>('customers')).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -120,16 +119,17 @@ describe('core save fallbacks', () => {
     );
   });
 
-  it('falls back locally when customer updates stall', async () => {
+  it('stores a local backup and rejects when customer updates stall', async () => {
     updateDoc.mockImplementation(() => never());
 
     const promise = customerService.updateCustomer('cust-1', {
       name: 'Updated Client',
       phone: '5550000000',
     });
+    const rejection = expect(promise).rejects.toThrow('Client could not be updated in the shared database.');
 
     await vi.advanceTimersByTimeAsync(15001);
-    await promise;
+    await rejection;
 
     expect(readLocalFallback<any>('customers')).toEqual(
       expect.arrayContaining([
@@ -142,7 +142,7 @@ describe('core save fallbacks', () => {
     );
   });
 
-  it('falls back locally when service plan creation stalls', async () => {
+  it('stores a local backup and rejects when service plan creation stalls', async () => {
     addDoc.mockImplementation(() => never());
 
     const promise = servicePlanService.addServicePlan({
@@ -154,11 +154,10 @@ describe('core save fallbacks', () => {
       seasonal_enabled: false,
       seasonal_rules: [],
     });
+    const rejection = expect(promise).rejects.toThrow('Service could not be saved to the shared database.');
 
     await vi.advanceTimersByTimeAsync(15001);
-    const result = await promise;
-
-    expect(String(result.id)).toContain('local:service_plans:');
+    await rejection;
     expect(readLocalFallback<any>('service_plans')).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -169,7 +168,7 @@ describe('core save fallbacks', () => {
     );
   });
 
-  it('falls back locally when job creation stalls', async () => {
+  it('stores a local backup and rejects when job creation stalls', async () => {
     addDoc.mockImplementation(() => never());
 
     const promise = jobService.addJob({
@@ -188,11 +187,10 @@ describe('core save fallbacks', () => {
       customer_notes: '',
       billing_frequency: 'weekly',
     });
+    const rejection = expect(promise).rejects.toThrow('Job could not be saved to the shared database.');
 
     await vi.advanceTimersByTimeAsync(15001);
-    const result = await promise;
-
-    expect(String(result.id)).toContain('local:jobs:');
+    await rejection;
     expect(readLocalFallback<any>('jobs')).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -203,16 +201,17 @@ describe('core save fallbacks', () => {
     );
   });
 
-  it('falls back locally when job updates stall', async () => {
+  it('stores a local backup and rejects when job updates stall', async () => {
     updateDoc.mockImplementation(() => never());
 
     const promise = jobService.updateJob('job-1', {
       internal_notes: 'Updated notes',
       status: 'delayed',
     });
+    const rejection = expect(promise).rejects.toThrow('Job could not be updated in the shared database.');
 
     await vi.advanceTimersByTimeAsync(15001);
-    await promise;
+    await rejection;
 
     expect(readLocalFallback<any>('jobs')).toEqual(
       expect.arrayContaining([
@@ -225,7 +224,7 @@ describe('core save fallbacks', () => {
     );
   });
 
-  it('falls back locally when expense creation stalls', async () => {
+  it('stores a local backup and rejects when expense creation stalls', async () => {
     addDoc.mockImplementation(() => never());
 
     const promise = expenseService.addExpense({
@@ -240,11 +239,10 @@ describe('core save fallbacks', () => {
       next_due_date: null,
       status: 'active',
     });
+    const rejection = expect(promise).rejects.toThrow('Expense could not be saved to the shared database.');
 
     await vi.advanceTimersByTimeAsync(15001);
-    const result = await promise;
-
-    expect(String(result.id)).toContain('local:expenses:');
+    await rejection;
     expect(readLocalFallback<any>('expenses')).toEqual(
       expect.arrayContaining([
         expect.objectContaining({

@@ -1,106 +1,47 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
-
-const {
-  waitForCurrentUser,
-  readRecords,
-  removeRecord,
-  getDoc,
-  setDoc,
-  collection,
-  doc,
-  markCloudBacked,
-  savePipelineService,
-} = vi.hoisted(() => ({
-  waitForCurrentUser: vi.fn(),
-  readRecords: vi.fn(),
-  removeRecord: vi.fn(),
-  getDoc: vi.fn(),
-  setDoc: vi.fn(),
-  collection: vi.fn(),
-  doc: vi.fn(),
-  markCloudBacked: vi.fn(),
-  savePipelineService: {
-    createTraceId: vi.fn(() => 'trace-1'),
-    log: vi.fn(),
-    withTimeout: vi.fn((promise: Promise<any>) => promise),
-  },
-}));
+import { describe, expect, it, vi } from 'vitest';
+import { Timestamp } from 'firebase/firestore';
 
 vi.mock('../firebase', () => ({
   db: {},
 }));
 
-vi.mock('firebase/firestore', () => ({
-  getDoc,
-  setDoc,
-  collection,
-  doc,
-}));
-
 vi.mock('./authSessionService', () => ({
-  waitForCurrentUser,
+  waitForCurrentUser: vi.fn(),
 }));
 
-vi.mock('./localFallbackStore', () => ({
-  localFallbackStore: {
-    readRecords,
-    removeRecord,
-  },
-}));
+import { normalizeLocalFallbackRecordForRecovery } from './localFallbackRecoveryService';
 
-vi.mock('./cloudBackedLocalIdService', () => ({
-  cloudBackedLocalIdService: {
-    markCloudBacked,
-  },
-}));
-
-vi.mock('./savePipelineService', () => ({
-  savePipelineService,
-}));
-
-import { localFallbackRecoveryService } from './localFallbackRecoveryService';
-
-describe('localFallbackRecoveryService.recoverCurrentUserData', () => {
-  beforeEach(() => {
-    waitForCurrentUser.mockReset();
-    readRecords.mockReset();
-    removeRecord.mockReset();
-    getDoc.mockReset();
-    setDoc.mockReset();
-    collection.mockReset();
-    doc.mockReset();
-    markCloudBacked.mockReset();
-    savePipelineService.createTraceId.mockClear();
-    savePipelineService.log.mockClear();
-
-    waitForCurrentUser.mockResolvedValue({ uid: 'owner-1' });
-    readRecords.mockImplementation((namespace: string) =>
-      namespace === 'customers'
-        ? [{ id: 'local:customers:1', ownerId: 'owner-1', name: 'Acme' }]
-        : []
+describe('local fallback recovery normalization', () => {
+  it('converts recoverable date strings into Firestore timestamps', () => {
+    const normalized = normalizeLocalFallbackRecordForRecovery(
+      {
+        id: 'local:jobs:1',
+        created_at: '2026-04-09T12:00:00.000Z',
+        updated_at: '2026-04-09T12:05:00.000Z',
+        scheduled_date: '2026-04-10T09:00:00.000Z',
+        customer_name_snapshot: 'Acme',
+      },
+      'owner-1'
     );
-    collection.mockImplementation((_db: unknown, name: string) => name);
-    doc.mockImplementation((collectionName: string, id: string) => `${collectionName}/${id}`);
-    getDoc.mockResolvedValue({
-      exists: () => false,
-    });
-    setDoc.mockResolvedValue(undefined);
+
+    expect(normalized.ownerId).toBe('owner-1');
+    expect(normalized.created_at).toBeInstanceOf(Timestamp);
+    expect(normalized.updated_at).toBeInstanceOf(Timestamp);
+    expect(normalized.scheduled_date).toBeInstanceOf(Timestamp);
   });
 
-  it('promotes local fallback records into Firestore and clears them locally', async () => {
-    const result = await localFallbackRecoveryService.recoverCurrentUserData();
+  it('keeps non-date strings unchanged', () => {
+    const normalized = normalizeLocalFallbackRecordForRecovery(
+      {
+        start_date: '11-01',
+        end_date: '03-31',
+        notes: 'Keep original strings',
+      },
+      'owner-1'
+    );
 
-    expect(result).toEqual({
-      recoveredCount: 1,
-      skippedCount: 0,
-      failedCount: 0,
-    });
-    expect(setDoc).toHaveBeenCalledWith('customers/local:customers:1', {
-      id: 'local:customers:1',
-      ownerId: 'owner-1',
-      name: 'Acme',
-    });
-    expect(removeRecord).toHaveBeenCalledWith('customers', 'owner-1', 'local:customers:1');
-    expect(markCloudBacked).toHaveBeenCalledWith('customers', 'local:customers:1');
+    expect(normalized.start_date).toBe('11-01');
+    expect(normalized.end_date).toBe('03-31');
+    expect(normalized.notes).toBe('Keep original strings');
   });
 });

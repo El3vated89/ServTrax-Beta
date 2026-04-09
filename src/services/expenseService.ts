@@ -14,6 +14,7 @@ import { subscribeToResolvedUser, waitForCurrentUser } from './authSessionServic
 import { localFallbackStore } from './localFallbackStore';
 import { savePipelineService } from './savePipelineService';
 import { cloudBackedLocalIdService } from './cloudBackedLocalIdService';
+import { cloudTruthService } from './cloudTruthService';
 
 export type ExpenseCategory =
   | 'fuel'
@@ -50,24 +51,12 @@ const LOCAL_FALLBACK_NAMESPACE = 'expenses';
 export const expenseService = {
   subscribeToExpenses: (callback: (expenses: ExpenseRecord[]) => void) => {
     let unsubscribeExpenses = () => {};
-    let unsubscribeLocal = () => {};
     let primaryExpenses: ExpenseRecord[] = [];
-    let localExpenses: ExpenseRecord[] = [];
-
-    const emit = () => {
-      const deduped = new Map<string, ExpenseRecord>();
-      [...localExpenses, ...primaryExpenses].forEach((entry) => {
-        const key = entry.id || `${entry.title}:${entry.expense_date || entry.created_at || ''}`;
-        deduped.set(key, entry);
-      });
-      callback(Array.from(deduped.values()));
-    };
+    const emit = () => callback([...primaryExpenses]);
 
     const unsubscribeAuth = subscribeToResolvedUser((user) => {
       unsubscribeExpenses();
-      unsubscribeLocal();
       primaryExpenses = [];
-      localExpenses = [];
 
       if (!user) {
         callback([]);
@@ -86,16 +75,10 @@ export const expenseService = {
           emit();
         }
       );
-
-      unsubscribeLocal = localFallbackStore.subscribeToRecords<ExpenseRecord>(LOCAL_FALLBACK_NAMESPACE, user.uid, (records) => {
-        localExpenses = records;
-        emit();
-      });
     });
 
     return () => {
       unsubscribeExpenses();
-      unsubscribeLocal();
       unsubscribeAuth();
     };
   },
@@ -118,14 +101,14 @@ export const expenseService = {
       );
     } catch (error) {
       console.error('Primary expense save failed, saving locally instead:', error);
-      const localId = localFallbackStore.upsertRecord<ExpenseRecord>(LOCAL_FALLBACK_NAMESPACE, user.uid, {
+      localFallbackStore.upsertRecord<ExpenseRecord>(LOCAL_FALLBACK_NAMESPACE, user.uid, {
         id: localFallbackStore.createLocalId(LOCAL_FALLBACK_NAMESPACE),
         ...expense,
         ownerId: user.uid,
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
       });
-      return { id: localId };
+      throw cloudTruthService.buildCreateError('Expense');
     }
   },
 
@@ -141,11 +124,7 @@ export const expenseService = {
       );
 
       if (shouldUseLocalFallback) {
-        localFallbackStore.updateRecord<ExpenseRecord>(LOCAL_FALLBACK_NAMESPACE, user.uid, id, {
-          ...updates,
-          updated_at: new Date().toISOString(),
-        });
-        return;
+        throw cloudTruthService.buildUnsyncedRecordError('Expense');
       }
 
       await savePipelineService.withTimeout(
@@ -163,6 +142,7 @@ export const expenseService = {
         ...updates,
         updated_at: new Date().toISOString(),
       });
+      throw cloudTruthService.buildUpdateError('Expense');
     }
   },
 };

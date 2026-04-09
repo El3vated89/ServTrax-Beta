@@ -4,6 +4,7 @@ import { subscribeToResolvedUser, waitForCurrentUser } from './authSessionServic
 import { localFallbackStore } from './localFallbackStore';
 import { savePipelineService } from './savePipelineService';
 import { cloudBackedLocalIdService } from './cloudBackedLocalIdService';
+import { cloudTruthService } from './cloudTruthService';
 
 export interface ServicePlan {
   id?: string;
@@ -56,9 +57,7 @@ const normalizeSeasonalRules = (rules?: any[]) => (rules || []).slice(0, 1).map(
 export const servicePlanService = {
   subscribeToServicePlans: (callback: (plans: ServicePlan[]) => void) => {
     let unsubscribePlans = () => {};
-    let unsubscribeLocal = () => {};
     let primaryPlans: ServicePlan[] = [];
-    let localPlans: LocalServicePlan[] = [];
 
     const normalizeLocalPlan = (ownerId: string, entry: Partial<LocalServicePlan>): ServicePlan => ({
       id: entry.id,
@@ -74,20 +73,7 @@ export const servicePlanService = {
     });
 
     const emit = () => {
-      const next = new Map<string, ServicePlan>();
-      primaryPlans.forEach((plan) => {
-        if (!plan.id) return;
-        next.set(plan.id, plan);
-      });
-      localPlans.forEach((plan) => {
-        if (!plan.id) return;
-        if (plan._local_deleted) {
-          next.delete(plan.id);
-          return;
-        }
-        next.set(plan.id, normalizeLocalPlan(plan.ownerId || '', plan));
-      });
-      const merged = Array.from(next.values()).sort((left, right) => left.name.localeCompare(right.name));
+      const merged = [...primaryPlans].sort((left, right) => left.name.localeCompare(right.name));
       servicePlanCache.clear();
       merged.forEach((plan) => {
         if (plan.id) servicePlanCache.set(plan.id, plan);
@@ -97,9 +83,7 @@ export const servicePlanService = {
 
     const unsubscribeAuth = subscribeToResolvedUser((user) => {
       unsubscribePlans();
-      unsubscribeLocal();
       primaryPlans = [];
-      localPlans = [];
 
       if (!user) {
         servicePlanCache.clear();
@@ -123,16 +107,10 @@ export const servicePlanService = {
         primaryPlans = [];
         emit();
       });
-
-      unsubscribeLocal = localFallbackStore.subscribeToRecords<LocalServicePlan>(LOCAL_FALLBACK_NAMESPACE, user.uid, (records) => {
-        localPlans = records;
-        emit();
-      });
     });
 
     return () => {
       unsubscribePlans();
-      unsubscribeLocal();
       unsubscribeAuth();
     };
   },
@@ -155,12 +133,12 @@ export const servicePlanService = {
       });
     } catch (error) {
       console.error('Primary service plan save failed, saving locally instead:', error);
-      const localId = localFallbackStore.upsertRecord<LocalServicePlan>(LOCAL_FALLBACK_NAMESPACE, user.uid, {
+      localFallbackStore.upsertRecord<LocalServicePlan>(LOCAL_FALLBACK_NAMESPACE, user.uid, {
         id: localFallbackStore.createLocalId(LOCAL_FALLBACK_NAMESPACE),
         ...newPlan,
         created_at: toClientTimestamp() as any,
       });
-      return { id: localId };
+      throw cloudTruthService.buildCreateError('Service');
     }
   },
 
@@ -198,11 +176,7 @@ export const servicePlanService = {
 
     try {
       if (shouldUseLocalFallback) {
-        localFallbackStore.updateRecord<LocalServicePlan>(LOCAL_FALLBACK_NAMESPACE, user.uid, id, {
-          ...safeUpdates,
-          _local_deleted: false,
-        });
-        return;
+        throw cloudTruthService.buildUnsyncedRecordError('Service');
       }
 
       return await savePipelineService.withTimeout(updateDoc(docRef, safeUpdates), {
@@ -217,6 +191,7 @@ export const servicePlanService = {
         ...safeUpdates,
         _local_deleted: false,
       });
+      throw cloudTruthService.buildUpdateError('Service');
     }
   },
 
@@ -232,9 +207,7 @@ export const servicePlanService = {
       );
 
       if (shouldUseLocalFallback) {
-        localFallbackStore.removeRecord<LocalServicePlan>(LOCAL_FALLBACK_NAMESPACE, user.uid, id);
-        servicePlanCache.delete(id);
-        return;
+        throw cloudTruthService.buildUnsyncedRecordError('Service');
       }
       return await savePipelineService.withTimeout(deleteDoc(docRef), {
         timeoutMessage: 'Service plan delete timed out while writing to the database.',
@@ -254,6 +227,7 @@ export const servicePlanService = {
         }),
         _local_deleted: true,
       } as LocalServicePlan);
+      throw cloudTruthService.buildDeleteError('Service');
     }
   },
 

@@ -94,33 +94,36 @@ export default function App() {
 
         try {
           if (currentUser) {
-            const startupTasks = await Promise.allSettled([
-              userProfileService.ensureCurrentUserProfile(),
-              planConfigService.hydrateFramework(),
-              servicePlanService.initializeDefaultServices(),
-              usageTrackingService.syncStorageUsageForCurrentUser(),
-              customerPortalService.repairEnabledPortalsForCurrentUser(),
-              localFallbackRecoveryService.recoverCurrentUserData(),
-            ]);
+            const taskNames = [
+              'ensureCurrentUserProfile',
+              'recoverCurrentUserData',
+              'hydrateFramework',
+              'initializeDefaultServices',
+              'syncStorageUsageForCurrentUser',
+              'repairEnabledPortalsForCurrentUser',
+            ] as const;
+            const startupTasks: Array<() => Promise<unknown>> = [
+              () => userProfileService.ensureCurrentUserProfile(),
+              () => localFallbackRecoveryService.recoverCurrentUserData(),
+              () => planConfigService.hydrateFramework(),
+              () => servicePlanService.initializeDefaultServices(),
+              () => usageTrackingService.syncStorageUsageForCurrentUser(),
+              () => customerPortalService.repairEnabledPortalsForCurrentUser(),
+            ];
 
-            startupTasks.forEach((result, index) => {
-              if (result.status === 'rejected') {
-                const taskNames = [
-                  'ensureCurrentUserProfile',
-                  'hydrateFramework',
-                  'initializeDefaultServices',
-                  'syncStorageUsageForCurrentUser',
-                  'repairEnabledPortalsForCurrentUser',
-                  'recoverCurrentUserData',
-                ];
-                console.error(`Startup task failed: ${taskNames[index]}`, result.reason);
-              } else if (index === 5) {
-                const recoveryResult = result.value as { recoveredCount?: number } | undefined;
-                if ((recoveryResult?.recoveredCount || 0) > 0) {
-                  console.info('Recovered local fallback records back into Firestore:', recoveryResult);
+            for (let index = 0; index < startupTasks.length; index += 1) {
+              try {
+                const result = await startupTasks[index]();
+                if (taskNames[index] === 'recoverCurrentUserData') {
+                  const recoveryResult = result as { recoveredCount?: number } | undefined;
+                  if ((recoveryResult?.recoveredCount || 0) > 0) {
+                    console.info('Recovered local fallback records back into Firestore:', recoveryResult);
+                  }
                 }
+              } catch (taskError) {
+                console.error(`Startup task failed: ${taskNames[index]}`, taskError);
               }
-            });
+            }
           }
         } catch (error) {
           console.error('Unhandled app startup error:', error);

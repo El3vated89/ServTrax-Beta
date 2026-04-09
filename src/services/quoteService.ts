@@ -4,6 +4,7 @@ import { subscribeToResolvedUser, waitForCurrentUser } from './authSessionServic
 import { BillingFrequency } from './recurringService';
 import { localFallbackStore } from './localFallbackStore';
 import { cloudBackedLocalIdService } from './cloudBackedLocalIdService';
+import { cloudTruthService } from './cloudTruthService';
 
 export interface Quote {
   id?: string;
@@ -45,24 +46,8 @@ const normalizeLocalQuote = (ownerId: string, entry: Partial<LocalQuote>): Quote
   approved_at: entry.approved_at as any,
 });
 
-const mergeQuotes = (primaryQuotes: Quote[], localQuotes: LocalQuote[]) => {
-  const next = new Map<string, Quote>();
-
-  primaryQuotes.forEach((quote) => {
-    if (!quote.id) return;
-    next.set(quote.id, quote);
-  });
-
-  localQuotes.forEach((quote) => {
-    if (!quote.id) return;
-    if (quote._local_deleted) {
-      next.delete(quote.id);
-      return;
-    }
-    next.set(quote.id, normalizeLocalQuote(quote.ownerId, quote));
-  });
-
-  const merged = Array.from(next.values());
+const mergeQuotes = (primaryQuotes: Quote[]) => {
+  const merged = [...primaryQuotes];
   quoteCache.clear();
   merged.forEach((quote) => {
     if (quote.id) quoteCache.set(quote.id, quote);
@@ -73,17 +58,13 @@ const mergeQuotes = (primaryQuotes: Quote[], localQuotes: LocalQuote[]) => {
 export const quoteService = {
   subscribeToQuotes: (callback: (quotes: Quote[]) => void) => {
     let unsubscribeQuotes = () => {};
-    let unsubscribeLocal = () => {};
     let primaryQuotes: Quote[] = [];
-    let localQuotes: LocalQuote[] = [];
 
-    const emit = () => callback(mergeQuotes(primaryQuotes, localQuotes));
+    const emit = () => callback(mergeQuotes(primaryQuotes));
 
     const unsubscribeAuth = subscribeToResolvedUser((user) => {
       unsubscribeQuotes();
-      unsubscribeLocal();
       primaryQuotes = [];
-      localQuotes = [];
 
       if (!user) {
         quoteCache.clear();
@@ -104,16 +85,10 @@ export const quoteService = {
         primaryQuotes = [];
         emit();
       });
-
-      unsubscribeLocal = localFallbackStore.subscribeToRecords<LocalQuote>(LOCAL_FALLBACK_NAMESPACE, user.uid, (records) => {
-        localQuotes = records;
-        emit();
-      });
     });
 
     return () => {
       unsubscribeQuotes();
-      unsubscribeLocal();
       unsubscribeAuth();
     };
   },
@@ -130,13 +105,13 @@ export const quoteService = {
       });
     } catch (error) {
       console.error('Primary quote save failed, saving locally instead:', error);
-      const localId = localFallbackStore.upsertRecord<LocalQuote>(LOCAL_FALLBACK_NAMESPACE, user.uid, {
+      localFallbackStore.upsertRecord<LocalQuote>(LOCAL_FALLBACK_NAMESPACE, user.uid, {
         id: localFallbackStore.createLocalId(LOCAL_FALLBACK_NAMESPACE),
         ...quoteData,
         ownerId: user.uid,
         created_at: toClientTimestamp() as any,
       });
-      return { id: localId };
+      throw cloudTruthService.buildCreateError('Quote');
     }
   },
 
@@ -153,11 +128,7 @@ export const quoteService = {
       );
 
       if (shouldUseLocalFallback) {
-        localFallbackStore.updateRecord<LocalQuote>(LOCAL_FALLBACK_NAMESPACE, user.uid, id, {
-          ...data,
-          _local_deleted: false,
-        });
-        return;
+        throw cloudTruthService.buildUnsyncedRecordError('Quote');
       }
 
       return await updateDoc(docRef, data);
@@ -182,6 +153,7 @@ export const quoteService = {
         ...data,
         _local_deleted: false,
       } as LocalQuote);
+      throw cloudTruthService.buildUpdateError('Quote');
     }
   },
 
@@ -198,9 +170,7 @@ export const quoteService = {
       );
 
       if (shouldUseLocalFallback) {
-        localFallbackStore.removeRecord<LocalQuote>(LOCAL_FALLBACK_NAMESPACE, user.uid, id);
-        quoteCache.delete(id);
-        return;
+        throw cloudTruthService.buildUnsyncedRecordError('Quote');
       }
 
       return await deleteDoc(docRef);
@@ -224,6 +194,7 @@ export const quoteService = {
         }),
         _local_deleted: true,
       } as LocalQuote);
+      throw cloudTruthService.buildDeleteError('Quote');
     }
   },
 };

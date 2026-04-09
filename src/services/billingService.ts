@@ -18,6 +18,7 @@ import { localFallbackStore } from './localFallbackStore';
 import { subscribeToResolvedUser, waitForCurrentUser } from './authSessionService';
 import { SaveDebugContext, savePipelineService } from './savePipelineService';
 import { cloudBackedLocalIdService } from './cloudBackedLocalIdService';
+import { cloudTruthService } from './cloudTruthService';
 
 export type BillingStatus = 'draft' | 'scheduled' | 'due' | 'partial' | 'paid' | 'overdue' | 'canceled';
 export type BillingType = 'one_time' | 'auto_bill';
@@ -195,11 +196,17 @@ const extractFallbackPaymentEntries = (ownerId: string, data: any): PaymentEntry
   );
 const dedupeBillingRecords = (records: BillingRecord[]) => {
   const next = new Map<string, BillingRecord>();
+  const getPriority = (record: BillingRecord) => {
+    if (record.storage_source === 'primary') return 3;
+    if (record.storage_source === 'fallback_user_doc') return 2;
+    return 1;
+  };
   records.forEach((record) => {
     const key = record.id?.startsWith('fallback:')
       ? record.source_billing_record_id || record.id
       : record.id || `${record.customerId}:${record.label}:${record.created_at || ''}`;
-    if (!next.has(key) || record.storage_source === 'fallback_user_doc') {
+    const existing = next.get(key);
+    if (!existing || getPriority(record) >= getPriority(existing)) {
       next.set(key, record);
     }
   });
@@ -207,11 +214,19 @@ const dedupeBillingRecords = (records: BillingRecord[]) => {
 };
 const dedupePaymentEntries = (entries: PaymentEntry[]) => {
   const next = new Map<string, PaymentEntry>();
+  const getPriority = (entry: PaymentEntry) => {
+    if (entry.storage_source === 'primary') return 3;
+    if (entry.storage_source === 'fallback_user_doc') return 2;
+    return 1;
+  };
   entries.forEach((entry) => {
     const key = entry.source_billing_record_id
       ? `${entry.source_billing_record_id}:${entry.amount}:${entry.received_at || entry.created_at || ''}`
       : entry.id || `${entry.customerId}:${entry.amount}:${entry.created_at || entry.received_at || ''}`;
-    if (!next.has(key)) next.set(key, entry);
+    const existing = next.get(key);
+    if (!existing || getPriority(entry) >= getPriority(existing)) {
+      next.set(key, entry);
+    }
   });
   return Array.from(next.values());
 };
@@ -244,20 +259,16 @@ export const billingService = {
   subscribeToBillingRecords: (callback: (records: BillingRecord[]) => void) => {
     let unsubscribeRecords = () => {};
     let unsubscribeFallbacks = () => {};
-    let unsubscribeLocal = () => {};
     let primaryRecords: BillingRecord[] = [];
     let fallbackRecords: BillingRecord[] = [];
-    let localRecords: BillingRecord[] = [];
 
-    const emit = () => callback(dedupeBillingRecords([...localRecords, ...fallbackRecords, ...primaryRecords]));
+    const emit = () => callback(dedupeBillingRecords([...fallbackRecords, ...primaryRecords]));
 
     const unsubscribeAuth = subscribeToResolvedUser((user) => {
       unsubscribeRecords();
       unsubscribeFallbacks();
-      unsubscribeLocal();
       primaryRecords = [];
       fallbackRecords = [];
-      localRecords = [];
 
       if (!user) {
         callback([]);
@@ -287,17 +298,11 @@ export const billingService = {
           console.error('Fallback billing subscription failed:', error);
         }
       );
-
-      unsubscribeLocal = localFallbackStore.subscribeToRecords<any>(LOCAL_BILLING_NAMESPACE, user.uid, (records) => {
-        localRecords = records.map((entry) => normalizeLocalBillingRecord(user.uid, entry));
-        emit();
-      });
     });
 
     return () => {
       unsubscribeRecords();
       unsubscribeFallbacks();
-      unsubscribeLocal();
       unsubscribeAuth();
     };
   },
@@ -305,20 +310,16 @@ export const billingService = {
   subscribeToPaymentEntries: (callback: (entries: PaymentEntry[]) => void) => {
     let unsubscribeEntries = () => {};
     let unsubscribeFallbacks = () => {};
-    let unsubscribeLocal = () => {};
     let primaryEntries: PaymentEntry[] = [];
     let fallbackEntries: PaymentEntry[] = [];
-    let localEntries: PaymentEntry[] = [];
 
-    const emit = () => callback(dedupePaymentEntries([...localEntries, ...fallbackEntries, ...primaryEntries]));
+    const emit = () => callback(dedupePaymentEntries([...fallbackEntries, ...primaryEntries]));
 
     const unsubscribeAuth = subscribeToResolvedUser((user) => {
       unsubscribeEntries();
       unsubscribeFallbacks();
-      unsubscribeLocal();
       primaryEntries = [];
       fallbackEntries = [];
-      localEntries = [];
 
       if (!user) {
         callback([]);
@@ -348,17 +349,11 @@ export const billingService = {
           console.error('Fallback payment subscription failed:', error);
         }
       );
-
-      unsubscribeLocal = localFallbackStore.subscribeToRecords<any>(LOCAL_PAYMENT_NAMESPACE, user.uid, (records) => {
-        localEntries = records.map((entry) => normalizeLocalPaymentEntry(user.uid, entry));
-        emit();
-      });
     });
 
     return () => {
       unsubscribeEntries();
       unsubscribeFallbacks();
-      unsubscribeLocal();
       unsubscribeAuth();
     };
   },
@@ -497,9 +492,9 @@ export const billingService = {
         }
 
         if (debugContext) {
-          savePipelineService.log(debugContext, 'fallback_write_succeeded', localId);
+          savePipelineService.log(debugContext, 'fallback_write_succeeded', LOCAL_BILLING_NAMESPACE);
         }
-        return { id: localId };
+        throw cloudTruthService.buildCreateError('Billing record');
       }
     }
   },
@@ -516,15 +511,7 @@ export const billingService = {
       );
 
       if (shouldUseLocalFallback) {
-        localFallbackStore.updateRecord(LOCAL_BILLING_NAMESPACE, user.uid, id, {
-          ...updates,
-          due_date: serializeDateValue((updates as any).due_date),
-          billing_period_start: serializeDateValue((updates as any).billing_period_start),
-          billing_period_end: serializeDateValue((updates as any).billing_period_end),
-          paid_at: serializeDateValue((updates as any).paid_at),
-          updated_at: createClientTimestamp(),
-        });
-        return;
+        throw cloudTruthService.buildUnsyncedRecordError('Billing record');
       }
 
       if (id.startsWith('fallback:')) {
@@ -581,6 +568,7 @@ export const billingService = {
         paid_at: serializeDateValue((updates as any).paid_at),
         updated_at: createClientTimestamp(),
       });
+      throw cloudTruthService.buildUpdateError('Billing record');
     }
   },
 
@@ -627,7 +615,7 @@ export const billingService = {
         : false;
 
       if (billingRecord.id && shouldUseLocalFallback) {
-        const paymentLocalId = localFallbackStore.upsertRecord(LOCAL_PAYMENT_NAMESPACE, user.uid, {
+        localFallbackStore.upsertRecord(LOCAL_PAYMENT_NAMESPACE, user.uid, {
           id: localFallbackStore.createLocalId(LOCAL_PAYMENT_NAMESPACE),
           ownerId: user.uid,
           billing_record_id: billingRecord.id,
@@ -655,7 +643,7 @@ export const billingService = {
           console.error('Covered job sync failed after local payment save:', syncError);
         }
 
-        return { id: paymentLocalId };
+        throw cloudTruthService.buildUnsyncedRecordError('Payment');
       }
 
       if (billingRecord.id?.startsWith('fallback:')) {
@@ -896,6 +884,7 @@ export const billingService = {
         if (debugContext) {
           savePipelineService.log(debugContext, 'fallback_write_succeeded', localBillingId);
         }
+        throw cloudTruthService.buildCreateError('Payment');
       }
 
       try {
@@ -908,6 +897,8 @@ export const billingService = {
       } catch (syncError) {
         console.error('Covered job sync failed after fallback payment save:', syncError);
       }
+
+      return { id: `fallback:${user.uid}:${paymentFallbackId}` };
     }
   },
 
@@ -928,10 +919,9 @@ export const billingService = {
     }
 
     const receivedAt = payment.received_at || Timestamp.fromDate(new Date());
+    let billingRef: { id: string } | null = null;
 
     try {
-      let billingRef: { id: string } | null = null;
-
       if (debugContext) {
         savePipelineService.log(debugContext, 'db_write_attempted', BILLING_COLLECTION);
       }
@@ -1031,11 +1021,15 @@ export const billingService = {
           if (debugContext) {
             savePipelineService.log(debugContext, 'fallback_write_succeeded', LOCAL_PAYMENT_NAMESPACE);
           }
+          throw cloudTruthService.buildCreateError('Payment');
         }
       }
 
       return billingRef;
     } catch (error) {
+      if (billingRef?.id) {
+        throw error;
+      }
       if (debugContext) {
         savePipelineService.logError(debugContext, 'db_write_failed', error);
         savePipelineService.log(debugContext, 'fallback_write_attempted', 'manual_payment_local_fallback');
@@ -1116,7 +1110,7 @@ export const billingService = {
         if (debugContext) {
           savePipelineService.log(debugContext, 'fallback_write_succeeded', localBillingId);
         }
-        return { id: localBillingId };
+        throw cloudTruthService.buildCreateError('Manual payment');
       }
     }
   },

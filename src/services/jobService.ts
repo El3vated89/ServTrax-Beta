@@ -4,6 +4,7 @@ import { subscribeToResolvedUser, waitForCurrentUser } from './authSessionServic
 import { localFallbackStore } from './localFallbackStore';
 import { savePipelineService } from './savePipelineService';
 import { cloudBackedLocalIdService } from './cloudBackedLocalIdService';
+import { cloudTruthService } from './cloudTruthService';
 
 export interface Job {
   id?: string;
@@ -81,21 +82,8 @@ const normalizeLocalJob = (ownerId: string, entry: Partial<LocalJob>): Job => ({
   portal_visible: entry.portal_visible,
 });
 
-const mergeJobs = (primaryJobs: Job[], localJobs: LocalJob[]) => {
-  const next = new Map<string, Job>();
-  primaryJobs.forEach((job) => {
-    if (!job.id) return;
-    next.set(job.id, job);
-  });
-  localJobs.forEach((job) => {
-    if (!job.id) return;
-    if (job._local_deleted) {
-      next.delete(job.id);
-      return;
-    }
-    next.set(job.id, normalizeLocalJob(job.ownerId, job));
-  });
-  const merged = Array.from(next.values());
+const mergeJobs = (primaryJobs: Job[]) => {
+  const merged = [...primaryJobs];
   jobCache.clear();
   merged.forEach((job) => {
     if (job.id) jobCache.set(job.id, job);
@@ -106,17 +94,13 @@ const mergeJobs = (primaryJobs: Job[], localJobs: LocalJob[]) => {
 export const jobService = {
   subscribeToJobs: (callback: (jobs: Job[]) => void) => {
     let unsubscribeJobs = () => {};
-    let unsubscribeLocal = () => {};
     let primaryJobs: Job[] = [];
-    let localJobs: LocalJob[] = [];
 
-    const emit = () => callback(mergeJobs(primaryJobs, localJobs));
+    const emit = () => callback(mergeJobs(primaryJobs));
 
     const unsubscribeAuth = subscribeToResolvedUser((user) => {
       unsubscribeJobs();
-      unsubscribeLocal();
       primaryJobs = [];
-      localJobs = [];
 
       if (!user) {
         jobCache.clear();
@@ -137,16 +121,10 @@ export const jobService = {
         primaryJobs = [];
         emit();
       });
-
-      unsubscribeLocal = localFallbackStore.subscribeToRecords<LocalJob>(LOCAL_FALLBACK_NAMESPACE, user.uid, (records) => {
-        localJobs = records;
-        emit();
-      });
     });
 
     return () => {
       unsubscribeJobs();
-      unsubscribeLocal();
       unsubscribeAuth();
     };
   },
@@ -168,13 +146,13 @@ export const jobService = {
       );
     } catch (error) {
       console.error('Primary job save failed, saving locally instead:', error);
-      const localId = localFallbackStore.upsertRecord<LocalJob>(LOCAL_FALLBACK_NAMESPACE, user.uid, {
+      localFallbackStore.upsertRecord<LocalJob>(LOCAL_FALLBACK_NAMESPACE, user.uid, {
         id: localFallbackStore.createLocalId(LOCAL_FALLBACK_NAMESPACE),
         ...jobData,
         ownerId: user.uid,
         created_at: toClientTimestamp() as any,
       });
-      return { id: localId };
+      throw cloudTruthService.buildCreateError('Job');
     }
   },
 
@@ -197,13 +175,9 @@ export const jobService = {
 
       if (shouldUseLocalFallback) {
         if (options.requirePrimaryWrite) {
-          throw new Error('This action requires a real cloud save and cannot use a local-only job record.');
+          throw cloudTruthService.buildUnsyncedRecordError('Job');
         }
-        localFallbackStore.updateRecord<LocalJob>(LOCAL_FALLBACK_NAMESPACE, user.uid, id, {
-          ...data,
-          _local_deleted: false,
-        });
-        return;
+        throw cloudTruthService.buildUnsyncedRecordError('Job');
       }
       return await savePipelineService.withTimeout(updateDoc(docRef, data), {
         timeoutMessage: 'Job update timed out while writing to the database.',
@@ -235,7 +209,8 @@ export const jobService = {
         }),
         ...data,
         _local_deleted: false,
-      } as LocalJob);
+        } as LocalJob);
+      throw cloudTruthService.buildUpdateError('Job');
     }
   },
 
@@ -251,9 +226,7 @@ export const jobService = {
       );
 
       if (shouldUseLocalFallback) {
-        localFallbackStore.removeRecord<LocalJob>(LOCAL_FALLBACK_NAMESPACE, user.uid, id);
-        jobCache.delete(id);
-        return;
+        throw cloudTruthService.buildUnsyncedRecordError('Job');
       }
       return await savePipelineService.withTimeout(deleteDoc(docRef), {
         timeoutMessage: 'Job delete timed out while writing to the database.',
@@ -282,6 +255,7 @@ export const jobService = {
         }),
         _local_deleted: true,
       } as LocalJob);
+      throw cloudTruthService.buildDeleteError('Job');
     }
   }
 };

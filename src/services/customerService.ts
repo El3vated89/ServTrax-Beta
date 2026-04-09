@@ -4,6 +4,7 @@ import { subscribeToResolvedUser, waitForCurrentUser } from './authSessionServic
 import { localFallbackStore } from './localFallbackStore';
 import { savePipelineService } from './savePipelineService';
 import { cloudBackedLocalIdService } from './cloudBackedLocalIdService';
+import { cloudTruthService } from './cloudTruthService';
 
 export interface Customer {
   id?: string;
@@ -65,21 +66,8 @@ const normalizeCustomerRecord = (ownerId: string, entry: Partial<LocalCustomer>)
   portal_show_quotes: entry.portal_show_quotes ?? false,
 });
 
-const mergeCustomers = (primaryCustomers: Customer[], localCustomers: LocalCustomer[]) => {
-  const next = new Map<string, Customer>();
-  primaryCustomers.forEach((customer) => {
-    if (!customer.id) return;
-    next.set(customer.id, customer);
-  });
-  localCustomers.forEach((customer) => {
-    if (!customer.id) return;
-    if (customer._local_deleted) {
-      next.delete(customer.id);
-      return;
-    }
-    next.set(customer.id, normalizeCustomerRecord(customer.ownerId, customer));
-  });
-  const merged = Array.from(next.values()).sort((left, right) => left.name.localeCompare(right.name));
+const mergeCustomers = (primaryCustomers: Customer[]) => {
+  const merged = [...primaryCustomers].sort((left, right) => left.name.localeCompare(right.name));
   customerCache.clear();
   merged.forEach((customer) => {
     if (customer.id) customerCache.set(customer.id, customer);
@@ -90,17 +78,13 @@ const mergeCustomers = (primaryCustomers: Customer[], localCustomers: LocalCusto
 export const customerService = {
   subscribeToCustomers: (callback: (customers: Customer[]) => void) => {
     let unsubscribeCustomers = () => {};
-    let unsubscribeLocal = () => {};
     let primaryCustomers: Customer[] = [];
-    let localCustomers: LocalCustomer[] = [];
 
-    const emit = () => callback(mergeCustomers(primaryCustomers, localCustomers));
+    const emit = () => callback(mergeCustomers(primaryCustomers));
 
     const unsubscribeAuth = subscribeToResolvedUser((user) => {
       unsubscribeCustomers();
-      unsubscribeLocal();
       primaryCustomers = [];
-      localCustomers = [];
 
       if (!user) {
         customerCache.clear();
@@ -126,16 +110,10 @@ export const customerService = {
         primaryCustomers = [];
         emit();
       });
-
-      unsubscribeLocal = localFallbackStore.subscribeToRecords<LocalCustomer>(LOCAL_FALLBACK_NAMESPACE, user.uid, (records) => {
-        localCustomers = records;
-        emit();
-      });
     });
 
     return () => {
       unsubscribeCustomers();
-      unsubscribeLocal();
       unsubscribeAuth();
     };
   },
@@ -157,13 +135,13 @@ export const customerService = {
       );
     } catch (error) {
       console.error('Primary customer save failed, saving locally instead:', error);
-      const localId = localFallbackStore.upsertRecord<LocalCustomer>(LOCAL_FALLBACK_NAMESPACE, user.uid, {
+      localFallbackStore.upsertRecord<LocalCustomer>(LOCAL_FALLBACK_NAMESPACE, user.uid, {
         id: localFallbackStore.createLocalId(LOCAL_FALLBACK_NAMESPACE),
         ...customerData,
         ownerId: user.uid,
         created_at: toClientTimestamp() as any,
       });
-      return { id: localId };
+      throw cloudTruthService.buildCreateError('Client');
     }
   },
 
@@ -192,11 +170,7 @@ export const customerService = {
       );
 
       if (shouldUseLocalFallback) {
-        localFallbackStore.updateRecord<LocalCustomer>(LOCAL_FALLBACK_NAMESPACE, user.uid, id, {
-          ...safeData,
-          _local_deleted: false,
-        });
-        return;
+        throw cloudTruthService.buildUnsyncedRecordError('Client');
       }
       return await savePipelineService.withTimeout(updateDoc(docRef, safeData), {
         timeoutMessage: 'Customer update timed out while writing to the database.',
@@ -220,6 +194,7 @@ export const customerService = {
         id,
         _local_deleted: false,
       } as LocalCustomer);
+      throw cloudTruthService.buildUpdateError('Client');
     }
   },
 
@@ -235,9 +210,7 @@ export const customerService = {
       );
 
       if (shouldUseLocalFallback) {
-        localFallbackStore.removeRecord<LocalCustomer>(LOCAL_FALLBACK_NAMESPACE, user.uid, id);
-        customerCache.delete(id);
-        return;
+        throw cloudTruthService.buildUnsyncedRecordError('Client');
       }
       return await savePipelineService.withTimeout(deleteDoc(docRef), {
         timeoutMessage: 'Customer delete timed out while writing to the database.',
@@ -262,6 +235,7 @@ export const customerService = {
         }),
         _local_deleted: true,
       } as LocalCustomer);
+      throw cloudTruthService.buildDeleteError('Client');
     }
   }
 };

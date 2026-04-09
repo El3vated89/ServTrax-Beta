@@ -59,10 +59,41 @@ export const userProfileService = {
         return;
       }
 
+      callback({
+        uid: user.uid,
+        email: user.email || '',
+        name: user.displayName || '',
+        role: normalizeAdminIdentityEmail(user.email) === PLATFORM_ADMIN_EMAIL ? 'admin' : 'owner',
+        permissions: [],
+        team_memberships: [],
+        active: true,
+      });
+
       unsubscribeProfile = onSnapshot(doc(db, 'users', user.uid), (snapshot) => {
-        callback(snapshot.exists() ? ({ uid: user.uid, ...snapshot.data() } as UserProfile) : null);
+        callback(
+          snapshot.exists()
+            ? ({ uid: user.uid, ...snapshot.data() } as UserProfile)
+            : {
+                uid: user.uid,
+                email: user.email || '',
+                name: user.displayName || '',
+                role: normalizeAdminIdentityEmail(user.email) === PLATFORM_ADMIN_EMAIL ? 'admin' : 'owner',
+                permissions: [],
+                team_memberships: [],
+                active: true,
+              }
+        );
       }, (error) => {
         handleFirestoreError(error, OperationType.GET, 'users');
+        callback({
+          uid: user.uid,
+          email: user.email || '',
+          name: user.displayName || '',
+          role: normalizeAdminIdentityEmail(user.email) === PLATFORM_ADMIN_EMAIL ? 'admin' : 'owner',
+          permissions: [],
+          team_memberships: [],
+          active: true,
+        });
       });
     });
 
