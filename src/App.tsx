@@ -33,48 +33,91 @@ import { planConfigService } from './services/planConfigService';
 import { usageTrackingService } from './services/usageTrackingService';
 import { customerPortalService } from './services/customerPortalService';
 
+const AUTH_BOOT_TIMEOUT_MS = 5000;
+
+const isPublicHashRoute = () => {
+  if (typeof window === 'undefined') return false;
+
+  const hash = window.location.hash || '#/';
+
+  return (
+    hash === '#/login' ||
+    hash.startsWith('#/portal/') ||
+    hash.startsWith('#/proof/')
+  );
+};
+
 export default function App() {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
-      setUser(currentUser);
+    let isActive = true;
 
-      try {
-        if (currentUser) {
-          const startupTasks = await Promise.allSettled([
-            userProfileService.ensureCurrentUserProfile(),
-            planConfigService.hydrateFramework(),
-            servicePlanService.initializeDefaultServices(),
-            usageTrackingService.syncStorageUsageForCurrentUser(),
-            customerPortalService.repairEnabledPortalsForCurrentUser(),
-          ]);
+    const timeout = window.setTimeout(() => {
+      if (!isActive) return;
+      console.warn(
+        `Firebase Auth bootstrap timed out after ${AUTH_BOOT_TIMEOUT_MS}ms. Releasing app shell without an authenticated session.`
+      );
+      setLoading(false);
+    }, AUTH_BOOT_TIMEOUT_MS);
 
-          startupTasks.forEach((result, index) => {
-            if (result.status === 'rejected') {
-              const taskNames = [
-                'ensureCurrentUserProfile',
-                'hydrateFramework',
-                'initializeDefaultServices',
-                'syncStorageUsageForCurrentUser',
-                'repairEnabledPortalsForCurrentUser',
-              ];
-              console.error(`Startup task failed: ${taskNames[index]}`, result.reason);
-            }
-          });
+    const unsubscribe = onAuthStateChanged(
+      auth,
+      async (currentUser) => {
+        if (!isActive) return;
+
+        window.clearTimeout(timeout);
+        setUser(currentUser);
+
+        try {
+          if (currentUser) {
+            const startupTasks = await Promise.allSettled([
+              userProfileService.ensureCurrentUserProfile(),
+              planConfigService.hydrateFramework(),
+              servicePlanService.initializeDefaultServices(),
+              usageTrackingService.syncStorageUsageForCurrentUser(),
+              customerPortalService.repairEnabledPortalsForCurrentUser(),
+            ]);
+
+            startupTasks.forEach((result, index) => {
+              if (result.status === 'rejected') {
+                const taskNames = [
+                  'ensureCurrentUserProfile',
+                  'hydrateFramework',
+                  'initializeDefaultServices',
+                  'syncStorageUsageForCurrentUser',
+                  'repairEnabledPortalsForCurrentUser',
+                ];
+                console.error(`Startup task failed: ${taskNames[index]}`, result.reason);
+              }
+            });
+          }
+        } catch (error) {
+          console.error('Unhandled app startup error:', error);
+        } finally {
+          if (isActive) {
+            setLoading(false);
+          }
         }
-      } catch (error) {
-        console.error('Unhandled app startup error:', error);
-      } finally {
+      },
+      (error) => {
+        if (!isActive) return;
+
+        window.clearTimeout(timeout);
+        console.error('Firebase Auth bootstrap failed:', error);
         setLoading(false);
       }
-    });
+    );
 
-    return () => unsubscribe();
+    return () => {
+      isActive = false;
+      window.clearTimeout(timeout);
+      unsubscribe();
+    };
   }, []);
 
-  if (loading) {
+  if (loading && !isPublicHashRoute()) {
     return <div className="min-h-screen flex items-center justify-center bg-gray-50">Loading...</div>;
   }
 
