@@ -3,6 +3,11 @@ import { auth, db } from '../firebase';
 import { getResolvedCurrentUser, subscribeToResolvedUser, waitForCurrentUser } from './authSessionService';
 import { handleFirestoreError, OperationType } from './verificationService';
 import { savePipelineService } from './savePipelineService';
+import {
+  isPlatformAdminIdentity,
+  normalizePlatformAdminEmail,
+  PLATFORM_ADMIN_EMAIL,
+} from './platformAdminIdentity';
 
 export interface UserProfile {
   uid: string;
@@ -17,23 +22,13 @@ export interface UserProfile {
   updated_at?: any;
 }
 
-const PLATFORM_ADMIN_EMAIL = 'thomaslmiller89@gmail.com';
 const TEAM_PERMISSION_KEYS = ['route_access', 'customer_access', 'expense_entry_access', 'job_interaction_access'] as const;
 export type TeamPermissionKey = typeof TEAM_PERMISSION_KEYS[number];
-const normalizeEmail = (value?: string | null) => (value || '').trim().toLowerCase();
-const normalizeAdminIdentityEmail = (value?: string | null) => {
-  const normalized = normalizeEmail(value);
-  const match = normalized.match(/^([^@]+)@(gmail\.com|googlemail\.com)$/);
-
-  if (!match) return normalized;
-
-  const localPart = match[1].replace(/\./g, '');
-  return `${localPart}@gmail.com`;
-};
-const isPlatformAdminIdentityEmail = (value?: string | null) =>
-  normalizeAdminIdentityEmail(value) === PLATFORM_ADMIN_EMAIL;
-const normalizeBusinessRole = (email?: string | null, fallbackRole?: UserProfile['role']) => {
-  if (isPlatformAdminIdentityEmail(email)) return 'owner';
+const normalizeBusinessRole = (
+  identity: { uid?: string | null; email?: string | null },
+  fallbackRole?: UserProfile['role']
+) => {
+  if (isPlatformAdminIdentity(identity)) return 'owner';
   if (fallbackRole === 'staff') return 'staff';
   return fallbackRole || 'owner';
 };
@@ -42,10 +37,10 @@ const buildResolvedProfile = (
   data?: Partial<UserProfile> | null
 ): UserProfile => ({
   uid: user.uid,
-  email: data?.email || user.email || '',
+  email: data?.email || user.email || (isPlatformAdminIdentity(user) ? PLATFORM_ADMIN_EMAIL : ''),
   name: data?.name || user.displayName || '',
   phone: data?.phone || '',
-  role: normalizeBusinessRole(user.email || data?.email || '', data?.role),
+  role: normalizeBusinessRole({ uid: user.uid, email: user.email || data?.email || '' }, data?.role),
   permissions: Array.isArray(data?.permissions) ? data.permissions : [],
   team_memberships: Array.isArray(data?.team_memberships) ? data.team_memberships : [],
   active: data?.active ?? true,
@@ -112,10 +107,10 @@ export const userProfileService = {
     if (!docSnap.exists()) {
       await savePipelineService.withTimeout(setDoc(docRef, {
         uid: user.uid,
-        email: user.email || '',
+        email: user.email || (isPlatformAdminIdentity(user) ? PLATFORM_ADMIN_EMAIL : ''),
         name: user.displayName || '',
         phone: '',
-        role: normalizeBusinessRole(user.email),
+        role: normalizeBusinessRole(user),
         permissions: [],
         team_memberships: [],
         active: true,
@@ -126,9 +121,9 @@ export const userProfileService = {
       });
     } else {
       await savePipelineService.withTimeout(updateDoc(docRef, {
-        email: user.email || docSnap.data().email || '',
+        email: user.email || docSnap.data().email || (isPlatformAdminIdentity(user) ? PLATFORM_ADMIN_EMAIL : ''),
         name: user.displayName || docSnap.data().name || '',
-        role: normalizeBusinessRole(user.email, docSnap.data().role),
+        role: normalizeBusinessRole(user, docSnap.data().role),
         active: true,
         updated_at: serverTimestamp(),
       }), {
@@ -159,10 +154,10 @@ export const userProfileService = {
 
       await savePipelineService.withTimeout(setDoc(docRef, {
         uid: user.uid,
-        email: user.email || '',
+        email: user.email || (isPlatformAdminIdentity(user) ? PLATFORM_ADMIN_EMAIL : ''),
         name: updates.name ?? user.displayName ?? '',
         phone: updates.phone ?? '',
-        role: normalizeBusinessRole(user.email),
+        role: normalizeBusinessRole(user),
         permissions: [],
         team_memberships: [],
         active: true,
@@ -178,8 +173,10 @@ export const userProfileService = {
 
   isPlatformAdmin: (profile?: UserProfile | null) => {
     if (profile?.role === 'admin') return true;
-    const email = normalizeAdminIdentityEmail(getResolvedCurrentUser()?.email || auth.currentUser?.email || profile?.email || '');
-    return email === PLATFORM_ADMIN_EMAIL;
+    return isPlatformAdminIdentity({
+      uid: getResolvedCurrentUser()?.uid || auth.currentUser?.uid || profile?.uid || '',
+      email: normalizePlatformAdminEmail(getResolvedCurrentUser()?.email || auth.currentUser?.email || profile?.email || ''),
+    });
   },
 
   hasPermission: (profile: UserProfile | null | undefined, permission: TeamPermissionKey) => {

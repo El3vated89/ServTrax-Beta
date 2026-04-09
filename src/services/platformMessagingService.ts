@@ -3,6 +3,7 @@ import { db } from '../firebase';
 import { handleFirestoreError, OperationType } from './verificationService';
 import { subscribeToResolvedUser, waitForCurrentUser } from './authSessionService';
 import { SaveDebugContext, savePipelineService } from './savePipelineService';
+import { isPlatformAdminIdentity, PLATFORM_ADMIN_EMAIL } from './platformAdminIdentity';
 
 export interface PlatformMessagingConfig {
   admin_email_lock: string;
@@ -22,11 +23,8 @@ export interface PlatformMessagingConfig {
 }
 
 const DOC_ID = 'messaging_providers';
-const ADMIN_EMAIL = 'thomaslmiller89@gmail.com';
-const normalizeEmail = (value?: string | null) => (value || '').trim().toLowerCase();
-
 const defaultConfig: PlatformMessagingConfig = {
-  admin_email_lock: ADMIN_EMAIL,
+  admin_email_lock: PLATFORM_ADMIN_EMAIL,
   sms_provider: 'twilio',
   email_provider: 'sendgrid',
   sms_enabled: false,
@@ -49,7 +47,7 @@ export const platformMessagingService = {
     const unsubscribeAuth = subscribeToResolvedUser((user) => {
       unsubscribeConfig();
 
-      if (!user || normalizeEmail(user.email) !== ADMIN_EMAIL) {
+      if (!user || !isPlatformAdminIdentity(user)) {
         callback(defaultConfig);
         return;
       }
@@ -71,7 +69,7 @@ export const platformMessagingService = {
 
   ensureConfig: async (debugContext?: SaveDebugContext) => {
     const user = await waitForCurrentUser({ debugContext });
-    if (!user || normalizeEmail(user.email) !== ADMIN_EMAIL) return;
+    if (!user || !isPlatformAdminIdentity(user)) return;
 
     const docRef = doc(db, 'platform_settings', DOC_ID);
     const existing = await savePipelineService.withTimeout(getDoc(docRef), {
@@ -92,7 +90,7 @@ export const platformMessagingService = {
     }
 
     await savePipelineService.withTimeout(updateDoc(docRef, {
-      admin_email_lock: ADMIN_EMAIL,
+      admin_email_lock: PLATFORM_ADMIN_EMAIL,
       updated_at: serverTimestamp(),
     }), {
       timeoutMessage: 'Timed out while refreshing the messaging provider config.',
@@ -102,7 +100,7 @@ export const platformMessagingService = {
 
   saveConfig: async (updates: Partial<PlatformMessagingConfig>, debugContext?: SaveDebugContext) => {
     const user = await waitForCurrentUser({ debugContext });
-    if (!user || normalizeEmail(user.email) !== ADMIN_EMAIL) {
+    if (!user || !isPlatformAdminIdentity(user)) {
       throw new Error('Only the platform admin can update messaging providers.');
     }
 
@@ -114,7 +112,7 @@ export const platformMessagingService = {
       await savePipelineService.withTimeout(setDoc(doc(db, 'platform_settings', DOC_ID), {
         ...defaultConfig,
         ...updates,
-        admin_email_lock: ADMIN_EMAIL,
+        admin_email_lock: PLATFORM_ADMIN_EMAIL,
         updated_at: serverTimestamp(),
       }, { merge: true }), {
         timeoutMessage: 'Timed out while saving the messaging provider config.',

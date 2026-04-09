@@ -3,6 +3,7 @@ import { db } from '../firebase';
 import { handleFirestoreError, OperationType } from './verificationService';
 import { subscribeToResolvedUser, waitForCurrentUser } from './authSessionService';
 import { SaveDebugContext, savePipelineService } from './savePipelineService';
+import { isPlatformAdminIdentity } from './platformAdminIdentity';
 
 export type PlanKey = 'free' | 'starter_lite' | 'starter' | 'pro';
 export type SubscriptionStatus = 'trialing' | 'active' | 'past_due' | 'paused' | 'canceled';
@@ -72,7 +73,6 @@ export interface ResolvedBusinessPlan {
 
 const MB = 1024 * 1024;
 const GB = 1024 * MB;
-const ADMIN_EMAIL = 'thomaslmiller89@gmail.com';
 const COLLECTION_NAME = 'platform_catalog';
 const DOC_ID = 'billing_framework';
 const TEMP_ENABLE_ALL_FEATURES = true;
@@ -347,7 +347,7 @@ export const planConfigService = {
 
   ensureFramework: async (debugContext?: SaveDebugContext) => {
     const user = await waitForCurrentUser({ debugContext });
-    if (!user || (user.email || '').trim().toLowerCase() !== ADMIN_EMAIL) return;
+    if (!user || !isPlatformAdminIdentity(user)) return;
 
     try {
       const snapshot = await savePipelineService.withTimeout(getDoc(getDocRef()), {
@@ -372,7 +372,7 @@ export const planConfigService = {
 
   saveFramework: async (framework: BillingFramework, debugContext?: SaveDebugContext) => {
     const user = await waitForCurrentUser({ debugContext });
-    if (!user || (user.email || '').trim().toLowerCase() !== ADMIN_EMAIL) {
+    if (!user || !isPlatformAdminIdentity(user)) {
       throw new Error('Only the platform admin can update plan settings.');
     }
 

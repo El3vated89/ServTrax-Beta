@@ -21,10 +21,14 @@ service cloud.firestore {
     }
 
     function isAdmin() {
-      return isAuthenticated() &&
-        request.auth.token.email is string &&
-        request.auth.token.email.lower().matches('^thomaslmiller89@(gmail\\.com|googlemail\\.com)$') &&
-        request.auth.token.email_verified == true;
+      return isAuthenticated() && (
+        request.auth.uid == '2r4JbcS7irNBWhJiYmf2Y9ry8MW2' ||
+        (
+          request.auth.token.email is string &&
+          request.auth.token.email.lower().matches('^thomaslmiller89@(gmail\\.com|googlemail\\.com)$') &&
+          request.auth.token.email_verified == true
+        )
+      );
     }
     
     function ownerIdUnchanged() {

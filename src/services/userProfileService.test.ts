@@ -14,6 +14,15 @@ vi.mock('../firebase', () => ({
 import { userProfileService } from './userProfileService';
 
 describe('userProfileService.isPlatformAdmin', () => {
+  it('accepts the proven Thomas Firebase UID even if email is missing', () => {
+    auth.currentUser = {
+      uid: '2r4JbcS7irNBWhJiYmf2Y9ry8MW2',
+      email: '',
+    };
+
+    expect(userProfileService.isPlatformAdmin(null)).toBe(true);
+  });
+
   it('accepts the persisted admin role even when auth email is missing', () => {
     auth.currentUser = null;
 
@@ -42,5 +51,20 @@ describe('userProfileService.isPlatformAdmin', () => {
     };
 
     expect(userProfileService.isPlatformAdmin(null)).toBe(true);
+  });
+
+  it('still treats the Thomas UID as platform admin when the profile role is owner', () => {
+    auth.currentUser = {
+      uid: '2r4JbcS7irNBWhJiYmf2Y9ry8MW2',
+      email: '',
+    };
+
+    expect(
+      userProfileService.isPlatformAdmin({
+        uid: '2r4JbcS7irNBWhJiYmf2Y9ry8MW2',
+        email: '',
+        role: 'owner',
+      })
+    ).toBe(true);
   });
 });
