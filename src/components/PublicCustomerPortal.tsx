@@ -44,17 +44,21 @@ export default function PublicCustomerPortal() {
       try {
         let portalData: CustomerPortalRecord | null = null;
 
-        const portalSnap = await getDoc(doc(db, 'public_customer_portals', portalToken));
-        if (portalSnap.exists()) {
-          const publicPortalData = { customerId: portalSnap.id, ...portalSnap.data() } as CustomerPortalRecord;
-          if (
-            publicPortalData.portal_enabled &&
-            publicPortalData.portal_token === portalToken &&
-            publicPortalData.customerId === customerId
-          ) {
-            portalData = publicPortalData;
-            setPortalSource('public');
+        try {
+          const portalSnap = await getDoc(doc(db, 'public_customer_portals', portalToken));
+          if (portalSnap.exists()) {
+            const publicPortalData = { customerId: portalSnap.id, ...portalSnap.data() } as CustomerPortalRecord;
+            if (
+              publicPortalData.portal_enabled &&
+              publicPortalData.portal_token === portalToken &&
+              publicPortalData.customerId === customerId
+            ) {
+              portalData = publicPortalData;
+              setPortalSource('public');
+            }
           }
+        } catch (directPortalError) {
+          console.warn('Direct public portal lookup failed, trying fallback lookups instead:', directPortalError);
         }
 
         if (!portalData) {
