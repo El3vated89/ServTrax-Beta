@@ -109,6 +109,10 @@ vi.mock('./components/Profile', () => ({
   default: () => <div>PROFILE</div>,
 }));
 
+vi.mock('./components/AIWorkspace', () => ({
+  default: () => <div>AI_WORKSPACE</div>,
+}));
+
 vi.mock('./components/AdminController', () => ({
   default: () => <div>ADMIN_CONTROLLER</div>,
 }));

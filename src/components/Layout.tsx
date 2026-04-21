@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { Outlet, Link, useLocation, useNavigate } from 'react-router-dom';
-import { Home, Users, ClipboardList, Wrench, Menu, Bell, LogOut, Settings as SettingsIcon, X, Search, Map, Plus, Camera, MessageSquare, HardDrive, Route as RouteIcon, User as UserIcon, Shield, CreditCard, Receipt, Package, Flag, CheckCircle, AlertCircle } from 'lucide-react';
+import { Home, Users, ClipboardList, Wrench, Menu, Bell, LogOut, Settings as SettingsIcon, X, Search, Map, Plus, Camera, MessageSquare, HardDrive, Route as RouteIcon, User as UserIcon, Shield, CreditCard, Receipt, Package, Flag, CheckCircle, AlertCircle, Sparkles } from 'lucide-react';
 import { auth } from '../firebase';
 import { signOut } from 'firebase/auth';
 import PhotoCaptureFlow from './PhotoCaptureFlow';
@@ -33,6 +33,7 @@ export default function Layout() {
   const [reportErrorMessage, setReportErrorMessage] = useState<string | null>(null);
   const [reportSuccessMessage, setReportSuccessMessage] = useState<string | null>(null);
   const [databaseIssue, setDatabaseIssue] = useState<DatabaseIssue | null>(databaseStatusService.getCurrentIssue());
+  const isAiWorkspace = location.pathname === '/ai';
   
   const defaultBottomNavItems = [
     { path: '/', icon: Home, label: 'Home' },
@@ -252,8 +253,12 @@ export default function Layout() {
     setIsMobileMenuOpen(false);
   };
 
+  const aiEntryState = isAiWorkspace
+    ? undefined
+    : { returnTo: `${location.pathname}${location.search || ''}` };
+
   return (
-    <div className="min-h-screen bg-[#F8FAFC] pb-20 sm:pb-0">
+    <div className={`min-h-screen bg-[#F8FAFC] ${isAiWorkspace ? 'pb-0' : 'pb-20 sm:pb-0'}`}>
       {/* Desktop Sidebar (Hidden on mobile) */}
       <aside className="hidden sm:flex flex-col w-64 fixed inset-y-0 bg-white border-r border-gray-100 z-50">
         <div className="p-8">
@@ -325,6 +330,19 @@ export default function Layout() {
               </div>
               
               <div className="flex items-center gap-2">
+                <Link
+                  to="/ai"
+                  state={aiEntryState}
+                  className={`inline-flex items-center gap-2 rounded-2xl border px-3 py-2 text-xs font-black uppercase tracking-widest transition-all ${
+                    isAiWorkspace
+                      ? 'border-cyan-200 bg-cyan-50 text-cyan-700'
+                      : 'border-gray-200 bg-white text-gray-600 hover:border-cyan-200 hover:bg-cyan-50 hover:text-cyan-700'
+                  }`}
+                >
+                  <Sparkles className="h-4 w-4" />
+                  <span className="hidden sm:inline">AI Dispatcher</span>
+                  <span className="sm:hidden">AI</span>
+                </Link>
                 <button
                   onClick={() => {
                     setReportErrorMessage(null);
@@ -423,7 +441,13 @@ export default function Layout() {
         )}
 
         {/* Main Content Area */}
-        <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-8 py-8">
+        <main
+          className={
+            isAiWorkspace
+              ? 'flex-1 min-h-0'
+              : 'flex-1 max-w-7xl w-full mx-auto px-4 sm:px-8 py-8'
+          }
+        >
           <Outlet />
         </main>
 
@@ -543,6 +567,7 @@ export default function Layout() {
         )}
 
         {/* Mobile Bottom Navigation */}
+        {!isAiWorkspace && (
         <nav className="fixed bottom-6 left-6 right-6 bg-white/90 backdrop-blur-lg border border-gray-100 shadow-2xl rounded-3xl sm:hidden z-50 px-2 py-2">
           <div className="flex justify-around items-center relative">
             {/* Home & Jobs */}
@@ -654,6 +679,7 @@ export default function Layout() {
             })}
           </div>
         </nav>
+        )}
 
         {reportSuccessMessage && (
           <div className="fixed bottom-24 left-1/2 -translate-x-1/2 z-[120] w-full max-w-md px-4">

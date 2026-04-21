@@ -27,6 +27,7 @@ import Settings from './components/Settings';
 import Alerts from './components/Alerts';
 import Profile from './components/Profile';
 import AdminController from './components/AdminController';
+import AIWorkspace from './components/AIWorkspace';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { userProfileService } from './services/userProfileService';
 import { planConfigService } from './services/planConfigService';
@@ -188,6 +189,7 @@ export default function App() {
               <Route path="settings" element={<Settings />} />
               <Route path="alerts" element={<Alerts />} />
               <Route path="profile" element={<Profile />} />
+              <Route path="ai" element={<AIWorkspace />} />
               <Route path="controller" element={<AdminController />} />
               <Route path="*" element={<Navigate to="/" replace />} />
             </Route>

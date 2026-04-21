@@ -178,4 +178,18 @@ describe('Layout report modal', () => {
     expect(screen.getByText('Bug report save took too long and was stopped. Please try again.')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /send report/i })).toBeEnabled();
   }, 15000);
+
+  it('shows a persistent AI dispatcher entry in the top header', () => {
+    render(
+      <MemoryRouter initialEntries={['/jobs']}>
+        <Routes>
+          <Route element={<Layout />}>
+            <Route path="/jobs" element={<div>Jobs Page</div>} />
+          </Route>
+        </Routes>
+      </MemoryRouter>
+    );
+
+    expect(screen.getByRole('link', { name: /ai dispatcher/i })).toBeInTheDocument();
+  });
 });
